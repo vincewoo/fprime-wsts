@@ -1,7 +1,9 @@
+from pathlib import Path
+
 import pytest
 
 from fprime_wsts.fpp import WstsError
-from fprime_wsts.manifest import DEFAULT_CATALOG, load_catalog, parse_manifest
+from fprime_wsts.manifest import DEFAULT_CATALOG, load_catalog, load_manifest, parse_manifest
 
 
 def test_minimal_manifest_defaults():
@@ -56,3 +58,22 @@ def test_default_catalog_covers_the_standard_drivers():
     assert "mode=thread" in tick.options_when_replacing("VxWorksSvc.VxWatchDogTimer")
     assert tick.options_when_replacing("Svc.LinuxTimer") == "mode=block"
     assert tick.cpp_name == "::Wsts::SimTick"
+
+
+def test_standalone_simulation_project_paths(tmp_path):
+    sim = tmp_path / "sim"
+    sim.mkdir()
+    (sim / "wsts.yaml").write_text("project: ../flight\ndeployment: Dep\ncatalogs: [cat.yaml]\noutput: out\n")
+    manifest = load_manifest(sim / "wsts.yaml")
+    assert manifest.sim_root == sim.resolve()
+    flight = manifest.project_root()
+    assert flight == (tmp_path / "flight").resolve()
+    # Flight paths stay relative to the flight project, simulation paths to the manifest
+    assert manifest.resolve("Dep", flight) == flight / "Dep"
+    assert manifest.resolve_sim("cat.yaml", flight) == sim.resolve() / "cat.yaml"
+
+
+def test_in_tree_manifest_paths_are_relative_to_the_project():
+    manifest = parse_manifest({"deployment": "Dep"})
+    assert manifest.sim_root is None and manifest.project_root() is None
+    assert manifest.resolve_sim("cat.yaml", Path("/proj")) == Path("/proj/cat.yaml").resolve()

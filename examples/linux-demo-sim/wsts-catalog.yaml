@@ -1,0 +1,6 @@
+# Surrogates of this simulation project. Searched before the toolkit's built-in catalog,
+# so these win over the general-purpose surrogates for the components they replace.
+surrogates:
+  - surrogate: Sim.SimLinuxGpio
+    replaces:
+      - Drv.LinuxGpioDriver

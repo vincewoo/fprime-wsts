@@ -106,7 +106,10 @@ Three things make it work without touching the flight project:
   edit to the flight topology code.
 
 Project modules are added by path from the flight project (`add_fprime_subdirectory`), which
-F´ allows because the flight project root is listed as a library location. Libraries the
+F´ allows because the flight project root is listed as a library location. A standalone
+simulation project (a manifest with `project:`) is listed as a library location too: F´
+includes its `library.cmake`, which builds its surrogates and models, and names their
+modules relative to its root. The flight project is only read. Libraries the
 simulated topology no longer references are dropped; build options that select the flight
 toolchain or platform are not carried over. Both are listed in the report.
 

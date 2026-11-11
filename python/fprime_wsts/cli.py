@@ -23,8 +23,13 @@ def cmd_generate(args: argparse.Namespace) -> int:
     from .manifest import load_manifest
 
     manifest_path = Path(args.manifest).resolve()
-    project = Path(args.project).resolve() if args.project else _find_project(manifest_path.parent)
     manifest = load_manifest(manifest_path)
+    if args.project:
+        project = Path(args.project).resolve()
+    elif manifest.project is not None:
+        project = manifest.project_root()
+    else:
+        project = _find_project(manifest_path.parent)
     result = generate(project, manifest, Path(args.output) if args.output else None, check=args.check)
     report = result.report
     if args.json:
@@ -84,8 +89,8 @@ def main(argv=None) -> int:
 
     generate = commands.add_parser("generate", help="create a simulated deployment from a flight deployment")
     generate.add_argument("manifest", help="deployment manifest (wsts.yaml)")
-    generate.add_argument("--project", help="F Prime project root (default: found from the manifest location)")
-    generate.add_argument("--output", help="output directory (default: manifest 'output', else <project>/wsts/<deployment>)")
+    generate.add_argument("--project", help="flight F Prime project root (default: the manifest's 'project', else found from the manifest location)")
+    generate.add_argument("--output", help="output directory (default: manifest 'output', else wsts/<deployment> in the simulation project, or in the flight project)")
     generate.add_argument("--check", action="store_true", help="do not write; fail if the output is out of date")
     generate.add_argument("--json", action="store_true", help="print the result as JSON")
     generate.set_defaults(handler=cmd_generate)

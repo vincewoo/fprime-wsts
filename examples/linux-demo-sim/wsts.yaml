@@ -1,0 +1,36 @@
+# WSTS manifest for LinuxDemo, kept outside the flight project.
+#
+# `project` makes this a standalone simulation project: the flight project is read, never
+# written. Paths to flight things (deployment, sources) are relative to the flight project;
+# paths to simulation things (catalogs, output) are relative to this file.
+project: ../linux-demo
+deployment: LinuxDemo
+
+# Project surrogates: a mirror of Drv.LinuxGpioDriver for the heater and switch pins
+catalogs:
+  - wsts-catalog.yaml
+
+keep:
+  - comDriver
+
+models:
+  # Project device model from Models/, built by this project's library.cmake
+  - name: imu
+    class: Sim::ImuModel
+    header: Models/ImuModel.hpp
+    endpoint: imuBus
+    kind: i2c
+    address: 0x68
+
+  - name: tempSensor
+    class: Wsts::ScriptedByteStream
+    endpoint: sensorUart
+    kind: bytestream
+    params:
+      text: "$TEMP,21.5\n"
+      period: "10"
+
+bridge: tcp:50100
+
+cmake:
+  depends: [Models]

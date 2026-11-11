@@ -107,6 +107,9 @@ class MainSpec:
 class Manifest:
     path: Optional[Path]
     deployment: str
+    # Set for a standalone simulation project: the flight project root, relative to the
+    # manifest. The directory holding the manifest is then the simulation project's root.
+    project: Optional[str] = None
     topology: Optional[str] = None
     output: Optional[str] = None
     substitutions: List[Substitution] = field(default_factory=list)
@@ -128,13 +131,33 @@ class Manifest:
     fpp_exclude: List[str] = field(default_factory=list)
     defines: List[str] = field(default_factory=list)
 
+    @property
+    def sim_root(self) -> Optional[Path]:
+        """Root of a standalone simulation project (the manifest's directory), or None when
+        the manifest lives in the flight project"""
+        if self.project is None:
+            return None
+        return (self.path.parent if self.path else Path.cwd()).resolve()
+
+    def project_root(self) -> Optional[Path]:
+        """The flight project named by `project`, if any"""
+        if self.project is None:
+            return None
+        return (self.sim_root / self.project).resolve()
+
     def resolve(self, value: str, project_root: Path) -> Path:
-        """Paths in a manifest are relative to the project root"""
+        """Paths to flight things (deployment, sources, libraries, subdirectories) are
+        relative to the flight project root"""
         return (project_root / value).resolve()
+
+    def resolve_sim(self, value: str, project_root: Path) -> Path:
+        """Paths to simulation things (catalogs, output) are relative to the simulation
+        project root when there is one, else to the flight project root"""
+        return ((self.sim_root or project_root) / value).resolve()
 
 
 KNOWN_KEYS = {
-    "deployment", "topology", "output", "substitute", "keep", "models", "control", "bridge", "tick_hz",
+    "project", "deployment", "topology", "output", "substitute", "keep", "models", "control", "bridge", "tick_hz",
     "catalogs", "sources", "main", "cmake", "libraries", "fpp_exclude", "defines",
 }
 MODEL_KINDS = {"bytestream", "i2c", "spi", "gpio", "none"}
@@ -155,6 +178,8 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
     if "deployment" not in data:
         raise WstsError(f"{where}: 'deployment' is required (the deployment directory, relative to the project root)")
     manifest = Manifest(path=path, deployment=str(data["deployment"]).strip("/"))
+    if data.get("project") is not None:
+        manifest.project = str(data["project"])
     manifest.topology = data.get("topology")
     manifest.output = data.get("output")
     manifest.keep = [str(k) for k in data.get("keep", [])]

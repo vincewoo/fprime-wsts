@@ -11,7 +11,8 @@ Start with [README.md](README.md); the design is in [docs/design.md](docs/design
 | `Wsts/Drv/`, `Wsts/Svc/` | F´ components: surrogates, `SimControl` (commands/events/telemetry), `SimSetup` (anchor) |
 | `catalog/wsts-catalog.yaml` | Which flight components each surrogate replaces |
 | `python/fprime_wsts/` | `generate.py` (transform), `fpp.py` (model loading), `manifest.py`, `bridge.py`, `runner.py`, `scaffold.py`, `cli.py` |
-| `examples/*/` | Flight projects. `examples/*/wsts/` is **generated**: change the generator or `wsts.yaml`, then regenerate |
+| `examples/linux-demo/`, `examples/vx-demo/` | Flight projects. `examples/*/wsts/` is **generated**: change the generator or `wsts.yaml`, then regenerate |
+| `examples/linux-demo-sim/` | Standalone simulation project for `linux-demo`: manifest, project surrogate and model. Its `wsts/` is generated and not checked in |
 | `tests/e2e/` | End-to-end tests against a running simulation and GDS |
 | `lib/` | Pinned submodules: `fprime` (v4.4.2), `fprime-vxworks` |
 
@@ -42,7 +43,8 @@ version, unset `JAVA_HOME` so the bundled JRE is used.
 
 ## Rules of thumb
 
-- Never edit files under `examples/*/wsts/`. CI runs `fprime-wsts generate --check`.
+- Never edit files under `examples/*/wsts/`. CI runs `fprime-wsts generate --check` on the
+  checked-in ones.
 - After changing anything under `Wsts/`, rebuild the example overlays before running e2e tests.
 - FPP keywords (`state`, `reg`, `text`, …) must be escaped with `$` when used as names.
 - Autocoded handlers take enum and string arguments by `const&`.

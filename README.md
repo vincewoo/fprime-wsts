@@ -80,6 +80,12 @@ surrogate catalog; the manifest only says which device models sit behind the bus
 watchdog timer and has no `main()`. `fprime-wsts generate examples/vx-demo/VxDemo/wsts.yaml`
 produces a deployment that builds and runs on Linux with no VxWorks toolchain installed.
 
+`examples/linux-demo-sim` keeps the simulation out of the flight project altogether. Its
+manifest names the flight project (`project: ../linux-demo`), and it holds its own
+surrogate (a mirror of the GPIO driver) and device model (the IMU). The generated
+deployment goes to `examples/linux-demo-sim/wsts/` and is not checked in. See
+[Where simulation code lives](docs/surrogate-guide.md#where-simulation-code-lives).
+
 ## Driving a simulation
 
 From Python (tests, scripts, agents):
@@ -145,7 +151,7 @@ D=examples/linux-demo/wsts/LinuxDemo; pytest tests/e2e/test_linux_demo.py -p fpr
 ## Status
 
 Built against F´ v4.4.2. Working today: the surrogates and transform above, real-time and
-scaled simulation time, faults, scenarios, record/replay, the bridge, both examples.
+scaled simulation time, faults, scenarios, record/replay, the bridge, the examples.
 Designed but not built yet: deterministic stepped time, a POSIX-backed VxWorks API shim,
 file-system path remapping, substituting instances defined inside subtopologies. See
 [docs/design.md](docs/design.md#roadmap).

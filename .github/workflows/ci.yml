@@ -62,6 +62,20 @@ jobs:
             --wsts-deployment "$D" --wsts-gds \
             --dictionary "$D/build-artifacts/Linux/VxDemo/dict/VxDemoTopologyDictionary.json"
 
+      - name: Generate and build the standalone simulation project (overlay not checked in)
+        run: |
+          fprime-wsts generate examples/linux-demo-sim/wsts.yaml
+          cd examples/linux-demo-sim/wsts/LinuxDemo
+          fprime-util generate
+          fprime-util build -j"$(nproc)"
+
+      - name: End-to-end tests, LinuxDemo from the simulation project
+        run: |
+          D=examples/linux-demo-sim/wsts/LinuxDemo
+          pytest tests/e2e/test_linux_demo_sim.py -p fprime_wsts.pytest_plugin \
+            --wsts-deployment "$D" --wsts-gds \
+            --dictionary "$D/build-artifacts/Linux/LinuxDemo/dict/LinuxDemoTopologyDictionary.json"
+
       - name: Keep simulation logs when something fails
         if: failure()
         uses: actions/upload-artifact@v4

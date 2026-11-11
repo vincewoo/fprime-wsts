@@ -9,6 +9,46 @@ There are two things you might write, and most projects need only the second.
 - A **device model** is a plain C++ class that sits on the simulation bus behind a
   surrogate and behaves like the hardware. Models can also live in another process.
 
+## Where simulation code lives
+
+The generated deployment (`wsts/<Deployment>/`) is a build artifact. What you write (the
+manifest, project surrogates, device models, catalogs, scenarios) is source code, and it
+can live in its own **simulation project** next to the flight project rather than in it:
+
+```
+flight/                       # the flight project, never written by fprime-wsts
+  settings.ini
+  Components/ ...
+  MyDeployment/
+flight-sim/                   # the simulation project: its own repository or directory
+  wsts.yaml                   # project: ../flight
+  wsts-catalog.yaml           # project surrogates
+  library.cmake               # builds the modules below
+  Surrogates/SimFpga/         # project surrogates (F´ components)
+  Models/                     # device models (plain C++)
+  .gitignore                  # /wsts/
+```
+
+```bash
+fprime-wsts generate flight-sim/wsts.yaml       # writes flight-sim/wsts/MyDeployment
+```
+
+`project` in the manifest names the flight project, relative to the manifest. The
+simulation project is then an F´ library of its own:
+
+- The generated deployment lists it under `library_locations`. F´ includes its
+  `library.cmake`, which calls `add_fprime_subdirectory()` for each of its modules.
+- Its modules are named, and its headers included, relative to its root:
+  `Surrogates/SimFpga` is the module `Surrogates_SimFpga` with header
+  `Surrogates/SimFpga/SimFpga.hpp`.
+- `catalogs` and `output` are relative to the manifest; flight paths (`deployment`,
+  `sources`, ...) stay relative to the flight project.
+
+[`examples/linux-demo-sim`](../examples/linux-demo-sim) is a complete one for the LinuxDemo
+flight project: a mirror surrogate for the GPIO driver and a device model for the IMU.
+Simulation code can also live inside the flight project, as in `examples/linux-demo`; then
+it is built like any other project module.
+
 ## Device models
 
 Implement one of the interfaces in `Wsts/Core/Bus.hpp`. Derive from `Wsts::Model` as well if
@@ -37,15 +77,18 @@ class Thermometer : public Wsts::Model, public Wsts::I2cDevice {
 };
 ```
 
-Put it in a module the project builds, and name it in the manifest:
+Put it in a module that is built (in a simulation project, one its `library.cmake` adds),
+and name it in the manifest:
 
 ```yaml
 models:
-  - {name: thermo, class: Thermometer, header: Sim/Thermometer.hpp, endpoint: thermoBus, kind: i2c, address: 0x48}
+  - {name: thermo, class: Thermometer, header: Models/Thermometer.hpp, endpoint: thermoBus, kind: i2c, address: 0x48}
 cmake:
-  extra_subdirectories: [Sim]
-  depends: [Sim]
+  depends: [Models]
 ```
+
+A model module inside the flight project that nothing in the flight build references also
+needs `cmake.extra_subdirectories: [Models]`.
 
 Notes:
 
@@ -115,7 +158,7 @@ outputs directly; it then has none of those.
 Register the surrogate in a catalog so it is chosen automatically:
 
 ```yaml
-# sim/wsts-catalog.yaml, named under `catalogs:` in the manifest
+# wsts-catalog.yaml, named under `catalogs:` in the manifest
 surrogates:
   - surrogate: Proj.SimFpga
     replaces: [Proj.FpgaDriver]
@@ -128,10 +171,14 @@ difference from flight.
 ### Mirror surrogates
 
 ```bash
-fprime-wsts scaffold VxWorksDrv.VxWorksUartDriver --project examples/vx-demo --output Sim/SimVxUart
+fprime-wsts scaffold Drv.LinuxGpioDriver --project examples/linux-demo --output examples/linux-demo-sim/Surrogates/SimLinuxGpio --name Sim.SimLinuxGpio
 ```
 
 This copies the component's model, with its included event and telemetry definitions,
 under a new name, and writes the build file, a catalog entry and a README with the
 remaining steps (`fprime-util impl` for the implementation templates, then the binding
-hook and bus calls). The scaffold does not write the C++ implementation.
+hook and bus calls). The scaffold does not write the C++ implementation. A model copied
+into a different module keeps its names as written, so names relative to the old module
+must be qualified (`import Gpio` becomes `import Drv.Gpio`); fpp-check reports them.
+`examples/linux-demo-sim/Surrogates/SimLinuxGpio` is the finished result of the command
+above.
