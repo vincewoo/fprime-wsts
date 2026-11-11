@@ -25,6 +25,9 @@ register_fprime_module(
         Threads::Threads
 )
 
+# The module has no F Prime dependencies to inherit include paths from
+target_include_directories(Sse_Core PUBLIC "${CMAKE_CURRENT_LIST_DIR}/../..")
+
 register_fprime_ut(
     SOURCES
         "${CMAKE_CURRENT_LIST_DIR}/test/ut/CoreTestMain.cpp"

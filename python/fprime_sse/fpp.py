@@ -61,6 +61,8 @@ class Component:
     name: str
     kind: str  # passive, queued, active
     file: Path
+    line: int = 1  # 1-based position of the definition
+    col: int = 1
     ports: Dict[str, Port] = field(default_factory=dict)
     commands: List[str] = field(default_factory=list)
     events: List[str] = field(default_factory=list)
@@ -358,8 +360,8 @@ def _build_model(ast: list, locations: dict, analysis: dict, files: List[Path]) 
         name = names.get(node_id)
         if name is None:
             continue
-        file, _, _ = _position(locations, node_id)
-        component = Component(name, component_kinds.get(node_id, "passive"), file)
+        file, line, col = _position(locations, node_id)
+        component = Component(name, component_kinds.get(node_id, "passive"), file, line, col)
         for port_name, port in entry["portInterface"]["portMap"].items():
             (variant, detail), = port.items()
             if variant == "General":
