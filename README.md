@@ -54,7 +54,7 @@ python3 -m venv venv && . venv/bin/activate
 ```
 
 ```bash
-pip install -r lib/fprime/requirements.txt ./python
+pip install -r lib/fprime/requirements.txt -e ./python
 ```
 
 Convert the Linux example, build it and run it:

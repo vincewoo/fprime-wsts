@@ -47,7 +47,10 @@ class Surrogate:
 
 def load_catalog(path: Path) -> List[Surrogate]:
     if not path.is_file():
-        raise WstsError(f"surrogate catalog not found: {path}")
+        raise WstsError(
+            f"surrogate catalog not found: {path}. fprime-wsts must run from a source checkout; "
+            "install it with 'pip install -e ./python'"
+        )
     data = yaml.safe_load(path.read_text()) or {}
     surrogates = []
     for entry in data.get("surrogates", []):

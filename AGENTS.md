@@ -18,7 +18,7 @@ Start with [README.md](README.md); the design is in [docs/design.md](docs/design
 ## Commands
 
 ```bash
-pip install -r lib/fprime/requirements.txt ./python     # once, in a virtual environment
+pip install -r lib/fprime/requirements.txt -e ./python     # once, in a virtual environment
 ```
 
 ```bash

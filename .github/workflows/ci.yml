@@ -21,7 +21,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install F Prime tools and fprime-wsts
-        run: pip install -r lib/fprime/requirements.txt ./python pytest
+        run: pip install -r lib/fprime/requirements.txt -e ./python pytest
 
       - name: Python tests (manifest, patching, bridge client, generator)
         run: pytest python/tests
