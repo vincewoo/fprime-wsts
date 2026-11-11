@@ -33,6 +33,40 @@ flight-sim/                   # the simulation project: its own repository or di
 fprime-wsts generate flight-sim/wsts.yaml       # writes flight-sim/wsts/MyDeployment
 ```
 
+```mermaid
+flowchart LR
+  subgraph flight["flight/ (never written)"]
+    direction TB
+    fdep["MyDeployment/<br/>topology, Main.cpp"]:::flight
+    fcomp["Components/"]:::flight
+  end
+  subgraph sim["flight-sim/ (yours)"]
+    direction TB
+    man["wsts.yaml"]:::user
+    cat["wsts-catalog.yaml"]:::user
+    code["Surrogates/, Models/,<br/>library.cmake"]:::user
+  end
+  gen["fprime-wsts generate"]:::toolkit
+  out["flight-sim/wsts/MyDeployment/<br/>build artifact, git-ignored"]:::generated
+
+  fdep -->|"read"| gen
+  man --> gen
+  cat --> gen
+  gen --> out
+  out -.->|"library location"| flight
+  out -.->|"library location"| code
+
+  classDef flight fill:#dbeafe,stroke:#1d4ed8,color:#0b1f4d
+  classDef toolkit fill:#dcfce7,stroke:#15803d,color:#052e16
+  classDef generated fill:#ffedd5,stroke:#c2410c,color:#431407
+  classDef user fill:#f3e8ff,stroke:#7e22ce,color:#3b0764
+  style flight fill:none,stroke:#94a3b8,color:#475569
+  style sim fill:none,stroke:#94a3b8,color:#475569
+```
+
+Colours as in [design.md](design.md#reading-the-diagrams): 🟦 flight software, 🟩
+fprime-wsts, 🟧 generated, 🟪 yours.
+
 `project` in the manifest names the flight project, relative to the manifest. The
 simulation project is then an F´ library of its own:
 

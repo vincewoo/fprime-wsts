@@ -13,16 +13,112 @@ the software-only test environment that is the spiritual ancestor of this idea.
 It is meant for integration testing in CI, closed-loop development by people or agents,
 and systems and operations testing.
 
+## How it fits together
+
+Every piece of a simulated deployment comes from one of four places, and the diagrams in
+these documents colour them the same way:
+
+| | Comes from | Examples |
+|---|---|---|
+| 🟦 | **Flight software**, used unchanged | project components, `Main.cpp`, topology code, the F´ framework |
+| 🟩 | **fprime-wsts**, the same for every project | stock surrogates, bus, control core, bridge, stock device models, the generator |
+| 🟧 | **Generated** by `fprime-wsts generate` | patched topology model, `WstsSetup.cpp`, `WstsCompat.hpp`, build files, fidelity report |
+| 🟪 | **Written by you** for your project | manifest, project surrogates and catalogs, device models, scenarios, tests |
+
+A simulated deployment is one Linux process. Flight software runs as in flight down to
+the driver ports; below them, surrogates hand each transaction to the WSTS bus, where
+faults are applied, traffic is recorded and device models answer:
+
+```mermaid
+flowchart TB
+  gds["F´ GDS"]:::external
+  client["Tests, scripts, agents,<br/>Python device models"]:::user
+  scenarios["Scenario files"]:::user
+
+  subgraph proc["Simulated deployment: one Linux process"]
+    fsw["Flight components and topology code<br/>(ground link kept real)"]:::flight
+    glue["Generated topology wiring and set-up<br/>patched FPP, WstsSetup.cpp, WstsCompat.hpp"]:::generated
+    surr["Stock surrogates<br/>Wsts.SimI2c, SimSpi, SimGpio, SimByteStream"]:::toolkit
+    psurr["Project surrogates"]:::user
+    tick["Wsts.SimTick"]:::toolkit
+    ctl["Wsts.SimControl"]:::toolkit
+    bus["Wsts bus<br/>fault table, recorder"]:::toolkit
+    models["Stock device models"]:::toolkit
+    pmodels["Project device models"]:::user
+    core["Control core<br/>run state, ticks, scenario player"]:::toolkit
+    bridge["Socket bridge"]:::toolkit
+  end
+
+  gds <-->|"TCP, flight dictionary<br/>plus WSTS entries"| fsw
+  fsw -->|"Drv.I2c, Spi, Gpio,<br/>ByteStream ports"| surr
+  fsw -->|"project driver ports"| psurr
+  tick -->|"cycles rate groups"| fsw
+  tick -->|"each tick"| core
+  fsw -->|"SIM_* commands"| ctl
+  ctl --> core
+  surr --> bus
+  psurr --> bus
+  bus --> models
+  bus --> pmodels
+  glue -.->|"binds endpoints,<br/>attaches models"| bus
+  scenarios --> core
+  core -->|"faults, injection"| bus
+  bridge --> core
+  bus <-->|"observation,<br/>remote models"| bridge
+  client <-->|"JSON over TCP"| bridge
+
+  classDef flight fill:#dbeafe,stroke:#1d4ed8,color:#0b1f4d
+  classDef toolkit fill:#dcfce7,stroke:#15803d,color:#052e16
+  classDef generated fill:#ffedd5,stroke:#c2410c,color:#431407
+  classDef user fill:#f3e8ff,stroke:#7e22ce,color:#3b0764
+  classDef external fill:#f1f5f9,stroke:#64748b,color:#0f172a,stroke-dasharray:4 3
+  style proc fill:none,stroke:#94a3b8,color:#475569
 ```
-flight components ── Drv.I2c / Spi / Gpio / ByteStream / Tick ports ──► Wsts surrogate components (F´)
-                                                                              │
-                                                                         Wsts bus  ◄── faults, recorder
-                                                                    ┌─────────┴──────────┐
-                                                     in-process C++ device models     socket bridge
-                                                                                         │
-                                 Wsts.SimControl commands ──► control core ◄── Python client: models, faults,
-                                 scenario files ──────────►                    injection, observation
+
+The simulated deployment is built from an overlay project that the generator writes next
+to (or outside) the flight project. The flight project is only read:
+
+```mermaid
+flowchart LR
+  subgraph flight["Flight project (read only)"]
+    ftop["Topology model and code<br/>Top/*.fpp, *Topology.cpp, Main.cpp"]:::flight
+    fcomp["Components, F´ framework"]:::flight
+  end
+  subgraph yours["Simulation sources (yours)"]
+    man["wsts.yaml"]:::user
+    pcode["Project catalogs,<br/>surrogates, device models"]:::user
+  end
+  subgraph kit["fprime-wsts"]
+    cat["Surrogate catalog"]:::toolkit
+    gen["fprime-wsts generate"]:::toolkit
+    lib["Wsts library<br/>Core, Drv, Svc"]:::toolkit
+  end
+  over["Overlay project wsts/&lt;Deployment&gt;/<br/>patched FPP, WstsSetup.cpp, WstsCompat.hpp,<br/>CMake files, fidelity report"]:::generated
+  exe["Simulated deployment<br/>(Linux executable)"]:::neutral
+
+  ftop --> gen
+  man --> gen
+  cat --> gen
+  pcode --> gen
+  gen --> over
+  over -->|"fprime-util build"| exe
+  ftop -.->|"Main.cpp and topology<br/>code compiled as is"| exe
+  fcomp -.-> exe
+  lib -.-> exe
+  pcode -.-> exe
+
+  classDef flight fill:#dbeafe,stroke:#1d4ed8,color:#0b1f4d
+  classDef toolkit fill:#dcfce7,stroke:#15803d,color:#052e16
+  classDef generated fill:#ffedd5,stroke:#c2410c,color:#431407
+  classDef user fill:#f3e8ff,stroke:#7e22ce,color:#3b0764
+  classDef neutral fill:#ffffff,stroke:#334155,color:#0f172a
+  style flight fill:none,stroke:#94a3b8,color:#475569
+  style yours fill:none,stroke:#94a3b8,color:#475569
+  style kit fill:none,stroke:#94a3b8,color:#475569
 ```
+
+Most projects write only the manifest and, where the stock models are not enough, a few
+device models. [docs/design.md](docs/design.md) has more detailed diagrams of each part.
 
 ## What you get
 
