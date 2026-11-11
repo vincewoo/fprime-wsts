@@ -37,6 +37,10 @@ substitute:                      # explicit choices; override the catalog
     with: Wsts.SimByteStream
     endpoint: radio              # bus endpoint name; default is the instance's base name
     options: "chunk=256"         # passed to the surrogate's wstsBind()
+    ports: {runIn: schedIn, regOut: }   # flight port -> surrogate port; empty = the surrogate has none
+    queue_size: 10               # for a queued or active surrogate replacing an instance without one
+    stack_size: 64 * 1024        # active surrogates only, as are priority and cpu
+    priority: 30
   - component: Proj.FpgaDriver   # ... or every instance of a component
     with: Proj.SimFpga
 
@@ -48,6 +52,17 @@ models:                          # in-process C++ device models
     kind: i2c                    # bytestream | i2c | spi | gpio | none
     address: 0x68                # i2c only
     params: {"0x75": "0x68"}     # each becomes model.set(key, value) at start-up
+
+simulators:                      # F´ instances the simulation adds (see "Simulator components")
+  topologies: [SensorSim.Simulator]      # subtopologies, by qualified name
+  instances: [SensorSim.powerModel]      # single instances, by qualified name
+  headers: [SensorSim/Top/SubtopologyTopologyDefs.hpp]   # included for their phase code
+  connections:                           # between added instances and flight ones
+    - rateGroup1Hz.RateGroupMemberOut -> SensorSim.Simulator.schedIn
+devices:                         # adapter instances that are the device on a bus endpoint
+  - instance: SensorSim.sensorPort       # an instance of Wsts.BusByteStreamDevice
+    endpoint: uart
+    options: "chunk=256"         # passed to wstsServe()
 
 control:                         # or `control: none`
   enabled: true
@@ -70,6 +85,9 @@ cmake:
   extra_subdirectories: [Lib/Math]   # modules with no FPP model that components depend on
   exclude_subdirectories: [...]
   depends: [Proj_Math]               # extra link dependencies of the topology module
+  cache:                             # CMake cache variables, set before F´ reads the libraries
+    SIM_COMPONENTS: [SerialSensorSim, Top]   # a list becomes a CMake list
+    SIM_LEVEL: 2
 libraries: {keep: [...], drop: [...]}
 fpp_exclude: ["*/Experimental/*"]    # FPP files to leave out of the analysis
 defines: [MY_SIM_FLAG]               # compile definitions, in addition to WSTS_SIM=1
@@ -110,6 +128,84 @@ applies them. If the analysis picks the wrong file (two configuration modules of
 project overriding the same file, for instance), list the unwanted one under
 `fpp_exclude`.
 
+### Simulator components
+
+`simulators` adds F´ instances to the simulated topology. They are defined in FPP that
+the generator can find: in a standalone simulation project, or anywhere in the flight
+project or its libraries. See
+[Device simulators as F´ components](surrogate-guide.md#device-simulators-as-f-components).
+
+| Key | Meaning |
+|---|---|
+| `topologies` | Subtopologies to add whole, by qualified name (`<module>.<topology>`). Every instance in them is added, with their internal connections |
+| `instances` | Single instances to add, by qualified name |
+| `headers` | Headers the phase code of those instances needs. They are included through `WstsCompat.hpp`, because the flight `<Deployment>TopologyDefs.hpp` cannot know them |
+| `connections` | Connections with at least one end on an added instance, as `<source> -> <target>` |
+
+An end of a connection is `<instance>.<port>` or `<subtopology>.<exported port>`, where
+the instance or subtopology is a flight one or an added one, named as in
+[Instance names](#instance-names). A port number in brackets is optional. Without one:
+
+- an output port array (a rate group's `RateGroupMemberOut`) gets the lowest number that
+  nothing uses, written into the patched topology. Flight connections keep their numbers.
+  When all are taken, generation stops and names the instance, its size and the constant
+  that sets it (`ActiveRateGroupOutputPorts`);
+- a single output port must be unconnected: an output drives one input.
+
+For a substituted flight instance the surrogate's port names are used. FPP's `$` escapes
+may be written or left out (`sensorPort.recv` or `sensorPort.$recv`).
+
+What the generator checks, and what it does to keep flight as it is:
+
+- **IDs.** An added instance keeps the base ID in its definition. It must not overlap a
+  flight instance, another added instance or the WSTS instances. The WSTS instances are
+  placed above every ID in use, added instances included, unless `control.base_id` says
+  otherwise.
+- **Health.** Ping ports are numbered by instance name over all instances the health
+  pattern reaches, and flight code indexes its ping table by that number. When an added
+  instance has ping ports, the patched topology lists the flight targets explicitly
+  (`health connections instance $health { ... }`), so flight numbers stay and added
+  instances are not pinged.
+- **Commands, events, telemetry, time.** The topology's patterns connect added instances
+  like any other. The number of instances with commands is checked against the command
+  dispatcher's ports, and the opcode total against `CMD_DISPATCHER_DISPATCH_TABLE_SIZE`;
+  the parameter total is reported against `PRMDB_NUM_DB_ENTRIES`.
+- **Parameters.** If the flight topology has `param connections`, added instances use
+  the flight parameter database. If it has none, an added instance with parameters must be
+  connected to a `Svc.PrmDb` in the simulation's own FPP.
+
+`devices` names adapter instances. `Wsts.BusByteStreamDevice` offers `Drv.ByteStreamDriver`
+(with `allocate` and `deallocate`) to a simulator and is the device on a byte stream
+endpoint. The endpoint must be bound by a surrogate and be a byte stream, and cannot also
+have a `bytestream` model, another device or a system link. `wstsServe` options:
+`chunk=<bytes>`, the largest buffer per `recv` (default 1024).
+
+### Surrogates of another kind, or with other port names
+
+A `substitute` entry, or a catalog entry, may say how a surrogate differs in shape:
+
+- `ports` maps flight port names to the surrogate's. Port types and directions must still
+  match. An empty value says the surrogate has no such port: flight connections on it are
+  commented out in the patched model and listed as fidelity notes. Renames and removals
+  are applied wherever the connection is written: in the deployment's topology, in a
+  subtopology, or in the `port x = instance.port` line that exports it.
+- `queue_size`, `stack_size`, `priority`, `cpu` are written into the instance definition
+  when the surrogate is queued or active. A queued or active surrogate that replaces an
+  instance without a queue gets `queue size 10` and a warning if none is given.
+  Attributes the surrogate's kind does not take are removed.
+
+In a catalog, `ports` applies whatever is replaced and `ports_for: {<component>: {...}}`
+to one replaced component.
+
+### CMake cache variables
+
+`cmake.cache` entries are written as `set(<NAME> "<value>" CACHE STRING ...)` in the
+overlay's root `CMakeLists.txt`, before `find_package(FPrime)`, so a library that reads
+them in its `library.cmake` sees them. A list is written as a CMake list. Precedence,
+highest first: `-D` on the command line (`fprime-util generate -DNAME=...`), then
+`cmake.cache`, then the flight project's `default_cmake_options`, from which a variable
+that `cmake.cache` sets is left out.
+
 ## System manifest (`wsts-system.yaml`)
 
 For a flight system of several computers. See [systems.md](systems.md).
@@ -147,6 +243,9 @@ surrogates:
     compat: |      # C++ for topology code: declarations that lived in the driver's header
       ...
 ```
+
+A catalog entry may also carry `ports`, `ports_for`, `queue_size`, `stack_size`, `priority`
+and `cpu` (see [Surrogates of another kind](#surrogates-of-another-kind-or-with-other-port-names)).
 
 Built-in surrogates (`catalog/wsts-catalog.yaml`):
 

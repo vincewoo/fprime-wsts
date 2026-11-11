@@ -6,6 +6,7 @@
 ####
 add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Wsts/Core")
 add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Wsts/Drv/SimByteStream")
+add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Wsts/Drv/BusByteStreamDevice")
 add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Wsts/Drv/SimI2c")
 add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Wsts/Drv/SimSpi")
 add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Wsts/Drv/SimGpio")

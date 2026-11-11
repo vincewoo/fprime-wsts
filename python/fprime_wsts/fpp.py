@@ -51,6 +51,8 @@ class Port:
     kind: str  # Output, SyncInput, GuardedInput, AsyncInput, or Special
     type: Optional[str]  # qualified port type; None for special and serial ports
     size: int = 1
+    size_constant: Optional[str] = None  # the constant that sets the size, when it is written as one
+    special: Optional[str] = None  # for a special port: CommandRecv, ParamGet, Telemetry, TimeGet, ...
 
     @property
     def is_input(self) -> bool:
@@ -102,6 +104,39 @@ class Connection:
     from_port: str
     to_instance: str
     to_port: str
+    # Where each end is written (file, line, column), and whether it is written as a port
+    # that a subtopology exports rather than as the instance's own port
+    from_loc: Optional[Tuple[Path, int, int]] = None
+    to_loc: Optional[Tuple[Path, int, int]] = None
+    from_exported: bool = False
+    to_exported: bool = False
+    from_index: Optional[int] = None  # port numbers as written; None when left to FPP
+    to_index: Optional[int] = None
+
+
+@dataclass
+class Pattern:
+    """A pattern connection specifier (`health connections instance $health`)"""
+    kind: str  # Command, Event, Health, Param, Telemetry, TextEvent, Time
+    source: Optional[str]  # the instance named
+    file: Path
+    line: int  # position of the specifier
+    col: int
+    source_line: int  # position of the source instance name in it
+    source_col: int
+    explicit_targets: bool
+
+
+@dataclass(frozen=True)
+class Numbered:
+    """A connection with the port numbers FPP resolved for it. This includes the
+    connections that pattern specifiers (command, health, ...) generate."""
+    from_instance: str
+    from_port: str
+    from_index: int
+    to_instance: str
+    to_port: str
+    to_index: int
 
 
 @dataclass
@@ -115,6 +150,11 @@ class Topology:
     packet_sets: List[Tuple[Path, int, int]] = field(default_factory=list)  # file, line, col
     explicit_pattern_targets: List[str] = field(default_factory=list)
     time_source: Optional[str] = None  # the instance named by `time connections instance`
+    numbered: List[Numbered] = field(default_factory=list)
+    # Ports the topology exports (`port x = instance.port`): name -> (instance, port)
+    exported: Dict[str, Tuple[str, str]] = field(default_factory=dict)
+    exported_loc: Dict[str, Tuple[Path, int, int]] = field(default_factory=dict)  # where each is written
+    patterns: List[Pattern] = field(default_factory=list)
 
     @property
     def base_name(self) -> str:
@@ -245,7 +285,7 @@ def read_calls(cmake_file: Path, function: str) -> List[Dict[str, List[str]]]:
     return calls
 
 
-def find_config_overrides(roots: Iterable[Path]) -> Tuple[List[ConfigOverride], List[str]]:
+def find_config_overrides(roots: Iterable[Path], suffixes: Tuple[str, ...] = (".fpp",)) -> Tuple[List[ConfigOverride], List[str]]:
     """Configuration FPP replaced through `register_fprime_config(CONFIGURATION_OVERRIDES)`.
 
     Mirrors F Prime 4.4: an override replaces the configuration file of the same file name
@@ -259,7 +299,8 @@ def find_config_overrides(roots: Iterable[Path]) -> Tuple[List[ConfigOverride], 
     same root override the same file, the later path wins and a warning is returned. Use
     `fpp_exclude` in the manifest to settle such a case.
 
-    Returns the overrides of FPP files and warnings.
+    Returns the overrides of FPP files and warnings. With other `suffixes` (".hpp") the same
+    is done for configuration headers, which are supplied under HEADERS.
     """
     roots = [r.resolve() for r in roots if r.is_dir()]
     supplied: Dict[str, List[Path]] = {}
@@ -285,9 +326,9 @@ def find_config_overrides(roots: Iterable[Path]) -> Tuple[List[ConfigOverride], 
                 except OSError:
                     continue
                 for call in read_calls(cmake, "register_fprime_config"):
-                    for directive, table in (("AUTOCODER_INPUTS", None), ("CONFIGURATION_OVERRIDES", overrides)):
+                    for directive, table in (("AUTOCODER_INPUTS", None), ("HEADERS", None), ("CONFIGURATION_OVERRIDES", overrides)):
                         for token in call.get(directive, []):
-                            if not token.endswith(".fpp") or "${" in token:
+                            if not token.endswith(suffixes) or "${" in token:
                                 continue
                             path = (cmake.parent / token).resolve()
                             if table is None:
@@ -312,6 +353,18 @@ def find_config_overrides(roots: Iterable[Path]) -> Tuple[List[ConfigOverride], 
                             f"named {name}: F Prime will reject it")
         found.append(ConfigOverride(name, winner, sorted(dict.fromkeys(replaced))))
     return found, warnings
+
+
+def config_constant(roots: List[Path], framework: Path, header: str, constant: str) -> Optional[Tuple[int, Path]]:
+    """Value of an integer constant in a configuration header (`NAME = 150`), read from the
+    file the build would use: a CONFIGURATION_OVERRIDES replacement, else the framework's
+    default. None when the header or the constant is not found."""
+    overrides, _ = find_config_overrides(roots, (".hpp", ".h"))
+    file = next((o.winner for o in overrides if o.name == header), framework / "default" / "config" / header)
+    if not file.is_file():
+        return None
+    match = re.search(r"\b" + re.escape(constant) + r"\s*=\s*(0[xX][0-9a-fA-F]+|\d+)", file.read_text(errors="replace"))
+    return (int(match.group(1), 0), file) if match else None
 
 
 def select_candidates(files: List[Path], framework: Path, overrides: Iterable[ConfigOverride] = ()) -> List[Path]:
@@ -540,6 +593,14 @@ def _build_model(ast: list, locations: dict, analysis: dict, files: List[Path]) 
         walk(unit["members"], [])
     node_names: Dict[int, str] = {}
     _collect_node_names(ast, node_names)
+    node_data: Dict[int, dict] = {}
+    _collect_node_data(ast, node_data)
+
+    def size_constant(detail: dict) -> Optional[str]:
+        size = _some(detail.get("specifier", {}).get("size"))
+        data = node_data.get(size.get("astNodeId")) if isinstance(size, dict) else None
+        text = _expr_text(data) if data else None
+        return text
 
     components: Dict[str, Component] = {}
     for key, entry in analysis["componentMap"].items():
@@ -556,9 +617,11 @@ def _build_model(ast: list, locations: dict, analysis: dict, files: List[Path]) 
                 symbol = detail.get("ty", {}).get("DefPort", {}).get("symbol", {}).get("Port")
                 if symbol is not None:
                     port_type = names.get(symbol["nodeId"], symbol["unqualifiedName"])
-                component.ports[port_name] = Port(port_name, detail["kind"], port_type, detail.get("size", 1))
+                component.ports[port_name] = Port(port_name, detail["kind"], port_type, detail.get("size", 1),
+                                                  size_constant(detail))
             else:
-                component.ports[port_name] = Port(port_name, "Special", None)
+                special = next(iter(detail.get("specifier", {}).get("kind", {})), None)
+                component.ports[port_name] = Port(port_name, "Special", None, special=special)
         component.commands = _entry_names(entry["commandMap"], node_names)
         component.events = _entry_names(entry["eventMap"], node_names)
         component.channels = _entry_names(entry["tlmChannelMap"], node_names)
@@ -604,6 +667,15 @@ def _build_model(ast: list, locations: dict, analysis: dict, files: List[Path]) 
             ref = instance_ref.get("InterfaceComponentInstance")
             if ref is not None and ref["astNodeId"] in instance_by_node:
                 topology.instances.append(instance_by_node[ref["astNodeId"]])
+        def written(end: dict) -> Tuple[Optional[Tuple[Path, int, int]], bool, Optional[int]]:
+            loc = end.get("loc") or {}
+            where = None
+            if loc.get("file") and loc.get("pos"):
+                line, col = loc["pos"].split(".")
+                where = (Path(loc["file"]), int(line), int(col))
+            number = _some(end.get("portNumber"))
+            return where, _some(end.get("topologyPort")) is not None, number if isinstance(number, int) else None
+
         for graph, connections in entry["connectionMap"].items():
             for connection in connections:
                 ends = []
@@ -612,15 +684,49 @@ def _build_model(ast: list, locations: dict, analysis: dict, files: List[Path]) 
                     ref = port["interfaceInstance"].get("InterfaceComponentInstance")
                     ends.append((instance_by_node.get(ref["astNodeId"]) if ref else None, _port_name(port["portInstance"])))
                 if ends[0][0] and ends[1][0]:
-                    topology.connections.append(Connection(graph, ends[0][0], ends[0][1], ends[1][0], ends[1][1]))
+                    from_loc, from_exported, from_index = written(connection["from"])
+                    to_loc, to_exported, to_index = written(connection["to"])
+                    topology.connections.append(Connection(
+                        graph, ends[0][0], ends[0][1], ends[1][0], ends[1][1],
+                        from_loc, to_loc, from_exported, to_exported, from_index, to_index))
+        numbers: Dict[str, List[int]] = {}
+        for index, table in enumerate(("fromPortNumberMap", "toPortNumberMap")):
+            for connection, number in entry.get(table, []):
+                numbers.setdefault(json.dumps(connection, sort_keys=True), [-1, -1])[index] = number
+        for key, (from_index, to_index) in numbers.items():
+            connection = json.loads(key)
+            ends = []
+            for side in ("from", "to"):
+                port = connection[side]["port"]
+                ref = port["interfaceInstance"].get("InterfaceComponentInstance")
+                ends.append((instance_by_node.get(ref["astNodeId"]) if ref else None, _port_name(port["portInstance"])))
+            if ends[0][0] and ends[1][0]:
+                topology.numbered.append(Numbered(ends[0][0], ends[0][1], from_index, ends[1][0], ends[1][1], to_index))
+        for port_name, exported in entry.get("portMap", {}).items():
+            pii = exported.get("pii", {})
+            ref = pii.get("interfaceInstance", {}).get("InterfaceComponentInstance")
+            if ref and ref["astNodeId"] in instance_by_node and "portInstance" in pii:
+                topology.exported[port_name] = (instance_by_node[ref["astNodeId"]], _port_name(pii["portInstance"]))
+                try:
+                    topology.exported_loc[port_name] = _position(locations, exported["aNode"]["astNodeId"])
+                except (KeyError, TypeError):
+                    pass
         for pattern in entry.get("patternMap", {}).values():
             (pattern_kind,) = pattern["ast"]["kind"].keys()
             if pattern.get("ast", {}).get("targets"):
                 topology.explicit_pattern_targets.append(pattern_kind)
+            source = pattern.get("source")
+            source_node = source[0].get("aNode", {}).get("astNodeId") if isinstance(source, list) and source else None
             if pattern_kind == "Time":
-                source = pattern.get("source")
-                source_node = source[0].get("aNode", {}).get("astNodeId") if isinstance(source, list) and source else None
                 topology.time_source = instance_by_node.get(source_node)
+            try:
+                pattern_file, pattern_line, pattern_col = _position(locations, pattern["aNode"]["astNodeId"])
+                _, source_line, source_col = _position(locations, pattern["ast"]["source"]["astNodeId"])
+            except (KeyError, TypeError):
+                continue
+            topology.patterns.append(Pattern(
+                pattern_kind, instance_by_node.get(source_node), pattern_file, pattern_line, pattern_col,
+                source_line, source_col, bool(pattern.get("ast", {}).get("targets"))))
         for member in topology_defs.get(node_id, {}).get("members", []):
             (kind, wrapper), = member[1].items()
             if kind == "SpecTlmPacketSet":
@@ -629,6 +735,33 @@ def _build_model(ast: list, locations: dict, analysis: dict, files: List[Path]) 
         topologies[name] = topology
 
     return Model(components, instances, topologies, files)
+
+
+def _collect_node_data(tree, out: Dict[int, dict]) -> None:
+    """Map every AST node id to its data"""
+    if isinstance(tree, dict):
+        node = tree.get("AstNode")
+        if isinstance(node, dict) and "id" in node and isinstance(node.get("data"), dict):
+            out[node["id"]] = node["data"]
+        for value in tree.values():
+            _collect_node_data(value, out)
+    elif isinstance(tree, list):
+        for value in tree:
+            _collect_node_data(value, out)
+
+
+def _expr_text(data: dict) -> Optional[str]:
+    """Dotted name of an expression that is a plain (possibly qualified) identifier"""
+    if "ExprIdent" in data:
+        return data["ExprIdent"].get("value")
+    if "ExprDot" in data:
+        dot = data["ExprDot"]
+        try:
+            left = _expr_text(dot["e"]["AstNode"]["data"])
+            return f"{left}.{dot['id']['AstNode']['data']}" if left else None
+        except (KeyError, TypeError):
+            return None
+    return None
 
 
 def _collect_node_names(tree, out: Dict[int, str]) -> None:

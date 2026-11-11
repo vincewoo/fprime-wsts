@@ -122,6 +122,9 @@ device models. [docs/design.md](docs/design.md) has more detailed diagrams of ea
 
 ## What you get
 
+- **Device simulators as F´ components**: simulators a project already has as components
+  are added to the simulated topology from the manifest and put behind a bus endpoint with
+  the `Wsts.BusByteStreamDevice` adapter, with their own commands, telemetry and scheduling.
 - **Surrogate components** for the standard driver interfaces: `Wsts.SimByteStream` (UART),
   `Wsts.SimI2c`, `Wsts.SimSpi`, `Wsts.SimGpio`, `Wsts.SimTick`. They are ordinary F´ components,
   and projects write their own the same way.
@@ -186,6 +189,13 @@ and the project overrides configuration of the library and of the framework with
 `CONFIGURATION_OVERRIDES`. The generator finds the driver as `SensorLink.uart`, patches a
 copy of the subtopology and builds it in place of the original; the library is not
 touched. See [Instances inside subtopologies](docs/design.md#instances-inside-subtopologies).
+
+`examples/subtop-demo-sim` is a simulation project for that deployment in which the
+device simulator is itself an F´ component: a queued `SerialSensorSim` with its own
+command, parameter, event and telemetry, scheduled by a flight rate group and reached
+through the `Wsts.BusByteStreamDevice` adapter on the UART's bus endpoint. The flight
+project is not touched. See
+[Device simulators as F´ components](docs/surrogate-guide.md#device-simulators-as-f-components).
 
 `examples/linux-demo-sim` keeps the simulation out of the flight project altogether. Its
 manifest names the flight project (`project: ../linux-demo`), and it holds its own
@@ -279,6 +289,12 @@ For SubtopDemo, whose driver is inside a library subtopology:
 
 ```bash
 D=examples/subtop-demo/wsts/SubtopDemo; pytest tests/e2e/test_subtop_demo.py -p fprime_wsts.pytest_plugin --wsts-deployment $D --wsts-gds --dictionary $D/build-artifacts/Linux/SubtopDemo/dict/SubtopDemoTopologyDictionary.json
+```
+
+For the same deployment with the simulator component of `examples/subtop-demo-sim`:
+
+```bash
+D=examples/subtop-demo-sim/wsts/SubtopDemo; pytest tests/e2e/test_subtop_demo_sim.py -p fprime_wsts.pytest_plugin --wsts-deployment $D --wsts-gds --dictionary $D/build-artifacts/Linux/SubtopDemo/dict/SubtopDemoTopologyDictionary.json
 ```
 
 For the two-computer system (the merged dictionary is written when the system starts):

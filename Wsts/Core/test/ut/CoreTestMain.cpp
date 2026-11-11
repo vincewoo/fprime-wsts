@@ -130,6 +130,29 @@ TEST_F(CoreTest, ByteStreamReachesDeviceAndBack) {
     EXPECT_EQ(received[0], text("ping"));
 }
 
+TEST_F(CoreTest, ByteStreamDeviceSeesBoundFlightSideAndDetachesItself) {
+    // What a device adapter (Wsts.BusByteStreamDevice) needs from the bus
+    Wsts::LoopbackByteStream adapter;
+    Wsts::LoopbackByteStream other;
+    EXPECT_TRUE(Bus::get().byteStreamBound("uart"));  // the fixture binds the flight side
+    EXPECT_FALSE(Bus::get().byteStreamBound("nobody"));
+    Bus::get().attachByteStream("uart", &adapter);
+    Bus::get().detachByteStream("uart", &other);  // not the device there: nothing happens
+    EXPECT_EQ(Bus::get().byteStreamSend("uart", text("a")), 0);
+    EXPECT_EQ(received.size(), 1u);
+    Bus::get().detachByteStream("uart", &adapter);
+    EXPECT_EQ(Bus::get().byteStreamSend("uart", text("b")), 0);
+    EXPECT_EQ(received.size(), 1u);
+    // A device's reply is recorded as model traffic and passes the fault table
+    Wsts::Fault drop;
+    drop.endpoint = "uart";
+    drop.kind = Wsts::FaultKind::DROP;
+    drop.dir = Wsts::FaultDir::TO_FLIGHT;
+    (void)Bus::get().addFault(drop);
+    Bus::get().byteStreamInject("uart", text("lost"), "model");
+    EXPECT_EQ(received.size(), 1u);
+}
+
 TEST_F(CoreTest, I2cRegisterModel) {
     ASSERT_TRUE(imu.set("0x75", "0x68"));
     ASSERT_TRUE(imu.set("0x3B", "1, 2 3"));

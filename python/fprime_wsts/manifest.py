@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -36,6 +37,12 @@ class Surrogate:
     options_for: Dict[str, str] = field(default_factory=dict)
     compat: str = ""
     source: str = ""
+    # Flight port name -> surrogate port name, or None when the surrogate has no such port
+    ports: Dict[str, Optional[str]] = field(default_factory=dict)
+    ports_for: Dict[str, Dict[str, Optional[str]]] = field(default_factory=dict)
+    # queue size, stack size, priority, cpu: for a queued or active surrogate that replaces
+    # an instance which has none
+    attributes: Dict[str, str] = field(default_factory=dict)
 
     @property
     def cpp_name(self) -> str:
@@ -43,6 +50,29 @@ class Surrogate:
 
     def options_when_replacing(self, component: str) -> str:
         return self.options_for.get(component, self.options)
+
+    def ports_when_replacing(self, component: str) -> Dict[str, Optional[str]]:
+        return {**self.ports, **self.ports_for.get(component, {})}
+
+
+ATTRIBUTE_KEYS = {"queue_size": "queue size", "stack_size": "stack size", "priority": "priority", "cpu": "cpu"}
+
+
+def _port_map(value, what: str) -> Dict[str, Optional[str]]:
+    """`ports: {flightName: surrogateName}`; an empty value means the surrogate has no such port"""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise WstsError(f"{what}: 'ports' must map flight port names to surrogate port names")
+    return {str(k): (str(v) if v not in (None, "", False) else None) for k, v in value.items()}
+
+
+def _attributes(entry: dict, what: str) -> Dict[str, str]:
+    found = {}
+    for key, clause in ATTRIBUTE_KEYS.items():
+        if entry.get(key) is not None:
+            found[clause] = str(entry[key])
+    return found
 
 
 def load_catalog(path: Path) -> List[Surrogate]:
@@ -64,6 +94,10 @@ def load_catalog(path: Path) -> List[Surrogate]:
                 options_for={k: str(v) for k, v in (entry.get("options_for") or {}).items()},
                 compat=entry.get("compat", "") or "",
                 source=str(path),
+                ports=_port_map(entry.get("ports"), f"{path}: {entry['surrogate']}"),
+                ports_for={str(k): _port_map(v, f"{path}: {entry['surrogate']}")
+                           for k, v in (entry.get("ports_for") or {}).items()},
+                attributes=_attributes(entry, str(path)),
             )
         )
     return surrogates
@@ -81,6 +115,39 @@ class Substitution:
     component: Optional[str] = None
     endpoint: Optional[str] = None
     options: Optional[str] = None
+    ports: Optional[Dict[str, Optional[str]]] = None
+    attributes: Dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class DeviceSpec:
+    """An F Prime instance that is the device on a bus endpoint (a stock adapter such as
+    Wsts.BusByteStreamDevice, with a simulator component behind it)"""
+    instance: str
+    endpoint: str
+    options: str = ""
+
+
+@dataclass
+class ConnectionSpec:
+    """One connection written in the manifest: `<instance>.<port>[n] -> <instance>.<port>[n]`"""
+    text: str
+    source: str  # instance or topology, then port, as written
+    source_index: Optional[int]
+    target: str
+    target_index: Optional[int]
+
+
+@dataclass
+class SimulatorsSpec:
+    """F Prime instances the simulation adds to the topology"""
+    instances: List[str] = field(default_factory=list)
+    topologies: List[str] = field(default_factory=list)
+    connections: List[ConnectionSpec] = field(default_factory=list)
+    headers: List[str] = field(default_factory=list)
+
+    def __bool__(self) -> bool:
+        return bool(self.instances or self.topologies or self.connections or self.headers)
 
 
 @dataclass
@@ -137,6 +204,9 @@ class Manifest:
     extra_subdirectories: List[str] = field(default_factory=list)
     exclude_subdirectories: List[str] = field(default_factory=list)
     extra_depends: List[str] = field(default_factory=list)
+    cmake_cache: Dict[str, List[str]] = field(default_factory=dict)  # name -> values (one, or a CMake list)
+    simulators: SimulatorsSpec = field(default_factory=SimulatorsSpec)
+    devices: List[DeviceSpec] = field(default_factory=list)
     keep_libraries: List[str] = field(default_factory=list)
     drop_libraries: List[str] = field(default_factory=list)
     fpp_exclude: List[str] = field(default_factory=list)
@@ -174,8 +244,29 @@ class Manifest:
 
 KNOWN_KEYS = {
     "project", "deployment", "topology", "output", "substitute", "keep", "models", "control", "bridge", "tick_hz",
-    "catalogs", "sources", "main", "cmake", "libraries", "fpp_exclude", "defines",
+    "catalogs", "sources", "main", "cmake", "libraries", "fpp_exclude", "defines", "simulators", "devices",
 }
+SUBSTITUTE_KEYS = {"instance", "component", "with", "endpoint", "options", "ports", *ATTRIBUTE_KEYS}
+SIMULATOR_KEYS = {"instances", "topologies", "connections", "headers"}
+DEVICE_KEYS = {"instance", "endpoint", "options"}
+CMAKE_KEYS = {"extra_subdirectories", "exclude_subdirectories", "depends", "cache"}
+CONNECTION_END = r"([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+)\s*(?:\[\s*(\d+)\s*\])?"
+CACHE_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
+
+
+def parse_connection(text: str, where: str) -> ConnectionSpec:
+    match = re.fullmatch(rf"\s*{CONNECTION_END}\s*->\s*{CONNECTION_END}\s*", str(text))
+    if not match:
+        raise WstsError(
+            f"{where}: connection '{text}' is not of the form '<instance>.<port> -> <instance>.<port>' "
+            "(a port number in brackets is optional)"
+        )
+    source, source_index, target, target_index = match.groups()
+    return ConnectionSpec(
+        text=" ".join(str(text).split()),
+        source=source.replace("$", ""), source_index=int(source_index) if source_index is not None else None,
+        target=target.replace("$", ""), target_index=int(target_index) if target_index is not None else None,
+    )
 MODEL_KINDS = {"bytestream", "i2c", "spi", "gpio", "none"}
 
 
@@ -208,6 +299,10 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
     for entry in data.get("substitute", []):
         if "with" not in entry or ("instance" not in entry and "component" not in entry):
             raise WstsError(f"{where}: each 'substitute' entry needs 'with' and one of 'instance' or 'component'")
+        unknown = set(entry) - SUBSTITUTE_KEYS
+        if unknown:
+            raise WstsError(f"{where}: 'substitute' entry for {entry.get('instance') or entry.get('component')}: "
+                            f"unknown key(s): {', '.join(sorted(unknown))}")
         manifest.substitutions.append(
             Substitution(
                 surrogate=entry["with"],
@@ -215,8 +310,34 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
                 component=entry.get("component"),
                 endpoint=entry.get("endpoint"),
                 options=entry.get("options"),
+                ports=_port_map(entry["ports"], f"{where}: substitute") if "ports" in entry else None,
+                attributes=_attributes(entry, where),
             )
         )
+
+    simulators = data.get("simulators") or {}
+    if not isinstance(simulators, dict):
+        raise WstsError(f"{where}: 'simulators' must be a mapping with any of: {', '.join(sorted(SIMULATOR_KEYS))}")
+    unknown = set(simulators) - SIMULATOR_KEYS
+    if unknown:
+        raise WstsError(f"{where}: simulators: unknown key(s): {', '.join(sorted(unknown))}")
+    manifest.simulators = SimulatorsSpec(
+        instances=[str(i).replace("$", "") for i in simulators.get("instances") or []],
+        topologies=[str(i).replace("$", "") for i in simulators.get("topologies") or []],
+        connections=[parse_connection(c, f"{where}: simulators") for c in simulators.get("connections") or []],
+        headers=[str(h) for h in simulators.get("headers") or []],
+    )
+    if manifest.simulators.connections and not (manifest.simulators.instances or manifest.simulators.topologies):
+        raise WstsError(f"{where}: simulators.connections needs simulators.instances or simulators.topologies: "
+                        "connections are for instances the simulation adds")
+    for entry in data.get("devices") or []:
+        if not isinstance(entry, dict) or "instance" not in entry or "endpoint" not in entry:
+            raise WstsError(f"{where}: each 'devices' entry needs 'instance' and 'endpoint'")
+        unknown = set(entry) - DEVICE_KEYS
+        if unknown:
+            raise WstsError(f"{where}: device {entry['instance']}: unknown key(s): {', '.join(sorted(unknown))}")
+        manifest.devices.append(DeviceSpec(str(entry["instance"]).replace("$", ""), str(entry["endpoint"]),
+                                           str(entry.get("options", ""))))
 
     for entry in data.get("models", []):
         for key in ("name", "class", "endpoint", "kind"):
@@ -261,6 +382,22 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
         raise WstsError(f"{where}: main.generate needs main.start (the C++ expression that starts the deployment)")
 
     cmake = data.get("cmake") or {}
+    unknown = set(cmake) - CMAKE_KEYS
+    if unknown:
+        raise WstsError(f"{where}: cmake: unknown key(s): {', '.join(sorted(unknown))}")
+    for name, value in (cmake.get("cache") or {}).items():
+        if not re.fullmatch(CACHE_NAME, str(name)):
+            raise WstsError(f"{where}: cmake.cache: '{name}' is not a CMake variable name")
+        values = value if isinstance(value, list) else [value]
+        rendered = []
+        for item in values:
+            if isinstance(item, bool):
+                item = "ON" if item else "OFF"
+            item = str(item)
+            if ";" in item or '"' in item or "\n" in item:
+                raise WstsError(f"{where}: cmake.cache.{name}: write a list as a YAML list, without ';' or quotes")
+            rendered.append(item)
+        manifest.cmake_cache[str(name)] = rendered
     manifest.extra_subdirectories = [str(d) for d in cmake.get("extra_subdirectories", [])]
     manifest.exclude_subdirectories = [str(d) for d in cmake.get("exclude_subdirectories", [])]
     manifest.extra_depends = [str(d) for d in cmake.get("depends", [])]

@@ -173,6 +173,10 @@ class Bus {
     void attachSpi(const std::string& endpoint, SpiDevice* device);
     void attachGpio(const std::string& endpoint, GpioDevice* device);
     void detach(const std::string& endpoint);
+    //! Remove `device` from an endpoint if it is still the byte stream device there
+    void detachByteStream(const std::string& endpoint, ByteStreamDevice* device);
+    //! Whether a surrogate is bound to the flight side of a byte stream endpoint
+    bool byteStreamBound(const std::string& endpoint);
 
     //! Bytes from the device (or an injection) towards flight software
     void byteStreamInject(const std::string& endpoint, const Bytes& data, const char* src = "model");

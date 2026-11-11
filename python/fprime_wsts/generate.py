@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from . import fpp
+from . import simulators as sims
 from .fpp import WstsError
 from .manifest import DEFAULT_CATALOG, TOOLKIT_ROOT, LinkEnd, Manifest, ModelSpec, Surrogate, load_catalog
 
@@ -30,6 +31,8 @@ LINK_SURROGATE = "Wsts.SimByteStream"
 ID_BLOCK = 0x1000
 HOST_PLATFORMS = {"linux", "posix", "sockets"}
 ATTRIBUTE_CLAUSE = re.compile(r"\b(queue\s+size|stack\s+size|priority|cpu)\s+[^\\\n{]+")
+ATTRIBUTE_ORDER = ["queue size", "stack size", "priority", "cpu"]  # the order FPP wants them in
+DEFAULT_QUEUE_SIZE = 10
 
 
 # ----------------------------------------------------------------------
@@ -46,6 +49,11 @@ class PlannedSubstitution:
     endpoint: str
     options: str
     reason: str  # manifest, catalog, structural, link
+    # Flight port name -> the surrogate's name for it, or None when the surrogate has none
+    port_map: Dict[str, Optional[str]] = field(default_factory=dict)
+    # Instance attributes to write (queue size, ...): the surrogate is queued or active
+    # and the flight definition does not have them
+    attributes: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -65,6 +73,7 @@ class Plan:
     setup_base_id: int = 0
     control_base_id: int = 0
     links: List[PlannedLink] = field(default_factory=list)
+    sim: sims.SimulatorPlan = field(default_factory=sims.SimulatorPlan)
 
 
 def _restricted_from_host(component: fpp.Component, stop_at: List[Path]) -> Optional[str]:
@@ -85,16 +94,22 @@ def _restricted_from_host(component: fpp.Component, stop_at: List[Path]) -> Opti
         directory = directory.parent
 
 
-def _covers(surrogate: fpp.Component, original: fpp.Component, used_ports: Set[str]) -> List[str]:
-    """Ports of `original` in use that `surrogate` cannot serve. Empty means it fits."""
+def _covers(surrogate: fpp.Component, original: fpp.Component, used_ports: Set[str],
+            port_map: Optional[Dict[str, Optional[str]]] = None) -> List[str]:
+    """Ports of `original` in use that `surrogate` cannot serve. Empty means it fits.
+    `port_map` gives the surrogate's name for a flight port, or None to leave it unserved."""
     missing = []
+    port_map = port_map or {}
     for name in sorted(used_ports):
         wanted = original.ports.get(name)
-        offered = surrogate.ports.get(name)
+        if name in port_map and port_map[name] is None:
+            continue  # the mapping says the surrogate has no such port: the connection is dropped
+        offered = surrogate.ports.get(port_map.get(name, name))
         if wanted is None or wanted.kind == "Special":
             continue  # pattern-connected ports simply have nothing to connect to
         if offered is None:
-            missing.append(f"{name} (not present)")
+            missing.append(f"{name} (not present)" if name not in port_map
+                           else f"{name} (mapped to {port_map[name]}, which {surrogate.name} does not have)")
         elif offered.type != wanted.type:
             missing.append(f"{name} (type {offered.type}, flight uses {wanted.type})")
         elif offered.is_input != wanted.is_input:
@@ -169,6 +184,7 @@ def _check_tick_sources(plan: Plan, model: fpp.Model, framework: Optional[Path])
 def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], topology: fpp.Topology, roots: List[Path],
               framework: Optional[Path] = None) -> Plan:
     plan = Plan(topology)
+    plan.sim = sims.collect_added(model, manifest, topology)
     by_surrogate = {s.name: s for s in catalog}
     replaces: Dict[str, Surrogate] = {}
     for surrogate in catalog:
@@ -215,6 +231,8 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
         endpoint = instance.base_name
         options: Optional[str] = None
         reason = ""
+        entry_ports: Optional[Dict[str, Optional[str]]] = None
+        entry_attributes: Dict[str, str] = {}
         kept = name in keep
 
         for entry in manifest.substitutions:
@@ -224,6 +242,8 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
                 chosen = by_surrogate.get(entry.surrogate) or Surrogate(name=entry.surrogate, source="manifest")
                 endpoint = entry.endpoint or endpoint
                 options = entry.options
+                entry_ports = entry.ports
+                entry_attributes = entry.attributes
                 reason = "manifest"
                 break
         if chosen is None and not kept and original.name in replaces:
@@ -262,19 +282,46 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
         if chosen.name not in model.components:
             raise WstsError(f"surrogate component {chosen.name} (for {name}) was not found in the FPP model")
         surrogate = model.components[chosen.name]
-        missing = _covers(surrogate, original, used_ports.get(name, set()))
+        port_map = entry_ports if entry_ports is not None else chosen.ports_when_replacing(original.name)
+        for flight_port, surrogate_port in port_map.items():
+            if flight_port not in original.ports:
+                raise WstsError(f"port mapping for {name}: {original.name} has no port '{flight_port}'")
+            if surrogate_port is not None and surrogate_port not in surrogate.ports:
+                raise WstsError(f"port mapping for {name}: {chosen.name} has no port '{surrogate_port}'")
+        missing = _covers(surrogate, original, used_ports.get(name, set()), port_map)
         if missing:
             raise WstsError(
                 f"{chosen.name} cannot replace {name} ({original.name}): connected ports it does not serve: "
                 + "; ".join(missing)
+                + ". If the surrogate's ports are named differently, map them with 'ports: {flightName: "
+                "surrogateName}' in the manifest's 'substitute' entry or in the catalog (an empty value drops the "
+                "flight connection)."
             )
         if options is None:
             options = chosen.options_when_replacing(original.name)
-        plan.substitutions.append(PlannedSubstitution(instance, original, surrogate, chosen, endpoint, options, reason))
+        # A queued or active surrogate needs a queue; the flight definition of a passive
+        # driver has none
+        attributes: Dict[str, str] = {}
+        if surrogate.kind != "passive":
+            allowed = ("queue size",) if surrogate.kind == "queued" else tuple(ATTRIBUTE_ORDER)
+            attributes = {k: v for k, v in {**chosen.attributes, **entry_attributes}.items() if k in allowed}
+            if not instance.has_queue and "queue size" not in attributes:
+                attributes["queue size"] = str(DEFAULT_QUEUE_SIZE)
+                plan.warnings.append(
+                    f"{name}: {chosen.name} is a {surrogate.kind} component and the flight instance has no queue; "
+                    f"queue size {DEFAULT_QUEUE_SIZE} is used. Set 'queue_size' in the 'substitute' entry or the catalog."
+                )
+        plan.substitutions.append(PlannedSubstitution(
+            instance, original, surrogate, chosen, endpoint, options, reason, port_map, attributes))
 
     # Base IDs for the WSTS instances: above everything the flight topology uses
     highest = 0
-    for name in topology.instances:
+    # FPP checks the IDs of every instance it reads, used or not: stay clear of all that
+    # the simulators' files define
+    simulator_files = {item.instance.file for item in plan.sim.added}
+    beside = [name for name, instance in model.instances.items()
+              if instance.file in simulator_files and name not in plan.sim.names]
+    for name in topology.instances + plan.sim.names + beside:
         instance = model.instances[name]
         highest = max(highest, instance.base_id, instance.max_id)
     base = manifest.control_base_id
@@ -352,7 +399,34 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
                 )
         plan.links.append(PlannedLink(end, sub.instance.name, sub.endpoint))
     _check_tick_sources(plan, model, framework)
+
+    # ---- Simulator components and bus devices ----
+    wsts_ids = [(prefix_of(topology) + SETUP_INSTANCE, plan.setup_base_id, plan.setup_base_id + ID_BLOCK - 1)]
+    if manifest.control_enabled:
+        wsts_ids.append((prefix_of(topology) + CONTROL_INSTANCE, plan.control_base_id, plan.control_base_id + ID_BLOCK - 1))
+    sims.check_ids(plan.sim, model, topology, wsts_ids)
+    component_of = {sub.instance.name: sub.surrogate.name for sub in plan.substitutions}
+    renamed = {
+        (sub.instance.name, surrogate_port): flight_port
+        for sub in plan.substitutions for flight_port, surrogate_port in sub.port_map.items() if surrogate_port
+    }
+    sims.plan_connections(plan.sim, model, manifest, topology, component_of, renamed)
+    sims.check_parameters(plan.sim, model, topology)
+    sims.plan_health(plan.sim, model, topology)
+    sims.plan_devices(
+        plan.sim, model, manifest, topology,
+        {sub.endpoint: (sub.instance.name, {"send", "recv"} <= set(sub.surrogate.ports)) for sub in plan.substitutions},
+        {link.endpoint: link.end.link for link in plan.links},
+    )
+    for device in plan.sim.devices:
+        for link in plan.links:
+            if link.instance == device.instance:
+                raise WstsError(f"devices: {device.instance} is also an end of the system link '{link.end.link}'")
     return plan
+
+
+def prefix_of(topology: fpp.Topology) -> str:
+    return topology.module + "." if topology.module else ""
 
 
 def _in_window(base: int, window: Tuple[int, int]) -> bool:
@@ -430,17 +504,107 @@ def patch_instance(text: str, sub: PlannedSubstitution) -> str:
                 break
             end = newline + 1
         text = text[:start] + ATTRIBUTE_CLAUSE.sub("", text[start:end]) + text[end:]
+    elif sub.surrogate.kind != "passive" and (sub.attributes or (sub.surrogate.kind == "queued" and instance.has_queue)):
+        start, end = _definition_span(text, instance)
+        text = text[:start] + _set_attributes(text[start:end], sub) + text[end:]
     return text
 
 
-def patch_topology(text: str, topology: fpp.Topology, instance_names: List[str]) -> str:
-    """Add instance specifiers at the top of the topology body"""
+def _definition_span(text: str, instance: fpp.Instance) -> Tuple[int, int]:
+    """An instance definition up to its init specifiers: from its first line through every
+    line continued with a backslash, stopping at an opening brace"""
+    start = _offset(text, instance.line, 1)
+    end = start
+    while True:
+        newline = text.find("\n", end)
+        if newline < 0:
+            end = len(text)
+            break
+        if not text[end:newline].rstrip().endswith("\\"):
+            end = newline
+            break
+        end = newline + 1
+    brace = _mask(text[start:end]).find("{")
+    return start, (start + brace if brace >= 0 else end)
+
+
+def _set_attributes(header: str, sub: PlannedSubstitution) -> str:
+    """Give an instance definition the queue and task attributes its surrogate's kind takes"""
+    allowed = ["queue size"] if sub.surrogate.kind == "queued" else ATTRIBUTE_ORDER
+    masked = _mask(header)
+    existing: Dict[str, str] = {}
+    spans = []
+    for match in ATTRIBUTE_CLAUSE.finditer(masked):
+        clause = " ".join(match.group(1).split())
+        existing[clause] = header[match.start():match.end()][len(match.group(1)):].strip()
+        spans.append(match.span())
+    final = {k: v for k, v in {**existing, **sub.attributes}.items() if k in allowed}
+    for begin, finish in reversed(spans):
+        header = header[:begin] + header[finish:]
+    masked = _mask(header)
+    base = re.search(r"\bbase\s+id\b", masked)
+    if base is None:
+        raise WstsError(f"{sub.instance.file}:{sub.instance.line}: cannot find 'base id' in the definition of {sub.instance.name}")
+    stop = re.search(r"\\|\n|\{", masked[base.end():])
+    at = base.end() + stop.start() if stop else len(header)
+    at = len(masked[:at].rstrip())  # before a trailing comment, which the mask blanks
+    clauses = "".join(f" {name} {final[name]}" for name in ATTRIBUTE_ORDER if name in final)
+    return header[:at] + clauses + header[at:]
+
+
+def patch_topology(text: str, topology: fpp.Topology, instance_names: List[str], tail: str = "") -> str:
+    """Add instance specifiers at the top of the topology body, and `tail` at its end"""
     masked = _mask(text)
     opening = masked.find("{", _offset(text, topology.line, topology.col))
     if opening < 0:
         raise WstsError(f"{topology.file}: cannot find the body of topology {topology.name}")
+    if tail:
+        closing = _matching_brace(masked, opening)
+        text = text[:closing].rstrip(" \t") + tail + text[closing:]
     addition = "\n\n    # WSTS instances (generated)\n" + "".join(f"    instance {name}\n" for name in instance_names)
     return text[: opening + 1] + addition + text[opening + 1:]
+
+
+QUALIFIED = re.compile(r"[\w$]+(?:\s*\.\s*[\w$]+)*")
+PORT_END = re.compile(r"[\w$]+(?:\s*\.\s*[\w$]+)*(?:\s*\[[^\]\n]*\])?")
+
+
+def rename_port(text: str, line: int, col: int, new_name: str) -> str:
+    """Replace the port name of the connection end (`instance.port`) written at line, col"""
+    at = _offset(text, line, col)
+    match = QUALIFIED.match(text, at)
+    if not match or "." not in match.group(0):
+        raise WstsError(f"cannot find a port reference at line {line}, column {col} while renaming a port to {new_name}")
+    dot = match.group(0).rindex(".")
+    return text[: at + dot + 1] + sims.fpp_name(new_name) + text[match.end():]
+
+
+def remove_span(text: str, line: int, col: int, end_line: int, end_col: int, why: str) -> str:
+    """Turn the text from line, col through the port reference at end_line, end_col into a
+    comment, keeping the line count"""
+    start = _offset(text, line, col)
+    last = PORT_END.match(text, _offset(text, end_line, end_col))
+    if not last:
+        raise WstsError(f"cannot find the end of the connection at line {end_line}, column {end_col}")
+    removed = text[start:last.end()]
+    return text[:start] + f"# {why}: " + " ".join(removed.split()) + "\n" * removed.count("\n") + text[last.end():]
+
+
+def remove_line(text: str, line: int, why: str) -> str:
+    start = _offset(text, line, 1)
+    indent = len(text[start:]) - len(text[start:].lstrip(" \t"))
+    return text[: start + indent] + f"# {why}: " + text[start + indent:]
+
+
+def pin_pattern_targets(text: str, pattern: fpp.Pattern, targets: List[str], topology: Optional[fpp.Topology] = None) -> str:
+    """Give a pattern specifier an explicit list of target instances"""
+    at = _offset(text, pattern.source_line, pattern.source_col)
+    match = QUALIFIED.match(text, at)
+    if not match:
+        raise WstsError(f"{pattern.file}:{pattern.line}: cannot read the {pattern.kind.lower()} connections specifier")
+    listing = "".join(f"      {sims.fpp_name(name, topology)}\n" for name in targets)
+    return (text[:match.end()] + " {\n      # Flight targets, listed so that added simulator instances do not "
+            "change ping port numbers (generated)\n" + listing + "    }" + text[match.end():])
 
 
 def patch_packets(text: str, line: int, col: int, channels: List[str]) -> str:
@@ -454,6 +618,97 @@ def patch_packets(text: str, line: int, col: int, channels: List[str]) -> str:
         insert_at = closing + 1 + tail.end()
         return text[:insert_at] + "\n    # WSTS channels (generated)\n" + listing + text[insert_at:]
     return text[: closing + 1] + " omit {\n    # WSTS channels (generated)\n" + listing + "  }" + text[closing + 1:]
+
+
+def port_edits(plan: Plan, model: fpp.Model, topology: fpp.Topology) -> List[Tuple[Path, int, int, object, str]]:
+    """Edits that apply the substitutions' port mappings to the flight connections: a port
+    the surrogate names differently is renamed where the connection is written (or where a
+    subtopology exports it), and a connection on a port the surrogate does not have is
+    commented out. Adds notes and warnings to the plan."""
+    mapped = {sub.instance.name: sub for sub in plan.substitutions if sub.port_map}
+    if not mapped:
+        return []
+    found: List[Tuple[Path, int, int, object, str]] = []
+    pattern_locs = {(p.file, p.line, p.col) for p in topology.patterns}
+    explicit = [c for c in topology.connections if c.from_loc not in pattern_locs and c.from_loc and c.to_loc]
+    removed: Set[int] = set()
+    exported_done: Set[Tuple[str, str]] = set()
+
+    def exported_port(instance: str, port: str, at: Tuple[Path, int, int], new_name: Optional[str], why: str) -> None:
+        """The end is written as a subtopology's exported port: change its definition"""
+        for other in model.topologies.values():
+            for name, (target_instance, target_port) in other.exported.items():
+                if (target_instance, target_port) != (instance, port) or (other.name, name) in exported_done:
+                    continue
+                if name not in other.exported_loc:
+                    raise WstsError(f"cannot find where {other.name} exports port {name}")
+                exported_done.add((other.name, name))
+                file, line, col = other.exported_loc[name]
+                what = f"port {name} of {other.name}"
+                if new_name is None:
+                    found.append((file, line, col, lambda text, line=line: remove_line(text, line, why), what))
+                else:
+                    def change(text: str, line=line, col=col, new_name=new_name) -> str:
+                        equals = text.index("=", _offset(text, line, col))
+                        target = QUALIFIED.search(text, equals)
+                        target_line = text.count("\n", 0, target.start()) + 1
+                        target_col = target.start() - (text.rfind("\n", 0, target.start()) + 1) + 1
+                        return rename_port(text, target_line, target_col, new_name)
+                    found.append((file, line, col, change, what))
+
+    for index, connection in enumerate(explicit):
+        ends = (
+            (connection.from_instance, connection.from_port, connection.from_loc, connection.from_exported),
+            (connection.to_instance, connection.to_port, connection.to_loc, connection.to_exported),
+        )
+        touched = [(i, p, loc, exp) for i, p, loc, exp in ends if i in mapped and p in mapped[i].port_map]
+        if not touched:
+            continue
+        text = f"{connection.from_instance}.{connection.from_port} -> {connection.to_instance}.{connection.to_port}"
+        dropped = [(i, p) for i, p, _, _ in touched if mapped[i].port_map[p] is None]
+        if dropped:
+            instance, port = dropped[0]
+            why = f"removed by fprime-wsts ({mapped[instance].surrogate.name} has no counterpart of {port})"
+            if connection.from_loc[0] != connection.to_loc[0]:
+                raise WstsError(f"connection {text} is written across two files; fprime-wsts cannot remove it")
+            file, line, col = connection.from_loc
+            end_line, end_col = connection.to_loc[1:]
+            found.append((file, line, col,
+                          lambda text, line=line, col=col, end_line=end_line, end_col=end_col, why=why:
+                          remove_span(text, line, col, end_line, end_col, why), f"connection {text}"))
+            removed.add(index)
+            for instance, port, loc, exported in touched:
+                if exported and mapped[instance].port_map[port] is None:
+                    exported_port(instance, port, loc, None, why)
+            plan.fidelity_notes.append(
+                f"The flight connection {text} is not made: {mapped[instance].surrogate.name}, which replaces "
+                f"{instance}, has no counterpart of port {port}."
+            )
+            continue
+        for instance, port, loc, exported in touched:
+            new_name = mapped[instance].port_map[port]
+            if new_name == port:
+                continue
+            if exported:
+                exported_port(instance, port, loc, new_name, "")
+            else:
+                file, line, col = loc
+                found.append((file, line, col,
+                              lambda text, line=line, col=col, new_name=new_name: rename_port(text, line, col, new_name),
+                              f"connection {text}"))
+
+    # A flight instance all of whose connections were removed does nothing any more
+    for name in topology.instances:
+        if name in mapped:
+            continue
+        own = [i for i, c in enumerate(explicit) if name in (c.from_instance, c.to_instance)]
+        if own and all(i in removed for i in own):
+            plan.warnings.append(
+                f"{name} ({model.instances[name].component}) has no connections left: all of them went to ports "
+                "that the surrogates do not have. It is still built and initialised. If it only served the replaced "
+                "driver, substitute it as well, or accept it as dead weight in the simulation."
+            )
+    return found
 
 
 # ----------------------------------------------------------------------
@@ -692,6 +947,9 @@ def render_compat(plan: Plan, model: fpp.Model, manifest: Manifest, header_of) -
     ]
     headers = sorted({header_of(sub.surrogate) for sub in plan.substitutions})
     lines += [f"#include <{header}>" for header in headers]
+    if manifest.simulators.headers:
+        lines += ["", "// For the phase code of the simulator instances (`simulators.headers` in the manifest)"]
+        lines += [f"#include <{header}>" for header in manifest.simulators.headers]
     lines.append("")
     aliased: Set[str] = set()
     for sub in plan.substitutions:
@@ -769,6 +1027,12 @@ def render_setup(plan: Plan, manifest: Manifest, topology_header: str) -> str:
     for sub in plan.substitutions:
         lines.append(
             f"    {_cpp_instance(sub.instance.name)}.wstsBind({_cpp_string(sub.endpoint)}, {_cpp_string(sub.options)});"
+        )
+    if plan.sim.devices:
+        lines += ["", "    // Simulator components: each adapter is the device on its endpoint"]
+    for device in plan.sim.devices:
+        lines.append(
+            f"    {_cpp_instance(device.instance)}.wstsServe({_cpp_string(device.endpoint)}, {_cpp_string(device.spec.options)});"
         )
     if manifest.models:
         lines += ["", "    // Device models"]
@@ -900,6 +1164,9 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
             "options": sub.options,
             "base_id": sub.instance.base_id,
             "dictionary_items_removed": lost,
+            # Only when used, so that reports of deployments without them are unchanged
+            **({"ports": sub.port_map} if sub.port_map else {}),
+            **({"attributes": sub.attributes} if sub.attributes else {}),
         })
     added = {"commands": [], "events": [], "channels": []}
     if manifest.control_enabled and CONTROL_COMPONENT in model.components:
@@ -907,7 +1174,43 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
         prefix = (plan.topology.module + "." if plan.topology.module else "") + CONTROL_INSTANCE
         for kind in added:
             added[kind] = [f"{prefix}.{n}" for n in getattr(control, kind)]
-    identical = not any(removed.values()) and not any(added.values())
+    identical = not any(removed.values()) and not any(added.values()) and not plan.sim.added
+    simulator_report = {}
+    if plan.sim:
+        sim = plan.sim
+        from_simulators = {"commands": [], "events": [], "channels": [], "params": []}
+        instances = []
+        for item in sim.added:
+            component = model.components.get(item.component)
+            own = {kind: [f"{item.name}.{n}" for n in getattr(component, kind)] if component else [] for kind in from_simulators}
+            for kind, names in own.items():
+                from_simulators[kind] += names
+            span = sims.id_range(item.instance)
+            instances.append({
+                "instance": item.name, "component": item.component, "kind": component.kind if component else None,
+                "base_id": item.instance.base_id, "last_id": span[1] if span else None,
+                "from": item.source, "defined_in": item.instance.file.name,
+                "pinged": False if item.name in sim.unpinged else None,
+                "dictionary_items": own,
+            })
+        scheduling = [
+            {"instance": c.to_instance, "port": c.to_port,
+             "driven_by": f"{c.from_instance}.{c.from_port}" + (f"[{c.from_index}]" if c.from_index is not None else "")}
+            for c in sim.connections if c.port_type in sims.SCHEDULING_PORTS and c.to_instance in sim.names
+        ]
+        simulator_report = {"simulators": {
+            "instances": instances,
+            "devices": [{"instance": d.instance, "component": d.component, "endpoint": d.endpoint, "kind": d.kind}
+                        for d in sim.devices],
+            "connections": [{"connection": c.fpp(), "port_type": c.port_type, "port_number_chosen": c.assigned}
+                            for c in sim.connections],
+            "scheduling": scheduling,
+            "health": {
+                "flight_targets_listed": sim.health_targets if sim.health_pattern else None,
+                "not_pinged": sim.unpinged,
+            },
+            "dictionary_items_added": from_simulators,
+        }}
     system = {}
     if manifest.system:
         # Only for an element of a system, so that single-deployment reports are unchanged
@@ -925,6 +1228,7 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
         }
     return {
         **system,
+        **simulator_report,
         "generator": "fprime-wsts",
         "topology": plan.topology.name,
         "flight_toolchain": settings.default_toolchain,
@@ -952,7 +1256,11 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
         "libraries": libraries,
         "project_modules": modules,
         "reused_sources": reused,
-        "fidelity_notes": plan.fidelity_notes + [
+        "fidelity_notes": plan.fidelity_notes + plan.sim.notes + ([
+            "Simulator components (see 'Simulator components') are part of the simulated deployment only: their "
+            "commands, events, telemetry and parameters are in its dictionary and not in the flight one, and they "
+            "use command dispatcher, telemetry and rate group capacity that flight does not."
+        ] if plan.sim.added else []) + [
             "Operating system: flight OSAL implementations are replaced by the Linux/POSIX ones. Task priorities "
             "are advisory and scheduling is not real-time, so timing and preemption order differ from the target.",
             "Word size and byte order are those of the host; code that depends on the target's differs here.",
@@ -1001,6 +1309,49 @@ def render_report(report: dict) -> str:
                          f"to `{link['peer']}`")
         if not report["links"]:
             lines.append("- none")
+    if report.get("simulators"):
+        sim = report["simulators"]
+        lines += ["", "## Simulator components", "",
+                  "F´ components that the simulation adds to the topology. They are not in the flight deployment.", "",
+                  "| Instance | Component | IDs | Added by |", "|---|---|---|---|"]
+        for item in sim["instances"]:
+            ids = f"`{item['base_id']:#x}`" + (f" to `{item['last_id']:#x}`" if item["last_id"] is not None else " (none used)")
+            origin = "the manifest" if item["from"] == "manifest" else f"`{item['from']}`"
+            lines.append(f"| `{item['instance']}` | `{item['component']}` ({item['kind']}) | {ids} | {origin} |")
+        lines += ["", "**Bus devices** (an adapter instance is the device on an endpoint; the simulator is behind it):", ""]
+        lines += [f"- `{d['instance']}` (`{d['component']}`) serves endpoint `{d['endpoint']}` ({d['kind']})" for d in sim["devices"]]
+        if not sim["devices"]:
+            lines.append("- none")
+        lines += ["", "**Scheduling:**", ""]
+        lines += [f"- `{s['instance']}.{s['port']}` is driven by `{s['driven_by']}`" for s in sim["scheduling"]]
+        if not sim["scheduling"]:
+            lines.append("- no simulator is connected to a flight rate group")
+        lines += ["", "**Connections added** (flight connections keep their port numbers):", ""]
+        lines += [f"- `{c['connection']}`" + (" (port number chosen by the generator)" if c["port_number_chosen"] else "")
+                  for c in sim["connections"]]
+        if not sim["connections"]:
+            lines.append("- none")
+        health = sim["health"]
+        if health["not_pinged"]:
+            lines += ["", "**Health:** " + ", ".join(f"`{n}`" for n in health["not_pinged"]) + " have ping ports and are "
+                      "not pinged. Ping ports are numbered over every instance the health pattern reaches, and the "
+                      "flight ping table is indexed by that number, so the pattern is limited to the flight instances"
+                      + (" (listed explicitly in the patched topology)." if health["flight_targets_listed"] else ".")
+                      + " To have a simulator pinged, the project's ping table needs an entry for it."]
+        if report.get("capacity"):
+            lines += ["", "**Capacity used by the simulated topology:**", ""]
+            capacity = report["capacity"]
+            if capacity.get("command_ports"):
+                c = capacity["command_ports"]
+                lines.append(f"- Command registration ports: {c['used']} of {c['size']}"
+                             + (f" (`{c['constant']}`)" if c["constant"] else ""))
+            for key, label, constant in (("command_table", "Opcodes", "CMD_DISPATCHER_DISPATCH_TABLE_SIZE"),
+                                         ("parameter_table", "Parameters", "PRMDB_NUM_DB_ENTRIES")):
+                c = capacity.get(key)
+                if c:
+                    size = f"of {c['size']} (`{constant}` in `{c['source']}`)" if c["size"] is not None else \
+                        f"(`{constant}` could not be read: check it by hand)"
+                    lines.append(f"- {label}: {c['used']} {size}")
     lines += ["", "## Device models", ""]
     for model in report["models"]:
         address = f" address {model['address']:#x}" if model["kind"] == "i2c" else ""
@@ -1008,7 +1359,10 @@ def render_report(report: dict) -> str:
     if not report["models"]:
         lines.append("- none in-process (attach external models through the bridge)")
     lines += ["", "## Dictionary changes", ""]
-    for title, key in (("Removed (flight items of replaced drivers)", "removed"), ("Added (WSTS)", "added")):
+    titles = [("Removed (flight items of replaced drivers)", "removed"), ("Added (WSTS)", "added")]
+    if report["dictionary"].get("added_by_simulators"):
+        titles.append(("Added (simulator components)", "added_by_simulators"))
+    for title, key in titles:
         items = [i for names in report["dictionary"][key].values() for i in names]
         lines.append(f"**{title}:** {len(items)}")
         lines += [f"- `{item}`" for item in items]
@@ -1143,8 +1497,26 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
             for name in {s.name for s in catalog} | {SETUP_COMPONENT, CONTROL_COMPONENT} | {s.surrogate for s in manifest.substitutions}
             if ("component", name) in located
         })
-        sources = top_fpp + [f for f in surrogate_files if f not in top_fpp]
-        model = fpp.analyze(work, fpp.depend(work, sources) + sources)
+        # Instances and subtopologies the manifest adds are defined in the simulation
+        # project (or wherever the FPP tools find them): read their definitions too
+        simulator_files = sorted({
+            located[("instance", name)]
+            for name in manifest.simulators.instances + manifest.simulators.topologies
+            if ("instance", name) in located
+        })
+        sources = top_fpp + [f for f in surrogate_files + simulator_files if f not in top_fpp]
+        sources = list(dict.fromkeys(sources))
+        try:
+            model = fpp.analyze(work, fpp.depend(work, sources) + sources)
+        except WstsError as error:
+            if simulator_files and re.search(r"base ID \d+ for instance", str(error)):
+                # FPP checks IDs across every instance it reads
+                raise WstsError(
+                    f"{error}\n\nA simulator instance and another instance use the same IDs. Flight IDs do not "
+                    "move: give the simulator instance a base id that is free, in its definition in the "
+                    "simulation project."
+                ) from None
+            raise
 
         local = [t for t in model.topologies.values() if t.file in top_fpp or t.file.parent == top_dir]
         if manifest.topology:
@@ -1156,22 +1528,59 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
 
         plan = make_plan(model, manifest, catalog, topology, roots, settings.framework_path)
         plan.warnings[:0] = early_warnings
+        capacity: Dict[str, dict] = {}
+        if plan.sim.added:
+            config_roots = [settings.framework_path, *settings.library_locations, toolkit_fpp_root, project_root, *sim_roots]
+            tables = {}
+            for key, header, constant in (("command_table", "CommandDispatcherImplCfg.hpp", "CMD_DISPATCHER_DISPATCH_TABLE_SIZE"),
+                                          ("parameter_table", "PrmDbImplCfg.hpp", "PRMDB_NUM_DB_ENTRIES")):
+                value = fpp.config_constant(config_roots, settings.framework_path, header, constant)
+                tables[key] = (value[0], str(value[1])) if value else None
+            retyped = {sub.instance.name: sub.surrogate.name for sub in plan.substitutions}
+            components = [retyped.get(name, model.instances[name].component) for name in topology.instances]
+            components += [item.component for item in plan.sim.added]
+            components += [CONTROL_COMPONENT] if manifest.control_enabled else []
+            capacity = sims.check_capacity(plan.sim, model, topology, components, tables)
 
-        # ---- Instances outside Top: their modules are replaced by patched copies ----
-        replaced: Dict[Path, ReplacedModule] = {}
+        # ---- Edits to the flight model, by file and position ----
+        edits: Dict[Path, List[Tuple[int, int, int, object, str]]] = {}
+
+        def edit(file: Path, line: int, col: int, change, what: str) -> None:
+            edits.setdefault(file, []).append((line, col, len(edits.get(file, [])), change, what))
+
         for sub in plan.substitutions:
-            file = sub.instance.file
+            edit(sub.instance.file, sub.instance.type_line, sub.instance.type_col,
+                 lambda text, sub=sub: patch_instance(text, sub), f"instance {sub.instance.name}")
+        added_instances = [SETUP_INSTANCE] + ([CONTROL_INSTANCE] if manifest.control_enabled else [])
+        if manifest.control_enabled and topology.packet_sets:
+            # Named relative to the topology's module, as the topology's own packets are: a
+            # topology that shares its module's name would capture a fully qualified name
+            channels = [f"{CONTROL_INSTANCE}.{c}" for c in model.components[CONTROL_COMPONENT].channels]
+            for file, line, col in topology.packet_sets:
+                edit(file, line, col, lambda text, line=line, col=col: patch_packets(text, line, col, channels),
+                     "telemetry packets")
+        for file, line, col, change, what in port_edits(plan, model, topology):
+            edit(file, line, col, change, what)
+        if plan.sim.health_pattern is not None:
+            pattern = plan.sim.health_pattern
+            edit(pattern.file, pattern.source_line, pattern.source_col,
+                 lambda text: pin_pattern_targets(text, pattern, plan.sim.health_targets, topology), "health connections")
+
+        # ---- Files outside Top: their modules are replaced by patched copies ----
+        replaced: Dict[Path, ReplacedModule] = {}
+        for file, changes in edits.items():
             if file in top_fpp or file.parent == top_dir:
                 continue
+            what = changes[0][4]
             root = owner(file)
             directory = module_dir(file, root) if root is not None else None
             if directory is None or directory == root:
                 raise WstsError(
-                    f"instance {sub.instance.name} is defined in {file}, which is not inside a module directory of "
+                    f"{what} is defined in {file}, which is not inside a module directory of "
                     "the framework, a library or the project: there is no module to replace with a patched copy"
                 )
             if root in (toolkit_fpp_root, *sim_roots):
-                raise WstsError(f"instance {sub.instance.name} is defined in {file}, inside the simulation sources")
+                raise WstsError(f"{what} is defined in {file}, inside the simulation sources: change it there")
             module = replaced.setdefault(directory, ReplacedModule(directory, root, directory.relative_to(root).as_posix()))
             if file not in module.files:
                 module.files.append(file)
@@ -1206,18 +1615,14 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
 
         for f in top_fpp:
             text_of(f)
-        # Patch bottom-up within each file so earlier positions stay valid
-        for sub in sorted(plan.substitutions, key=lambda s: (s.instance.type_line, s.instance.type_col), reverse=True):
-            texts[sub.instance.file] = patch_instance(text_of(sub.instance.file), sub)
-        prefix = topology.module + "." if topology.module else ""
-        added_instances = [SETUP_INSTANCE] + ([CONTROL_INSTANCE] if manifest.control_enabled else [])
-        if manifest.control_enabled and topology.packet_sets:
-            # Named relative to the topology's module, as the topology's own packets are: a
-            # topology that shares its module's name would capture a fully qualified name
-            channels = [f"{CONTROL_INSTANCE}.{c}" for c in model.components[CONTROL_COMPONENT].channels]
-            for file, line, col in sorted(topology.packet_sets, key=lambda p: (p[1], p[2]), reverse=True):
-                texts[file] = patch_packets(text_of(file), line, col, channels)
-        texts[topology.file] = patch_topology(text_of(topology.file), topology, added_instances)
+        # Bottom-up within each file, so that positions taken from the FPP model stay valid
+        for file, changes in edits.items():
+            for _, _, _, change, _ in sorted(changes, key=lambda c: c[:3], reverse=True):
+                texts[file] = change(text_of(file))
+        # Last, because it is found from the topology's own position: the WSTS instances at
+        # the top of its body, the simulators at the end
+        texts[topology.file] = patch_topology(
+            text_of(topology.file), topology, added_instances, sims.render_block(plan.sim, topology) if plan.sim.added else "")
 
         patched_fpp: List[Path] = []
         for path in sorted(top_dir.iterdir()):
@@ -1254,6 +1659,12 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
             fpp.check(work, check_files + patched_fpp)
         except WstsError as error:
             raise WstsError(f"the generated topology does not pass fpp-check:\n{error}") from None
+        if plan.sim.added or any(sub.port_map for sub in plan.substitutions):
+            # The flight topology's own connections must be exactly where they were
+            patched_model = fpp.analyze(work, check_files + patched_fpp)
+            sims.verify_flight_connections(
+                topology, patched_model.topologies[topology.name],
+                {sub.instance.name for sub in plan.substitutions if sub.port_map})
 
     # ---- Libraries and project modules the simulated deployment builds ----
     # A file belongs to the deepest root that contains it: the framework is often checked
@@ -1428,6 +1839,10 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         f"project({deployment}Sim VERSION 1.0.0 LANGUAGES C CXX)",
         "",
         f"add_compile_definitions({' '.join(defines)})",
+        *(["# From `cmake.cache` in the manifest. Set before F Prime reads the libraries; a value given on the",
+           "# command line (-D) takes precedence.",
+           *[f'set({name} "{";".join(values)}" CACHE STRING "Set by fprime-wsts from cmake.cache in the manifest")'
+             for name, values in manifest.cmake_cache.items()]] if manifest.cmake_cache else []),
         *(["# The framework's and the libraries' modules are added below, once the redirection is set up",
            "set(FPRIME_INCLUDE_FRAMEWORK_CODE OFF)"] if replaced else []),
         f'find_package(FPrime REQUIRED PATHS "${{CMAKE_CURRENT_LIST_DIR}}/{rel(settings.framework_path)}/cmake")',
@@ -1461,6 +1876,8 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         kept_options = []
         for option in options.group(0).split(":", 1)[-1].replace("=", "=", 1).split():
             name = option.split("=", 1)[0]
+            if name in manifest.cmake_cache:
+                continue  # the manifest's cmake.cache sets it for the simulated build
             if (name.startswith("FPRIME_") and name != "FPRIME_PLATFORM") or name == "CMAKE_BUILD_TYPE":
                 kept_options.append(option)
             else:
@@ -1486,6 +1903,12 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
              "original": rel(m.original), "copy": m.relative, "files": sorted(f.name for f in m.files)}
             for m in replaced.values()
         ]
+    if plan.sim.added:
+        report["dictionary"]["added_by_simulators"] = report["simulators"]["dictionary_items_added"]
+        report["capacity"] = {
+            key: ({**value, "source": rel(Path(value["source"]))} if value.get("source") else value)
+            for key, value in capacity.items()
+        }
     if config_overrides:
         report["config_overrides"] = [
             {"file": o.name, "uses": rel(o.winner), "replaces": [rel(r) for r in o.replaced]} for o in config_overrides

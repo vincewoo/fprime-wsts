@@ -97,6 +97,11 @@ actions, so they can all do the same things:
 - the socket bridge (`Wsts/Core/Bridge`), newline-delimited JSON over TCP or a Unix socket;
 - scenario files, one action per line with a tick.
 
+**Device adapters** (`Wsts/Drv/BusByteStreamDevice`). The mirror image of a surrogate: an
+F´ component that is the *device* on an endpoint, and offers the driver interface to a
+simulator written as a component (see
+[Simulator components](#simulator-components)).
+
 **Surrogates** (`Wsts/Drv`, `Wsts/Svc`). Passive F´ components. Each is bound to one bus
 endpoint by generated code calling `wstsBind(endpoint, options)`. The standard ones also
 accept the calls flight topology code makes on the drivers they replace (`open`, `start`,
@@ -407,6 +412,106 @@ file stops with a clear message if `add_fprime_subdirectory` has been overridden
 
 Not supported: an instance defined in a file that belongs to no module directory, and two
 replaced modules whose paths below their roots coincide.
+
+### Simulator components
+
+A device simulator may be an F´ component rather than a C++ model. It is not a
+surrogate: the flight driver instance is still retyped to the stock surrogate, and the
+link still runs over the bus. The simulator is behind the endpoint, where a model would
+be, reached through an adapter instance:
+
+```mermaid
+flowchart LR
+  subgraph flightside["Flight topology (patched copy)"]
+    direction TB
+    mgr["Flight manager"]:::flight
+    drv["Driver instance, retyped<br/>Wsts.SimByteStream"]:::toolkit
+    rg["Flight rate group<br/>free output port"]:::flight
+    pat["Pattern sources<br/>cmdDisp, events, tlmSend"]:::flight
+  end
+  bus["Wsts bus endpoint<br/>fault table, recorder, bridge"]:::toolkit
+  subgraph simside["Added by `simulators` (simulation project's FPP)"]
+    direction TB
+    adp["Adapter instance<br/>Wsts.BusByteStreamDevice"]:::toolkit
+    sim["Simulator component(s)"]:::user
+    aux["What they need: buffer manager,<br/>parameter database, rate group"]:::user
+  end
+  gen["Generated: instance specifiers and<br/>connections at the end of the topology,<br/>wstsServe() in WstsSetup.cpp"]:::generated
+
+  mgr <-->|"driver ports"| drv
+  drv <-->|"wstsBind"| bus
+  bus <-->|"wstsServe"| adp
+  adp <-->|"driver ports"| sim
+  sim --- aux
+  rg -->|"manifest connection,<br/>number chosen"| sim
+  pat -.->|"patterns reach<br/>added instances"| sim
+  gen -.-> simside
+
+  classDef flight fill:#dbeafe,stroke:#1d4ed8,color:#0b1f4d
+  classDef toolkit fill:#dcfce7,stroke:#15803d,color:#052e16
+  classDef generated fill:#ffedd5,stroke:#c2410c,color:#431407
+  classDef user fill:#f3e8ff,stroke:#7e22ce,color:#3b0764
+  style flightside fill:none,stroke:#94a3b8,color:#475569
+  style simside fill:none,stroke:#94a3b8,color:#475569
+```
+
+**Where the adapter sits.** `Wsts.BusByteStreamDevice` implements the bus's
+`ByteStreamDevice` interface and is attached with `Bus::attachByteStream`, exactly as a
+C++ model is. So it receives what flight software sent after the fault table has been
+applied, and its replies go through `byteStreamInject` with source `model`: faults in
+both directions, recording, replay of recorded responses and bridge injection all behave
+as with a model. It holds no lock while delivering, so a simulator with a synchronous
+receive port may reply from inside the call. The other bus kinds would follow the same
+shape (an `I2cDevice` that calls out on a `Drv.I2c` output port); only the byte stream
+one is built.
+
+**How instances get into the topology.** The simulation project's FPP defines the
+instances, with their phase code, and usually a subtopology of them with its internal
+connections. That FPP names nothing of the flight deployment. The manifest lists what to
+add (`simulators.topologies`, `simulators.instances`) and the connections between added
+and flight instances (`simulators.connections`). The generator writes both at the end of
+the patched topology's body: instance specifiers, then one `connections WstsSimulators`
+block.
+
+Connections to flight are in the manifest, not in the simulation's FPP, for three reasons:
+
+- They are specific to one deployment (which rate group has room, what the UART endpoint
+  is called), as the rest of the manifest is. The simulator's FPP stays usable with
+  another deployment, or in the project's existing test deployment.
+- The generator has to see them. It chooses the port number on a rate group, refuses
+  when none is free, and checks the result against the flight model. Connections buried
+  in an imported topology would be numbered by FPP, after the fact.
+- An FPP topology that named flight instances would have to be written against the flight
+  module names and could not be checked on its own.
+
+Connections among the added instances stay in FPP, where they belong to the simulator.
+
+**Keeping flight as it is.** Three things could disturb the flight topology, and each is
+handled and then verified:
+
+- *Port numbers on port arrays.* A manifest connection that leaves a port array gets an
+  explicit number: the lowest one free in the model FPP resolved for the flight topology.
+  Flight connections, numbered or not, are never rewritten.
+- *Health ping ports.* FPP numbers them by instance name over every instance the health
+  pattern reaches, so an added instance with ping ports would shift flight ones, and the
+  flight ping table is indexed by port number. When an added instance has ping ports, the
+  flight pattern is given its current targets explicitly. Placing added instances last in
+  the topology does not help: the order of instance specifiers does not enter into it.
+- *IDs.* Added instances keep the base IDs of their definitions; overlaps are errors. The
+  WSTS instances move above them.
+
+After patching, the generator analyses the patched model and compares it with the flight
+one: every explicit flight connection and every health connection must have the port
+numbers it had. Command, event and telemetry pattern connections are exempt: their
+registration port numbers follow the instance list, and nothing is indexed by them.
+
+**Retyping to a different shape.** A simulator that replaces a driver outright (rather
+than sitting behind the stock surrogate) may be of another kind and name its ports
+differently. `ports` and the attribute keys on a `substitute` or catalog entry cover that:
+connections are renamed or commented out at the positions the FPP model gives, in the
+deployment's files or in copies of subtopology files (the mechanism of
+[Instances inside subtopologies](#instances-inside-subtopologies) extends to any flight
+file that needs an edit), and queue attributes are inserted in the order FPP requires.
 
 ### Configuration overrides
 
