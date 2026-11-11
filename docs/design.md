@@ -9,6 +9,20 @@
 4. The result suits CI, closed-loop agentic development and operations testing: one
    command to run, scriptable control, repeatable scenarios, machine-readable output.
 
+## Reading the diagrams
+
+The diagrams colour each piece by where it comes from:
+
+| | Comes from | What belongs here |
+|---|---|---|
+| 🟦 | **Flight software**, used unchanged | The F´ framework, project components, `Main.cpp`, hand-written topology code, the ground link driver |
+| 🟩 | **fprime-wsts**, the same for every project | `Wsts/Core` (bus, control core, recorder, bridge, stock models, links), the stock surrogates in `Wsts/Drv` and `Wsts/Svc`, the built-in catalog, the generator and Python client |
+| 🟧 | **Generated** by `fprime-wsts generate` | Everything under `wsts/<Deployment>/`: patched topology FPP, `wsts_instances.fpp`, `WstsSetup.cpp`, `WstsCompat.hpp`, `WstsMain.cpp`, build files, the fidelity report, `wsts-system.json` |
+| 🟪 | **Written by you** for your project | `wsts.yaml` and `wsts-system.yaml`, project catalogs, project surrogates, device models (C++ or Python), scenarios, tests |
+| ⬜ | Outside tools | The GDS, the host |
+
+Generated files are never edited: change the manifest or the generator and regenerate.
+
 ## Where the simulation is cut in
 
 F´ drivers are defined against FPP interfaces (`Drv.I2c`, `Drv.Spi`, `Drv.Gpio`,
@@ -24,6 +38,47 @@ There are three places a deployment can be cut, and they trade effort against fi
 | S3 OS API | The target OS's headers, implemented on POSIX | Project code that calls the OS directly | Planned |
 
 The seam is chosen per instance. The default is S1 from the surrogate catalog.
+
+The same I2C device in flight and at the two topology seams, using the LinuxDemo names:
+
+```mermaid
+flowchart TB
+  subgraph S1b["S1b: manager replaced"]
+    direction TB
+    ma["Application components"]:::flight
+    mm["imu<br/>project surrogate"]:::user
+    mb["Wsts bus (optional)"]:::toolkit
+    ma -->|"the manager's own ports"| mm -.-> mb
+  end
+  subgraph S1["S1: driver replaced"]
+    direction TB
+    sa["Application components"]:::flight
+    sm["imu<br/>Components.ImuManager"]:::flight
+    sd["imuBus<br/>Wsts.SimI2c"]:::toolkit
+    sb["Wsts bus"]:::toolkit
+    sx["IMU model<br/>stock RegisterMapI2c or yours"]:::user
+    sa --> sm -->|"Drv.I2c"| sd --> sb --> sx
+  end
+  subgraph F["Flight"]
+    direction TB
+    fa["Application components"]:::flight
+    fm["imu<br/>Components.ImuManager"]:::flight
+    fd["imuBus<br/>Drv.LinuxI2cDriver"]:::flight
+    fh["/dev/i2c-1, IMU chip"]:::external
+    fa --> fm -->|"Drv.I2c"| fd --> fh
+  end
+
+  classDef flight fill:#dbeafe,stroke:#1d4ed8,color:#0b1f4d
+  classDef toolkit fill:#dcfce7,stroke:#15803d,color:#052e16
+  classDef user fill:#f3e8ff,stroke:#7e22ce,color:#3b0764
+  classDef external fill:#f1f5f9,stroke:#64748b,color:#0f172a,stroke-dasharray:4 3
+  style F fill:none,stroke:#94a3b8,color:#475569
+  style S1 fill:none,stroke:#94a3b8,color:#475569
+  style S1b fill:none,stroke:#94a3b8,color:#475569
+```
+
+Everything above the replaced instance is flight code, so the lower the seam, the more
+flight code a test exercises.
 
 ## Runtime
 
@@ -56,6 +111,99 @@ control core (fault expiry, scenario steps, model ticks) and then cycles the fli
 groups. Ticks are paced by the wall clock divided by the time scale. Pausing stops the
 ticks, so the flight rate groups stop too.
 
+How the parts connect inside the process. The three front ends all reach the control
+core, and everything that touches a device goes through the bus:
+
+```mermaid
+flowchart TB
+  fsw["Flight components"]:::flight
+  tick["Wsts.SimTick"]:::toolkit
+  setup["WstsSetup.cpp"]:::generated
+  subgraph surrogates["Surrogates"]
+    direction LR
+    ss["Stock: SimI2c, SimSpi,<br/>SimGpio, SimByteStream"]:::toolkit
+    ps["Project surrogates"]:::user
+  end
+  subgraph busg["Wsts bus"]
+    direction LR
+    eps["Named endpoints"]:::toolkit --> faults["Fault table"]:::toolkit
+  end
+  subgraph models["Device models"]
+    direction LR
+    sm["Stock: RegisterMapI2c, ScriptedByteStream,<br/>LoopbackSpi, LinkByteStream, ..."]:::toolkit
+    pm["Project models: C++ in process,<br/>or Python through the bridge"]:::user
+  end
+  subgraph core["Control core"]
+    direction TB
+    player["Scenario player"]:::toolkit --> act["Action dispatch"]:::toolkit
+    rec["Recorder"]:::toolkit
+  end
+  subgraph front["Front ends"]
+    direction LR
+    ctl["Wsts.SimControl<br/>F´ commands, events, telemetry"]:::toolkit
+    bridge["Socket bridge<br/>JSON lines, TCP or Unix"]:::toolkit
+    scen["Scenario files"]:::user
+  end
+
+  tick -->|"cycle rate groups"| fsw
+  tick -->|"advance"| core
+  fsw -->|"driver ports"| surrogates
+  surrogates --> busg
+  busg --> models
+  setup -.->|"wstsBind, attach models,<br/>start runtime"| busg
+  ctl --> act
+  bridge --> act
+  scen --> player
+  act -->|"fault_set, inject,<br/>gpio_force, ..."| busg
+  busg -->|"every transaction"| rec
+  busg -->|"to subscribers"| bridge
+
+  classDef flight fill:#dbeafe,stroke:#1d4ed8,color:#0b1f4d
+  classDef toolkit fill:#dcfce7,stroke:#15803d,color:#052e16
+  classDef generated fill:#ffedd5,stroke:#c2410c,color:#431407
+  classDef user fill:#f3e8ff,stroke:#7e22ce,color:#3b0764
+  style surrogates fill:none,stroke:#94a3b8,color:#475569
+  style busg fill:none,stroke:#94a3b8,color:#475569
+  style models fill:none,stroke:#94a3b8,color:#475569
+  style core fill:none,stroke:#94a3b8,color:#475569
+  style front fill:none,stroke:#94a3b8,color:#475569
+```
+
+One tick of LinuxDemo, and the I2C transaction it causes:
+
+```mermaid
+sequenceDiagram
+  box rgb(220, 252, 231) fprime-wsts
+    participant Tick as Wsts.SimTick
+    participant Core as Control core
+  end
+  box rgb(219, 234, 254) Flight software
+    participant RG as rateGroup10Hz
+    participant Imu as imu (ImuManager)
+  end
+  box rgb(220, 252, 231) fprime-wsts
+    participant Sur as imuBus (Wsts.SimI2c)
+    participant Bus as Wsts bus
+  end
+  box rgb(243, 232, 255) Yours, or a stock model
+    participant Model as IMU model
+  end
+
+  Tick->>Core: advance: expire faults, run due scenario steps, model onTick
+  Tick->>RG: cycle
+  RG->>Imu: run
+  Imu->>Sur: i2cWriteRead(addr, write, read)
+  Sur->>Bus: i2cTransact(endpoint, addr, write, read)
+  Bus->>Bus: apply faults (error, drop, delay, corrupt)
+  Bus->>Model: transact(addr, write, read)
+  Model-->>Bus: status, read data
+  Bus->>Bus: record, notify bridge subscribers
+  Bus-->>Sur: status
+  Sur-->>Imu: Drv::I2cStatus
+```
+
+In `responses` replay the bus answers from the recording and the model is not called.
+
 ## The transform
 
 `fprime-wsts generate <manifest>` does the following.
@@ -76,6 +224,36 @@ ticks, so the flight rate groups stop too.
    the WSTS instances are added to the topology. Base IDs do not move. The result is run
    through `fpp-check`.
 4. **Emit** an overlay project (below) and the fidelity report.
+
+```mermaid
+flowchart LR
+  ffpp["Flight FPP model<br/>framework, libraries, project"]:::flight
+  wfpp["Wsts FPP model<br/>and built-in catalog"]:::toolkit
+  man["wsts.yaml<br/>substitute, keep, models, bridge"]:::user
+  pcat["Project catalogs"]:::user
+
+  subgraph gen["fprime-wsts generate"]
+    direction LR
+    a["1 Analyse<br/>fpp-locate-defs, fpp-depend,<br/>fpp-to-json"]:::toolkit
+    p["2 Plan<br/>a surrogate per instance,<br/>port check"]:::toolkit
+    x["3 Patch<br/>retype instances, add WSTS<br/>instances, fpp-check"]:::toolkit
+    e["4 Emit"]:::toolkit
+    a --> p --> x --> e
+  end
+
+  ffpp --> a
+  wfpp --> a
+  man --> p
+  pcat --> p
+  e --> over["Overlay project<br/>wsts/&lt;Deployment&gt;/"]:::generated
+  e --> rep["Fidelity report<br/>wsts-report.json, .md"]:::generated
+
+  classDef flight fill:#dbeafe,stroke:#1d4ed8,color:#0b1f4d
+  classDef toolkit fill:#dcfce7,stroke:#15803d,color:#052e16
+  classDef generated fill:#ffedd5,stroke:#c2410c,color:#431407
+  classDef user fill:#f3e8ff,stroke:#7e22ce,color:#3b0764
+  style gen fill:none,stroke:#94a3b8,color:#475569
+```
 
 ### The overlay project
 
@@ -113,6 +291,53 @@ modules relative to its root. The flight project is only read. Libraries the
 simulated topology no longer references are dropped; build options that select the flight
 toolchain or platform are not carried over. Both are listed in the report.
 
+What the build of an overlay project compiles, and where each part comes from:
+
+```mermaid
+flowchart LR
+  subgraph fl["Flight project (read only)"]
+    direction TB
+    tc["Top/*Topology.cpp"]:::flight
+    main["Main.cpp"]:::flight
+    comp["Project components"]:::flight
+  end
+  subgraph out["wsts/&lt;Deployment&gt;/ (generated)"]
+    direction TB
+    gtop["Top/*.fpp, patched<br/>Top/wsts_instances.fpp<br/>Top/WstsSetup.cpp"]:::generated
+    wc["Top/WstsCompat.hpp"]:::generated
+    wm["WstsMain.cpp<br/>only when there is no main()"]:::generated
+  end
+  subgraph others["Linked in"]
+    direction TB
+    lib["fprime-wsts: Wsts_Core, stock<br/>surrogates, SimControl, SimSetup"]:::toolkit
+    us["Your simulation code: project<br/>surrogates, device models"]:::user
+    fw["F´ framework"]:::flight
+  end
+  top["Topology module"]:::neutral
+  exe["Simulated deployment"]:::neutral
+
+  tc --> top
+  gtop --> top
+  wc -.->|"force-included"| top
+  top --> exe
+  main --> exe
+  wm -.->|"in place of Main.cpp"| exe
+  comp --> exe
+  others --> exe
+
+  classDef flight fill:#dbeafe,stroke:#1d4ed8,color:#0b1f4d
+  classDef toolkit fill:#dcfce7,stroke:#15803d,color:#052e16
+  classDef generated fill:#ffedd5,stroke:#c2410c,color:#431407
+  classDef user fill:#f3e8ff,stroke:#7e22ce,color:#3b0764
+  classDef neutral fill:#ffffff,stroke:#334155,color:#0f172a
+  style fl fill:none,stroke:#94a3b8,color:#475569
+  style out fill:none,stroke:#94a3b8,color:#475569
+  style others fill:none,stroke:#94a3b8,color:#475569
+```
+
+Only the topology module mixes sources: the flight topology code is compiled next to
+generated files, against the surrogates that `WstsCompat.hpp` aliases in.
+
 ### WSTS control wiring
 
 `wstsControl` (`Wsts.SimControl`) is given a base ID above every ID the flight topology
@@ -121,6 +346,37 @@ plus the WSTS entries. The topology's own pattern specifiers connect its command
 telemetry and time ports. If the topology defines telemetry packets, the WSTS channels are
 added to the packet set's `omit` list. It is an active component with its own thread and
 uses no flight rate-group port: the simulation tick notifies it.
+
+```mermaid
+flowchart LR
+  gds["F´ GDS"]:::external
+  subgraph flight["Flight services, as in LinuxDemo"]
+    direction TB
+    disp["CdhCore.cmdDisp"]:::flight
+    evt["CdhCore.events"]:::flight
+    tlm["CdhCore.tlmSend"]:::flight
+    time["posixTime"]:::flight
+  end
+  ctl["wstsControl<br/>Wsts.SimControl<br/>instance in wsts_instances.fpp"]:::toolkit
+  core["Control core"]:::toolkit
+  tick["Wsts.SimTick"]:::toolkit
+
+  gds <-->|"flight ground link"| flight
+  disp -->|"SIM_*, FAULT_*, INJECT_*, ..."| ctl
+  ctl -->|"events"| evt
+  ctl -->|"telemetry"| tlm
+  time -->|"time"| ctl
+  ctl --> core
+  tick -.->|"notify"| ctl
+
+  classDef flight fill:#dbeafe,stroke:#1d4ed8,color:#0b1f4d
+  classDef toolkit fill:#dcfce7,stroke:#15803d,color:#052e16
+  classDef external fill:#f1f5f9,stroke:#64748b,color:#0f172a,stroke-dasharray:4 3
+  style flight fill:none,stroke:#94a3b8,color:#475569
+```
+
+The connections come from the topology's pattern specifiers, so they follow whatever the
+flight topology names its services.
 
 `control: none` in the manifest leaves it out. The bridge and scenarios still work.
 

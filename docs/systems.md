@@ -5,17 +5,52 @@ computer's deployment is converted as usual, each runs as its own process, and W
 carries the links between them. One command starts the whole system, one GDS operates
 it, and one client controls it.
 
+```mermaid
+flowchart TB
+  dict["Merged dictionary<br/>wsts-logs/HubDemoDictionary.json"]:::generated
+  gds["F´ GDS"]:::external
+
+  subgraph run["fprime-wsts run &lt;system&gt;"]
+    direction LR
+    subgraph cdh["Cdh process"]
+      direction TB
+      cfsw["Flight code<br/>CmdSplitter, GenericHub, comDriver"]:::flight
+      cdrv["hubDriver<br/>Wsts.SimByteStream"]:::toolkit
+      cbus["Wsts bus<br/>LinkByteStream model"]:::toolkit
+      cbr["bridge tcp:50100"]:::toolkit
+      cfsw <--> cdrv <--> cbus --- cbr
+    end
+    subgraph pay["Payload process"]
+      direction TB
+      pfsw["Flight code<br/>GenericHub, Instrument"]:::flight
+      pdrv["hubDriver<br/>Wsts.SimByteStream"]:::toolkit
+      pbus["Wsts bus<br/>LinkByteStream model"]:::toolkit
+      pbr["bridge tcp:50101"]:::toolkit
+      pfsw <--> pdrv <--> pbus --- pbr
+    end
+  end
+
+  client["Your tests and scripts<br/>through WstsSystem"]:::user
+
+  dict --> gds
+  gds <-->|"TCP, real ground link"| cfsw
+  cbus <-->|"link hub<br/>Unix socket"| pbus
+  cbr <--> client
+  pbr <--> client
+
+  classDef flight fill:#dbeafe,stroke:#1d4ed8,color:#0b1f4d
+  classDef toolkit fill:#dcfce7,stroke:#15803d,color:#052e16
+  classDef generated fill:#ffedd5,stroke:#c2410c,color:#431407
+  classDef user fill:#f3e8ff,stroke:#7e22ce,color:#3b0764
+  classDef external fill:#f1f5f9,stroke:#64748b,color:#0f172a,stroke-dasharray:4 3
+  style run fill:none,stroke:#94a3b8,color:#475569
+  style cdh fill:none,stroke:#94a3b8,color:#475569
+  style pay fill:none,stroke:#94a3b8,color:#475569
 ```
-                       ┌──────────── fprime-wsts run <system> ────────────┐
-  GDS ◄─ TCP, merged ─►│  Cdh (process)                 Payload (process) │
-        dictionary     │   flight code                   flight code      │
-                       │   GenericHub                    GenericHub       │
-                       │   hubDriver → Wsts.SimByteStream ◄─ hubDriver    │
-                       │        │                             │           │
-                       │     Wsts bus ── link "hub" ──────  Wsts bus      │
-                       │     bridge tcp:50100            bridge tcp:50101 │
-                       └──────────────────────────────────────────────────┘
-```
+
+Colours as in [design.md](design.md#reading-the-diagrams): 🟦 flight software, 🟩
+fprime-wsts, 🟧 generated, 🟪 yours. In flight the two `hubDriver` instances are a
+`Drv.TcpServer` (Cdh) and a `Drv.TcpClient` (Payload).
 
 [`examples/hub-demo`](../examples/hub-demo) is the worked example: a ground-facing `Cdh`
 deployment and a `Payload` deployment joined by an F´ `Svc.GenericHub` over Ethernet, with
@@ -62,6 +97,37 @@ writes one overlay project per element under the output directory (`cdh/`, `payl
 each with its own fidelity report, and `wsts-system.json`, which describes the system to
 the runner and the client. Elements may come from different flight projects and target
 different platforms.
+
+```mermaid
+flowchart LR
+  sys["wsts-system.yaml<br/>elements, links, ID windows"]:::user
+  cman["Cdh/wsts.yaml"]:::user
+  pman["Payload/wsts.yaml"]:::user
+  cfl["Cdh deployment"]:::flight
+  pfl["Payload deployment"]:::flight
+  gen["fprime-wsts generate<br/>the transform once per element"]:::toolkit
+  subgraph out["wsts/HubDemo/"]
+    direction TB
+    cov["cdh/ overlay project"]:::generated
+    pov["payload/ overlay project"]:::generated
+    sj["wsts-system.json"]:::generated
+  end
+
+  sys --> gen
+  cman --> gen
+  pman --> gen
+  cfl --> gen
+  pfl --> gen
+  gen --> cov
+  gen --> pov
+  gen --> sj
+
+  classDef flight fill:#dbeafe,stroke:#1d4ed8,color:#0b1f4d
+  classDef toolkit fill:#dcfce7,stroke:#15803d,color:#052e16
+  classDef generated fill:#ffedd5,stroke:#c2410c,color:#431407
+  classDef user fill:#f3e8ff,stroke:#7e22ce,color:#3b0764
+  style out fill:none,stroke:#94a3b8,color:#475569
+```
 
 ### Links
 
