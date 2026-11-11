@@ -4,7 +4,7 @@
 
 | Command | Purpose |
 |---|---|
-| `fprime-wsts generate <wsts.yaml> [--project DIR] [--output DIR] [--check] [--json]` | Create or refresh a simulated deployment. `--check` writes nothing and exits 1 if the output is out of date |
+| `fprime-wsts generate <wsts.yaml> [--project DIR] [--output DIR] [--check] [--json]` | Create or refresh a simulated deployment. `--project` defaults to the manifest's `project`, else the nearest `settings.ini` above the manifest. `--check` writes nothing and exits 1 if the output is out of date |
 | `fprime-wsts run [DIR] [--gds] [--scenario F] [--scenario-mode stimulus\|responses] [--record F] [--duration S] [--bridge ADDR] [--files-dir DIR] [--json]` | Run a built simulated deployment, optionally with a headless GDS. Logs go to `DIR/wsts-logs` |
 | `fprime-wsts report [DIR] [--json]` | Print a generated deployment's fidelity report |
 | `fprime-wsts scaffold <Component> --output DIR [--project DIR] [--name NAME]` | Start a mirror surrogate for a flight component |
@@ -13,12 +13,21 @@ Errors the user can fix are printed as `fprime-wsts: error: …` with exit code 
 
 ## Manifest (`wsts.yaml`)
 
-Paths are relative to the project root. Only `deployment` is required.
+Only `deployment` is required.
+
+A manifest either lives in the flight project, or names the flight project with `project`
+and makes its own directory a standalone **simulation project** (see
+[Where simulation code lives](surrogate-guide.md#where-simulation-code-lives)). Paths to
+flight things (`deployment`, `sources`, `main.sources`, `cmake.*_subdirectories`,
+`libraries`) are always relative to the flight project root. Paths to simulation things
+(`catalogs`, `output`) are relative to the simulation project when there is one, else to
+the flight project root.
 
 ```yaml
+project: ../flight               # flight project root, relative to this file (standalone simulation project)
 deployment: LinuxDemo            # deployment directory (the one containing Top/)
 topology: LinuxDemo.LinuxDemo    # only needed if Top/ defines more than one topology
-output: wsts/LinuxDemo            # default: wsts/<deployment>
+output: wsts/LinuxDemo            # default: wsts/<deployment> in the simulation project, else in the flight project
 
 keep: [comDriver]                # instances never substituted
 substitute:                      # explicit choices; override the catalog
@@ -44,7 +53,7 @@ control:                         # or `control: none`
 bridge: tcp:50100                # tcp:<port> | tcp:<host>:<port> | unix:<path> | none
 tick_hz: 10                      # only used when no tick source was substituted
 
-catalogs: [sim/wsts-catalog.yaml] # project surrogate catalogs, searched before the built-in one
+catalogs: [wsts-catalog.yaml]    # project surrogate catalogs, searched before the built-in one
 sources:
   fpp: [...]                     # topology model files (default: Top/CMakeLists.txt AUTOCODER_INPUTS)
   topology: [...]                # hand-written topology sources (default: Top/CMakeLists.txt SOURCES)

@@ -117,7 +117,12 @@ def scaffold_cli(args) -> int:
         try:
             fpp.check(work, fpp.depend(work, [model_file]) + [model_file])
         except WstsError as error:
-            raise WstsError(f"the scaffolded model {model_file} does not pass fpp-check:\n{error}") from None
+            hint = ""
+            if module and new_module != module:
+                hint = (f"\nThe model was copied out of module {module}, so names it used relative to that "
+                        f"module (for example `import Gpio` for `{module}.Gpio`) must be qualified. "
+                        f"Edit {model_file} and run fpp-check again, or keep module {module} with --name.")
+            raise WstsError(f"the scaffolded model {model_file} does not pass fpp-check:\n{error}{hint}") from None
 
     counts = (f"{len(component.ports)} ports, {len(component.commands)} commands, {len(component.events)} events, "
               f"{len(component.channels)} channels")

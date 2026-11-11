@@ -9,7 +9,7 @@ import yaml
 
 from fprime_wsts.fpp import WstsError
 from fprime_wsts.generate import generate
-from fprime_wsts.manifest import parse_manifest
+from fprime_wsts.manifest import load_manifest, parse_manifest
 
 REPO = Path(__file__).resolve().parents[2]
 LINUX = REPO / "examples" / "linux-demo"
@@ -129,3 +129,43 @@ def test_upstream_ref_with_telemetry_packets(tmp_path):
     packets = (result.output / "Ref" / "Top" / "RefPackets.fppi").read_text()
     assert "wstsControl.SimTicks" in packets.split("omit {")[1]
     assert len(result.report["project_modules"]) == 7
+
+
+SIM = REPO / "examples" / "linux-demo-sim"
+
+
+def sim_copy(tmp_path):
+    """The example simulation project, copied so its default output lands in tmp_path"""
+    sim = tmp_path / "sim"
+    shutil.copytree(SIM, sim, ignore=shutil.ignore_patterns("wsts"))
+    text = (sim / "wsts.yaml").read_text().replace("project: ../linux-demo", f"project: {LINUX}")
+    (sim / "wsts.yaml").write_text(text)
+    return sim
+
+
+def test_standalone_simulation_project(tmp_path):
+    sim = sim_copy(tmp_path)
+    flight_before = sorted(p for p in LINUX.rglob("*") if "build-" not in str(p))
+    result = generate(LINUX, load_manifest(sim / "wsts.yaml"))
+    assert result.output == sim / "wsts" / "LinuxDemo", "default output is in the simulation project"
+    assert sorted(p for p in LINUX.rglob("*") if "build-" not in str(p)) == flight_before, "flight project not written"
+
+    chosen = {s["instance"]: s["surrogate"] for s in result.report["substitutions"]}
+    assert chosen["LinuxDemo.heaterPin"] == chosen["LinuxDemo.switchPin"] == "Sim.SimLinuxGpio"
+    assert not any("Pin." in e for e in result.report["dictionary"]["removed"]["events"]), "mirror keeps GPIO events"
+    assert result.report["simulation_project"] == "../.."
+
+    settings = (result.output / "settings.ini").read_text()
+    locations = [l for l in settings.splitlines() if l.startswith("library_locations:")][0]
+    assert "../.." in locations.split(": ", 1)[1].split(":"), "the simulation project is a library location"
+    compat = (result.output / "LinuxDemo" / "Top" / "WstsCompat.hpp").read_text()
+    assert "#include <Surrogates/SimLinuxGpio/SimLinuxGpio.hpp>" in compat
+    setup = (result.output / "LinuxDemo" / "Top" / "WstsSetup.cpp").read_text()
+    assert "#include <Models/ImuModel.hpp>" in setup and "Sim::ImuModel model_imu;" in setup
+
+
+def test_simulation_project_needs_a_library_cmake_for_its_modules(tmp_path):
+    sim = sim_copy(tmp_path)
+    (sim / "library.cmake").unlink()
+    with pytest.raises(WstsError, match="no library.cmake"):
+        generate(LINUX, load_manifest(sim / "wsts.yaml"))
