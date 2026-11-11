@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 
 namespace Sse {
 
@@ -21,6 +22,17 @@ const char* const EVENT_NAMES[] = {
 };
 
 const char* const SCENARIO_STATE_NAMES[] = {"idle", "loaded", "running", "completed", "failed"};
+
+//! Scenario and recording paths may be given relative to the directory named by SSE_DIR.
+//! F Prime command strings are short by default (FW_CMD_STRING_MAX_SIZE), so operators
+//! name files, not full paths.
+std::string resolvePath(const std::string& path) {
+    const char* base = std::getenv("SSE_DIR");
+    if (path.empty() || path[0] == '/' || base == nullptr || base[0] == '\0') {
+        return path;
+    }
+    return std::string(base) + "/" + path;
+}
 
 }  // namespace
 
@@ -366,7 +378,7 @@ bool Control::dispatch(const JsonObj& action, std::string& error) {
         return true;
     }
     if (op == "record_start") {
-        return this->recordStart(action.str("path"), error);
+        return this->recordStart(resolvePath(action.str("path")), error);
     }
     if (op == "record_stop") {
         this->recordStop();
@@ -381,7 +393,7 @@ bool Control::dispatch(const JsonObj& action, std::string& error) {
             error = "unknown replay mode '" + modeName + "'";
             return false;
         }
-        return this->scenarioLoad(action.str("path"), mode, error);
+        return this->scenarioLoad(resolvePath(action.str("path")), mode, error);
     }
     if (op == "scenario_start") {
         return this->scenarioStart(error);

@@ -38,6 +38,11 @@ module Sse {
 
   @ Command, telemetry and event front end of the SSE simulation control core.
   @ Wired into simulated deployments automatically; never part of a flight topology.
+  @
+  @ String arguments are limited by the project's FW_CMD_STRING_MAX_SIZE (40 characters
+  @ by default), whatever size is declared here. File arguments may therefore be given
+  @ relative to the directory in the SSE_DIR environment variable, and longer payloads
+  @ are better sent through the bridge or a scenario file.
   active component SimControl {
 
     # ----------------------------------------------------------------------

@@ -245,5 +245,6 @@
     "Surrogates replace drivers at their port interface: driver internals (register access, interrupt handling, device files) are not exercised.",
     "Time follows the host wall clock, scaled by the simulation rate. Runs are repeatable to tick granularity, not cycle-exact."
   ],
-  "warnings": []
+  "warnings": [],
+  "dropped_cmake_options": []
 }

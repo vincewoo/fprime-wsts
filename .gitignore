@@ -8,3 +8,5 @@ __pycache__/
 # SSE run output
 sse-logs/
 *.sse-rec.jsonl
+# GDS test API logs
+/logs/

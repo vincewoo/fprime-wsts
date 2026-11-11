@@ -9,6 +9,7 @@
 //   SSE_SCENARIO  scenario file to load and start immediately
 //   SSE_SCENARIO_MODE  "stimulus" (default) or "responses"
 //   SSE_RECORD    file to record bus traffic and actions to, from start-up
+//   SSE_DIR       directory that relative scenario and recording paths are resolved against
 // ======================================================================
 #ifndef SSE_CORE_RUNTIME_HPP
 #define SSE_CORE_RUNTIME_HPP

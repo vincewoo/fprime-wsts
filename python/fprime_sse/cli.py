@@ -105,6 +105,7 @@ def main(argv=None) -> int:
     run.add_argument("--record", help="record bus traffic and actions to this file")
     run.add_argument("--duration", type=float, help="stop after this many seconds (default: run until interrupted)")
     run.add_argument("--log-dir", help="directory for logs (default: <directory>/sse-logs)")
+    run.add_argument("--files-dir", help="directory for relative scenario/recording paths (default: the log directory)")
     run.add_argument("--json", action="store_true", help="print a JSON summary when the run ends")
     run.set_defaults(handler=cmd_run)
 
