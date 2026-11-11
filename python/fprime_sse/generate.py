@@ -685,6 +685,10 @@ def render_report(report: dict) -> str:
         f"- Flight toolchain: `{report['flight_toolchain']}`; simulation toolchain: `{report['sim_toolchain']}`",
         f"- Time: {report['time']['mode']}, tick source `{report['time']['tick_source']}`",
         f"- Bridge: `{report['bridge']}`",
+        *([f"- Flight build options not carried over: `{' '.join(report['dropped_cmake_options'])}`"]
+          if report.get("dropped_cmake_options") else []),
+        *([f"- Libraries not built for simulation: {', '.join('`' + l + '`' for l in report['libraries']['dropped'])}"]
+          if report["libraries"]["dropped"] else []),
         f"- Dictionary identical to flight: **{'yes' if report['dictionary']['identical_to_flight'] else 'no'}**; "
         "flight IDs unchanged: **yes**",
         "",
@@ -1032,8 +1036,18 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         "library_locations: " + ":".join(rel(p) for p in library_paths),
         "default_toolchain: native",
     ]
+    dropped_options: List[str] = []
     if options:
-        settings_ini.append(options.group(0))
+        # Options that select the flight toolchain or platform do not apply to a host build
+        kept_options = []
+        for option in options.group(0).split(":", 1)[-1].replace("=", "=", 1).split():
+            name = option.split("=", 1)[0]
+            if (name.startswith("FPRIME_") and name != "FPRIME_PLATFORM") or name == "CMAKE_BUILD_TYPE":
+                kept_options.append(option)
+            else:
+                dropped_options.append(option)
+        if kept_options:
+            settings_ini.append("default_cmake_options: " + "\n    ".join(kept_options))
     (output / "settings.ini").write_text("\n".join(settings_ini) + "\n")
 
     reused = {
@@ -1043,6 +1057,7 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
     report = build_report(plan, model, manifest, libraries, [_rel(d, project_root) for d in module_dirs], settings, reused)
     # The report is part of the checked-in output: keep machine-specific paths out of it
     report["libraries"] = {k: [rel(Path(p)) for p in v] for k, v in libraries.items()}
+    report["dropped_cmake_options"] = dropped_options
     report["reused_sources"] = {
         k: [rel(Path(p)) if os.path.isabs(p) else p for p in v] for k, v in reused.items()
     }

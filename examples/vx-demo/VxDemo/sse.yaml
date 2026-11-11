@@ -1,0 +1,30 @@
+# SSE manifest for VxDemo, a deployment that targets VxWorks.
+#
+# The VxWorks UART driver and watchdog timer are replaced from the surrogate catalog and
+# the operating system layer is swapped for the Linux one. What the manifest adds:
+#   - a Linux main(), because the flight entry points are called by the VxWorks start-up
+#     script;
+#   - the device model behind the serial port.
+deployment: VxDemo
+
+keep:
+  - comDriver
+
+main:
+  generate: true
+  declarations: |
+    extern "C" int vxDemoStart(const char* hostname, int port);
+    extern "C" void vxDemoStop();
+  start: vxDemoStart(hostname, port)
+  stop: vxDemoStop()
+
+models:
+  - name: tempSensor
+    class: Sse::ScriptedByteStream
+    endpoint: sensorUart
+    kind: bytestream
+    params:
+      text: "$TEMP,-12.25\n"
+      period: "10"
+
+bridge: tcp:50101

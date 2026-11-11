@@ -1,0 +1,173 @@
+{
+  "generator": "fprime-sse",
+  "topology": "VxDemo.VxDemo",
+  "flight_toolchain": "vxworks",
+  "sim_toolchain": "native (Linux)",
+  "time": {
+    "mode": "real-time",
+    "tick_source": "VxDemo.vxTimer"
+  },
+  "substitutions": [
+    {
+      "instance": "VxDemo.vxTimer",
+      "flight_component": "VxWorksSvc.VxWatchDogTimer",
+      "surrogate": "Sse.SimTick",
+      "seam": "S1 topology",
+      "chosen_by": "catalog",
+      "endpoint": "vxTimer",
+      "options": "mode=thread tick_hz=60",
+      "base_id": 537006080,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [],
+        "channels": [],
+        "params": []
+      }
+    },
+    {
+      "instance": "VxDemo.sensorUart",
+      "flight_component": "VxWorksDrv.VxWorksUartDriver",
+      "surrogate": "Sse.SimByteStream",
+      "seam": "S1 topology",
+      "chosen_by": "catalog",
+      "endpoint": "sensorUart",
+      "options": "",
+      "base_id": 537010176,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [
+          "BufferTooSmall",
+          "ConfigError",
+          "NoBuffers",
+          "OpenError",
+          "PortOpened",
+          "ReadError",
+          "WriteError"
+        ],
+        "channels": [
+          "BytesRecv",
+          "BytesSent"
+        ],
+        "params": []
+      }
+    }
+  ],
+  "kept_hardware_instances": [],
+  "models": [
+    {
+      "name": "tempSensor",
+      "class": "Sse::ScriptedByteStream",
+      "endpoint": "sensorUart",
+      "kind": "bytestream",
+      "address": 0
+    }
+  ],
+  "control": {
+    "enabled": true,
+    "setup_base_id": 537014272,
+    "control_base_id": 537018368
+  },
+  "bridge": "tcp:50101",
+  "dictionary": {
+    "identical_to_flight": false,
+    "flight_ids_unchanged": true,
+    "removed": {
+      "commands": [],
+      "events": [
+        "VxDemo.sensorUart.BufferTooSmall",
+        "VxDemo.sensorUart.ConfigError",
+        "VxDemo.sensorUart.NoBuffers",
+        "VxDemo.sensorUart.OpenError",
+        "VxDemo.sensorUart.PortOpened",
+        "VxDemo.sensorUart.ReadError",
+        "VxDemo.sensorUart.WriteError"
+      ],
+      "channels": [
+        "VxDemo.sensorUart.BytesRecv",
+        "VxDemo.sensorUart.BytesSent"
+      ],
+      "params": []
+    },
+    "added": {
+      "commands": [
+        "VxDemo.sseControl.FAULT_CLEAR",
+        "VxDemo.sseControl.FAULT_SET",
+        "VxDemo.sseControl.GPIO_FORCE",
+        "VxDemo.sseControl.I2C_REG_SET",
+        "VxDemo.sseControl.INJECT_BYTES",
+        "VxDemo.sseControl.INJECT_TEXT",
+        "VxDemo.sseControl.MODEL_SET",
+        "VxDemo.sseControl.RECORD_START",
+        "VxDemo.sseControl.RECORD_STOP",
+        "VxDemo.sseControl.SCENARIO_LOAD",
+        "VxDemo.sseControl.SCENARIO_START",
+        "VxDemo.sseControl.SCENARIO_STOP",
+        "VxDemo.sseControl.SIM_PAUSE",
+        "VxDemo.sseControl.SIM_RESUME",
+        "VxDemo.sseControl.SIM_SET_RATE"
+      ],
+      "events": [
+        "VxDemo.sseControl.ActionFailed",
+        "VxDemo.sseControl.FaultArmed",
+        "VxDemo.sseControl.FaultExpired",
+        "VxDemo.sseControl.FaultTriggered",
+        "VxDemo.sseControl.FaultsCleared",
+        "VxDemo.sseControl.Injected",
+        "VxDemo.sseControl.RecordStarted",
+        "VxDemo.sseControl.RecordStopped",
+        "VxDemo.sseControl.ScenarioCompleted",
+        "VxDemo.sseControl.ScenarioError",
+        "VxDemo.sseControl.ScenarioLoaded",
+        "VxDemo.sseControl.ScenarioStarted",
+        "VxDemo.sseControl.ScenarioStopped",
+        "VxDemo.sseControl.SimLog",
+        "VxDemo.sseControl.SimPaused",
+        "VxDemo.sseControl.SimRateSet",
+        "VxDemo.sseControl.SimResumed"
+      ],
+      "channels": [
+        "VxDemo.sseControl.ActiveFaults",
+        "VxDemo.sseControl.BusBytes",
+        "VxDemo.sseControl.BusErrors",
+        "VxDemo.sseControl.BusTransactions",
+        "VxDemo.sseControl.FaultHits",
+        "VxDemo.sseControl.Recording",
+        "VxDemo.sseControl.ScenarioRunState",
+        "VxDemo.sseControl.ScenarioStep",
+        "VxDemo.sseControl.ScenarioSteps",
+        "VxDemo.sseControl.SimRunState",
+        "VxDemo.sseControl.SimTicks",
+        "VxDemo.sseControl.SimTimeScale"
+      ]
+    }
+  },
+  "libraries": {
+    "kept": [],
+    "dropped": [
+      "../../../../lib/fprime-vxworks"
+    ]
+  },
+  "project_modules": [
+    "Components/SerialSensor"
+  ],
+  "reused_sources": {
+    "topology": [
+      "../../VxDemo/Top/VxDemoTopology.cpp"
+    ],
+    "main": [
+      "../../VxDemo/Entry.cpp",
+      "SseMain.cpp (generated)"
+    ]
+  },
+  "fidelity_notes": [
+    "Operating system: flight OSAL implementations are replaced by the Linux/POSIX ones. Task priorities are advisory and scheduling is not real-time, so timing and preemption order differ from the target.",
+    "Word size and byte order are those of the host; code that depends on the target's differs here.",
+    "Surrogates replace drivers at their port interface: driver internals (register access, interrupt handling, device files) are not exercised.",
+    "Time follows the host wall clock, scaled by the simulation rate. Runs are repeatable to tick granularity, not cycle-exact."
+  ],
+  "warnings": [],
+  "dropped_cmake_options": [
+    "VX_TARGET_TYPE=DKM",
+    "FPRIME_PLATFORM=VxWorks"
+  ]
+}
