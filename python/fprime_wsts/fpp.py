@@ -12,6 +12,7 @@ import configparser
 import fnmatch
 import json
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -113,6 +114,7 @@ class Topology:
     connections: List[Connection] = field(default_factory=list)
     packet_sets: List[Tuple[Path, int, int]] = field(default_factory=list)  # file, line, col
     explicit_pattern_targets: List[str] = field(default_factory=list)
+    time_source: Optional[str] = None  # the instance named by `time connections instance`
 
     @property
     def base_name(self) -> str:
@@ -201,15 +203,136 @@ def find_fpp_files(roots: Iterable[Path], exclude_globs: Iterable[str] = ()) -> 
     return list(found)
 
 
-def select_candidates(files: List[Path], framework: Path) -> List[Path]:
-    """Prefer a project's or library's configuration FPP over the framework default.
+@dataclass
+class ConfigOverride:
+    """One configuration file replaced through CONFIGURATION_OVERRIDES"""
+    name: str  # file name: an override is matched to what it replaces by name only
+    winner: Path
+    replaced: List[Path]
 
-    F Prime resolves configuration by file name: a project that supplies its own
-    `AcConstants.fpp` replaces `default/config/AcConstants.fpp`. Mirroring that keeps the
-    analysis from seeing every configuration symbol twice.
+
+CMAKE_CALL_DIRECTIVES = {
+    "SOURCES", "AUTOCODER_INPUTS", "DEPENDS", "HEADERS", "CHOOSES_IMPLEMENTATIONS", "REQUIRES_IMPLEMENTATIONS",
+    "IMPLEMENTS", "EXCLUDE_FROM_ALL", "INTERFACE", "STATIC", "SHARED", "UT_AUTO_HELPERS", "CONFIGURATION_OVERRIDES",
+    "GLOBAL_IMPLICIT_DEPENDENCY", "BASE_CONFIG", "LINK_DEPENDS", "INCLUDE_GTEST",
+}
+
+
+def read_calls(cmake_file: Path, function: str) -> List[Dict[str, List[str]]]:
+    """Arguments of every `function(...)` call in a CMake file, grouped by directive.
+
+    This reads the text, it does not evaluate CMake: `${CMAKE_CURRENT_LIST_DIR}` and
+    `${CMAKE_CURRENT_SOURCE_DIR}` are replaced, any other variable is left as written, and a
+    call inside `if()` counts whether or not its condition holds.
     """
+    if not cmake_file.is_file():
+        return []
+    text = re.sub(r"#[^\n]*", "", cmake_file.read_text(errors="replace"))
+    calls = []
+    for match in re.finditer(r"\b" + re.escape(function) + r"\s*\(([^)]*)\)", text, re.S):
+        groups: Dict[str, List[str]] = {}
+        current = "_"
+        for token in re.findall(r'"[^"]*"|\S+', match.group(1)):
+            token = token.strip('"')
+            if token in CMAKE_CALL_DIRECTIVES:
+                current = token
+                groups.setdefault(current, [])
+            else:
+                token = token.replace("${CMAKE_CURRENT_LIST_DIR}", str(cmake_file.parent))
+                token = token.replace("${CMAKE_CURRENT_SOURCE_DIR}", str(cmake_file.parent))
+                groups.setdefault(current, []).append(token)
+        calls.append(groups)
+    return calls
+
+
+def find_config_overrides(roots: Iterable[Path]) -> Tuple[List[ConfigOverride], List[str]]:
+    """Configuration FPP replaced through `register_fprime_config(CONFIGURATION_OVERRIDES)`.
+
+    Mirrors F Prime 4.4: an override replaces the configuration file of the same file name
+    supplied by an earlier configuration module, and the last registration wins. `roots`
+    are given in F Prime's order (framework, then libraries, then the project); a
+    directory inside two roots belongs to the deeper one.
+
+    What this does not do: it reads the CMake text (see `read_calls`), so an override
+    listed through a variable is not seen, and one inside `if()` is taken to apply. It
+    cannot know which of a project's configuration modules a build adds: when two in the
+    same root override the same file, the later path wins and a warning is returned. Use
+    `fpp_exclude` in the manifest to settle such a case.
+
+    Returns the overrides of FPP files and warnings.
+    """
+    roots = [r.resolve() for r in roots if r.is_dir()]
+    supplied: Dict[str, List[Path]] = {}
+    overrides: Dict[str, List[Tuple[int, Path]]] = {}
+    seen: Set[Path] = set()
+    for order, root in enumerate(roots):
+        for directory, subdirs, files in os.walk(root):
+            here = Path(directory)
+            subdirs[:] = sorted(
+                d for d in subdirs
+                if not _is_excluded_dir(here / d) and not any((here / d).resolve() == other for other in roots)
+            )
+            for name in sorted(files):
+                if name != "CMakeLists.txt" and not name.endswith(".cmake"):
+                    continue
+                cmake = (here / name).resolve()
+                if cmake in seen:
+                    continue
+                seen.add(cmake)
+                try:
+                    if "register_fprime_config" not in cmake.read_text(errors="replace"):
+                        continue
+                except OSError:
+                    continue
+                for call in read_calls(cmake, "register_fprime_config"):
+                    for directive, table in (("AUTOCODER_INPUTS", None), ("CONFIGURATION_OVERRIDES", overrides)):
+                        for token in call.get(directive, []):
+                            if not token.endswith(".fpp") or "${" in token:
+                                continue
+                            path = (cmake.parent / token).resolve()
+                            if table is None:
+                                supplied.setdefault(path.name, []).append(path)
+                            else:
+                                table.setdefault(path.name, []).append((order, path))
+    found: List[ConfigOverride] = []
+    warnings: List[str] = []
+    for name in sorted(overrides):
+        ranked = sorted(overrides[name], key=lambda entry: (entry[0], str(entry[1])))
+        order, winner = ranked[-1]
+        same_root = [str(path) for other, path in ranked[:-1] if other == order]
+        if same_root:
+            warnings.append(
+                f"configuration file {name} is overridden more than once in the same project or library "
+                f"({', '.join(same_root)} and {winner}); the analysis uses {winner}. List the others under "
+                "'fpp_exclude' if that is wrong."
+            )
+        replaced = [p for p in supplied.get(name, []) if p != winner] + [p for _, p in ranked[:-1] if p != winner]
+        if not supplied.get(name):
+            warnings.append(f"{winner} is a CONFIGURATION_OVERRIDES entry, but no configuration module supplies a file "
+                            f"named {name}: F Prime will reject it")
+        found.append(ConfigOverride(name, winner, sorted(dict.fromkeys(replaced))))
+    return found, warnings
+
+
+def select_candidates(files: List[Path], framework: Path, overrides: Iterable[ConfigOverride] = ()) -> List[Path]:
+    """Leave out configuration FPP that the build replaces.
+
+    F Prime resolves configuration by file name. `overrides` are the replacements declared
+    with CONFIGURATION_OVERRIDES (see `find_config_overrides`): of the files with such a
+    name only the winner stays. As a fallback for projects that override by convention
+    alone, a file in a directory called `config` outside the framework still replaces
+    `default/config/<same name>`. Either way the analysis sees each configuration symbol
+    once.
+    """
+    overrides = list(overrides)
+    replaced = {p for override in overrides for p in override.replaced}
+    declared = {override.name for override in overrides}
+    files = [f for f in files if f not in replaced]
     default_dir = (framework / "default" / "config").resolve()
-    overriding = {f.name for f in files if default_dir not in f.parents and "config" in {p.name.lower() for p in f.parents}}
+    overriding = {
+        f.name for f in files
+        if f.name not in declared and default_dir not in f.parents and "config" in {p.name.lower() for p in f.parents}
+    }
     kept = [f for f in files if not (default_dir in f.parents and f.name in overriding)]
     # Platform type definitions exist once per platform; the simulation runs on the
     # framework's unix platform, so every other platform's types are left out.
@@ -220,6 +343,59 @@ def select_candidates(files: List[Path], framework: Path) -> List[Path]:
 # ----------------------------------------------------------------------
 # Running the FPP tools
 # ----------------------------------------------------------------------
+
+
+# Set by check_tool_version(): appended to the message when an FPP tool fails
+_version_hint = ""
+
+
+def pinned_fpp_version(framework: Path) -> Optional[str]:
+    """The `fprime-fpp==` version the framework's requirements.txt asks for"""
+    requirements = framework / "requirements.txt"
+    if not requirements.is_file():
+        return None
+    match = re.search(r"^\s*fprime-fpp\s*==\s*([^\s;#]+)", requirements.read_text(errors="replace"), re.M)
+    return match.group(1) if match else None
+
+
+def installed_fpp_version() -> Optional[str]:
+    """The version of the FPP tools on PATH, from the first line of `fpp-check --help`"""
+    executable = shutil.which("fpp-check")
+    if executable is None:
+        return None
+    env = dict(os.environ)
+    for _ in range(2):
+        try:
+            result = subprocess.run([executable, "--help"], env=env, capture_output=True, text=True, timeout=120)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        match = re.search(r"\bfpp-check\s+v?(\d[\w.+-]*)", result.stdout + result.stderr)
+        if match:
+            return match.group(1)
+        if "JAVA_HOME" not in env:
+            break
+        env.pop("JAVA_HOME")
+    return None
+
+
+def check_tool_version(framework: Path) -> Optional[str]:
+    """Compare the FPP tools on PATH with the version the framework pins.
+
+    Returns a warning when they differ, and remembers it so that a later tool failure can
+    point at the likely cause. Returns None when they match or either is unknown.
+    """
+    global _version_hint
+    _version_hint = ""
+    pinned = pinned_fpp_version(framework)
+    installed = installed_fpp_version()
+    if not pinned or not installed or pinned == installed:
+        return None
+    _version_hint = (
+        f"The FPP tools on PATH are version {installed}, but {framework / 'requirements.txt'} pins "
+        f"fprime-fpp=={pinned}. A model written for one version may not parse with the other: install the pinned "
+        f"tools (pip install -r {framework / 'requirements.txt'})."
+    )
+    return _version_hint
 
 
 def _run(tool: str, args: List[str], cwd: Path) -> str:
@@ -237,7 +413,18 @@ def _run(tool: str, args: List[str], cwd: Path) -> str:
             continue
         break
     detail = "\n".join(line for line in result.stderr.splitlines() if not line.startswith("Picked up "))
-    raise WstsError(f"{tool} failed:\n{detail.strip() or result.stdout.strip()}")
+    message = f"{tool} failed:\n{detail.strip() or result.stdout.strip()}"
+    java = re.search(r"requires Java\s+(\d+)", result.stderr)
+    if java:
+        message += (
+            f"\n\nThis version of the FPP tools needs Java {java.group(1)} or later, and the Java it found is "
+            f"older. Install a Java {java.group(1)} runtime and point JAVA_HOME at it"
+            + (" (the JAVA_HOME now set names an older one)." if "JAVA_HOME" in os.environ
+               else ", or put its bin directory first on PATH.")
+        )
+    if _version_hint:
+        message += "\n\n" + _version_hint
+    raise WstsError(message)
 
 
 def _write_args(path: Path, args: Iterable[Path]) -> None:
@@ -427,9 +614,13 @@ def _build_model(ast: list, locations: dict, analysis: dict, files: List[Path]) 
                 if ends[0][0] and ends[1][0]:
                     topology.connections.append(Connection(graph, ends[0][0], ends[0][1], ends[1][0], ends[1][1]))
         for pattern in entry.get("patternMap", {}).values():
+            (pattern_kind,) = pattern["ast"]["kind"].keys()
             if pattern.get("ast", {}).get("targets"):
-                (pattern_kind,) = pattern["ast"]["kind"].keys()
                 topology.explicit_pattern_targets.append(pattern_kind)
+            if pattern_kind == "Time":
+                source = pattern.get("source")
+                source_node = source[0].get("aNode", {}).get("astNodeId") if isinstance(source, list) and source else None
+                topology.time_source = instance_by_node.get(source_node)
         for member in topology_defs.get(node_id, {}).get("members", []):
             (kind, wrapper), = member[1].items()
             if kind == "SpecTlmPacketSet":

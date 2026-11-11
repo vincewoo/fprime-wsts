@@ -31,6 +31,7 @@ jobs:
           fprime-wsts generate examples/linux-demo/LinuxDemo/wsts.yaml --check
           fprime-wsts generate examples/vx-demo/VxDemo/wsts.yaml --check
           fprime-wsts generate examples/hub-demo/wsts-system.yaml --check
+          fprime-wsts generate examples/subtop-demo/SubtopDemo/wsts.yaml --check
 
       - name: C++ unit tests for the WSTS core
         run: |
@@ -62,6 +63,19 @@ jobs:
           pytest tests/e2e/test_vx_demo.py -p fprime_wsts.pytest_plugin \
             --wsts-deployment "$D" --wsts-gds \
             --dictionary "$D/build-artifacts/Linux/VxDemo/dict/VxDemoTopologyDictionary.json"
+
+      - name: Build the simulated SubtopDemo (driver inside a library subtopology)
+        working-directory: examples/subtop-demo/wsts/SubtopDemo
+        run: |
+          fprime-util generate
+          fprime-util build -j"$(nproc)"
+
+      - name: End-to-end tests, SubtopDemo
+        run: |
+          D=examples/subtop-demo/wsts/SubtopDemo
+          pytest tests/e2e/test_subtop_demo.py -p fprime_wsts.pytest_plugin \
+            --wsts-deployment "$D" --wsts-gds \
+            --dictionary "$D/build-artifacts/Linux/SubtopDemo/dict/SubtopDemoTopologyDictionary.json"
 
       - name: Generate and build the standalone simulation project (overlay not checked in)
         run: |

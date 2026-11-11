@@ -211,18 +211,25 @@ In `responses` replay the bus answers from the recording and the model is not ca
 1. **Analyse.** FPP files are found under the framework, the project's libraries, the
    project and this toolkit, then `fpp-locate-defs`, `fpp-depend` and `fpp-to-json` produce
    the model. Nothing is built, so a deployment whose build cannot even be configured on
-   the host (VxWorks) is analysed like any other.
-2. **Plan.** For each instance in the topology, in order: a `substitute` entry in the
+   the host (VxWorks) is analysed like any other. Configuration FPP is chosen as the build
+   would choose it (see [Configuration overrides](#configuration-overrides)).
+2. **Plan.** The topology's instances include those of every subtopology it imports,
+   under their own qualified names (`SensorLink.uart`). For each instance, in order: a `substitute` entry in the
    manifest; else the catalog entry that `replaces` its component; else, if the component's
    module is `restrict_platforms`-gated off Linux, the single catalog surrogate whose ports
    cover every port the topology connects (an error listing candidates if there is not
    exactly one). `keep` exempts an instance. The surrogate must serve every connected port
-   with the same port type and direction.
-3. **Patch.** The topology FPP files are copied and edited at positions taken from the FPP
-   AST: the component name in each substituted instance definition is replaced (queue and
-   task attributes are removed when a passive surrogate replaces an active component), and
-   the WSTS instances are added to the topology. Base IDs do not move. The result is run
-   through `fpp-check`.
+   with the same port type and direction. The plan also looks at what cycles the flight
+   rate groups and what supplies time: a kept project component in either role is
+   reported, because on a workstation its interrupt or clock usually never arrives.
+3. **Patch.** The FPP files that define the topology and the substituted instances are
+   copied and edited at positions taken from the FPP AST: the component name in each
+   substituted instance definition is replaced (queue and task attributes are removed when
+   a passive surrogate replaces an active component), and the WSTS instances are added to
+   the topology. Base IDs do not move. An instance defined outside the deployment's `Top`
+   directory is patched in a copy of its own file (see
+   [Instances inside subtopologies](#instances-inside-subtopologies)). The result is run
+   through `fpp-check`, with the copies in place of the originals.
 4. **Emit** an overlay project (below) and the fidelity report.
 
 ```mermaid
@@ -266,6 +273,9 @@ flowchart LR
     wsts_instances.fpp              the wstsSetup and wstsControl instances
     WstsSetup.cpp                   binds surrogates, builds and attaches models, starts the runtime
     WstsCompat.hpp                  force-included: aliases flight driver classes to their surrogates
+  <Lib>/<Sub>/                     only when a substituted instance is defined in that module:
+    <Sub>.fpp                      patched copy of the subtopology model
+    CMakeLists.txt                 the original's, pointing back at the original for everything else
   wsts-report.json, wsts-report.md   fidelity report
 ```
 
@@ -337,6 +347,80 @@ flowchart LR
 
 Only the topology module mixes sources: the flight topology code is compiled next to
 generated files, against the surrogates that `WstsCompat.hpp` aliases in.
+
+### Instances inside subtopologies
+
+A hardware driver is often not in the deployment's `Top` at all: it is an instance of a
+subtopology that a library (or the framework, or the project) provides, and the deployment
+imports the subtopology. The FPP analysis already flattens these, so planning treats
+`SensorLink.uart` like any other instance. Patching is the same edit, made in a copy of
+the subtopology's FPP file. What needs care is the build: a library is included whole
+through its `library.cmake`, so the original subtopology module would be registered too,
+and the FPP tools would see every definition of the subtopology twice.
+
+The overlay therefore replaces **one module directory** of the library with its copy:
+
+- The copy sits in the overlay at the path the original has below its root
+  (`<output>/SensorLib/SensorLink/`). The overlay root is a build root like the library's,
+  so everything F´ derives from the path (module name, include paths of generated headers)
+  comes out the same as in the flight build.
+- The copy's `CMakeLists.txt` is the original's with paths redirected: the patched FPP
+  comes from the copy; headers such as `SubtopologyTopologyDefs.hpp`, and child modules
+  such as `<Name>Config/`, are still the library's. The module of a flight driver that no
+  instance uses any more is taken out of its `DEPENDS`, and a `restrict_platforms()` line
+  is dropped.
+- The overlay's root `CMakeLists.txt` sets `FPRIME_INCLUDE_FRAMEWORK_CODE` to `OFF`,
+  defines its own `add_fprime_subdirectory()` that hands the replaced directory's copy to
+  CMake under the original's module name and build directory and passes every other call
+  through, and only then calls `fprime_setup_included_code()`, which reads the framework
+  and the libraries.
+
+The library stays in `library_locations`: its other modules build from it, its include
+root resolves `<Lib>/<Sub>/SubtopologyTopologyDefs.hpp`, and its `library.cmake` runs with
+whatever conditions it contains. Phase code attached to the instance is emitted into the
+deployment's `TopologyAc.cpp`, which is in the topology module, so `WstsCompat.hpp` covers
+it exactly as it covers hand-written topology code.
+
+The same redirection serves a subtopology in the flight project (the generator adds
+project modules itself, and the call is redirected like any other) and one in the
+framework (`Svc/Subtopologies/…`, which the framework adds with the same function).
+
+Alternatives that were rejected:
+
+- **Shadowing the library**: leave it out of `library_locations` and add its modules one
+  by one. F´ names a module, and finds its generated headers, by its path below the
+  nearest build root; outside `library_locations` the library is not a build root, so
+  every one of its modules would be renamed, and its include root, its `cmake/` module
+  path and anything else its `library.cmake` does would have to be rebuilt by hand.
+- **A generated wrapper library** whose `library.cmake` adds every original module except
+  the patched one. It must re-create the library's own decisions (conditions around
+  `add_fprime_subdirectory`, modules added from nested `CMakeLists.txt` files), which the
+  generator can only guess from text, and it has the same build-root problem unless the
+  original library also stays listed.
+- **Leaving the original registered** and correcting it afterwards. F´ collects a
+  module's FPP files for the location index while the module is being registered; there
+  is no later point at which one can be taken out.
+
+The cost of the chosen approach is that it overrides a CMake command, which CMake allows
+once (the previous definition stays reachable under a leading underscore). The generated
+file stops with a clear message if `add_fprime_subdirectory` has been overridden already.
+
+Not supported: an instance defined in a file that belongs to no module directory, and two
+replaced modules whose paths below their roots coincide.
+
+### Configuration overrides
+
+F´ 4.4 lets a configuration module replace files of earlier configuration modules:
+`register_fprime_config(CONFIGURATION_OVERRIDES …)` matches a file to the one it replaces
+by file name only, in the order platform, framework defaults, libraries, project, and the
+last registration wins. The build applies this by copying files into the build cache, but
+the generator's analysis reads source files, so it applies the same rule itself: it reads
+the `register_fprime_config` calls under the framework, the libraries and the project,
+and of the configuration files with an overridden name only the winner goes to
+`fpp-locate-defs`. The report lists what was applied. The CMake files are read as text:
+an override listed through a variable is not seen, and a call inside `if()` is taken to
+apply. For projects that override by convention alone, a file in a directory called
+`config` still replaces `default/config/<same name>`.
 
 ### WSTS control wiring
 
@@ -435,7 +519,6 @@ Replay is repeatable to tick granularity. It is not cycle-exact: see
    and `ioLib` so project components that include VxWorks headers compile unchanged.
 3. **File-system remapping.** An `Os_File` implementation that maps target paths
    (`/ram0`, `/tffs0`) into a sandbox directory.
-4. Substituting instances defined outside the deployment's `Top` directory (subtopologies).
-5. 32-bit and big-endian build options; adapters to external dynamics simulators.
-6. Systems: GPIO links, datagram and connection semantics for socket links, system-wide
+4. 32-bit and big-endian build options; adapters to external dynamics simulators.
+5. Systems: GPIO links, datagram and connection semantics for socket links, system-wide
    scenarios and merged recordings, and lockstep time across elements (after item 1).

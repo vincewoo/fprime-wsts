@@ -1,0 +1,200 @@
+{
+  "generator": "fprime-wsts",
+  "topology": "SubtopDemo.SubtopDemo",
+  "flight_toolchain": "vxworks",
+  "sim_toolchain": "native (Linux)",
+  "time": {
+    "mode": "real-time",
+    "tick_source": "SubtopDemo.vxTimer"
+  },
+  "substitutions": [
+    {
+      "instance": "SubtopDemo.vxTimer",
+      "flight_component": "VxWorksSvc.VxWatchDogTimer",
+      "surrogate": "Wsts.SimTick",
+      "seam": "S1 topology",
+      "chosen_by": "catalog",
+      "endpoint": "vxTimer",
+      "options": "mode=thread tick_hz=60",
+      "base_id": 537006080,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [],
+        "channels": [],
+        "params": []
+      }
+    },
+    {
+      "instance": "SensorLink.uart",
+      "flight_component": "VxWorksDrv.VxWorksUartDriver",
+      "surrogate": "Wsts.SimByteStream",
+      "seam": "S1 topology",
+      "chosen_by": "catalog",
+      "endpoint": "uart",
+      "options": "",
+      "base_id": 100667392,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [
+          "BufferTooSmall",
+          "ConfigError",
+          "NoBuffers",
+          "OpenError",
+          "PortOpened",
+          "ReadError",
+          "WriteError"
+        ],
+        "channels": [
+          "BytesRecv",
+          "BytesSent"
+        ],
+        "params": []
+      }
+    }
+  ],
+  "kept_hardware_instances": [],
+  "models": [
+    {
+      "name": "tempSensor",
+      "class": "Wsts::ScriptedByteStream",
+      "endpoint": "uart",
+      "kind": "bytestream",
+      "address": 0
+    }
+  ],
+  "control": {
+    "enabled": true,
+    "setup_base_id": 537010176,
+    "control_base_id": 537014272
+  },
+  "bridge": "tcp:50102",
+  "dictionary": {
+    "identical_to_flight": false,
+    "flight_ids_unchanged": true,
+    "removed": {
+      "commands": [],
+      "events": [
+        "SensorLink.uart.BufferTooSmall",
+        "SensorLink.uart.ConfigError",
+        "SensorLink.uart.NoBuffers",
+        "SensorLink.uart.OpenError",
+        "SensorLink.uart.PortOpened",
+        "SensorLink.uart.ReadError",
+        "SensorLink.uart.WriteError"
+      ],
+      "channels": [
+        "SensorLink.uart.BytesRecv",
+        "SensorLink.uart.BytesSent"
+      ],
+      "params": []
+    },
+    "added": {
+      "commands": [
+        "SubtopDemo.wstsControl.FAULT_CLEAR",
+        "SubtopDemo.wstsControl.FAULT_SET",
+        "SubtopDemo.wstsControl.GPIO_FORCE",
+        "SubtopDemo.wstsControl.I2C_REG_SET",
+        "SubtopDemo.wstsControl.INJECT_BYTES",
+        "SubtopDemo.wstsControl.INJECT_TEXT",
+        "SubtopDemo.wstsControl.MODEL_SET",
+        "SubtopDemo.wstsControl.RECORD_START",
+        "SubtopDemo.wstsControl.RECORD_STOP",
+        "SubtopDemo.wstsControl.SCENARIO_LOAD",
+        "SubtopDemo.wstsControl.SCENARIO_START",
+        "SubtopDemo.wstsControl.SCENARIO_STOP",
+        "SubtopDemo.wstsControl.SIM_PAUSE",
+        "SubtopDemo.wstsControl.SIM_RESUME",
+        "SubtopDemo.wstsControl.SIM_SET_RATE"
+      ],
+      "events": [
+        "SubtopDemo.wstsControl.ActionFailed",
+        "SubtopDemo.wstsControl.FaultArmed",
+        "SubtopDemo.wstsControl.FaultExpired",
+        "SubtopDemo.wstsControl.FaultTriggered",
+        "SubtopDemo.wstsControl.FaultsCleared",
+        "SubtopDemo.wstsControl.Injected",
+        "SubtopDemo.wstsControl.RecordStarted",
+        "SubtopDemo.wstsControl.RecordStopped",
+        "SubtopDemo.wstsControl.ScenarioCompleted",
+        "SubtopDemo.wstsControl.ScenarioError",
+        "SubtopDemo.wstsControl.ScenarioLoaded",
+        "SubtopDemo.wstsControl.ScenarioStarted",
+        "SubtopDemo.wstsControl.ScenarioStopped",
+        "SubtopDemo.wstsControl.SimLog",
+        "SubtopDemo.wstsControl.SimPaused",
+        "SubtopDemo.wstsControl.SimRateSet",
+        "SubtopDemo.wstsControl.SimResumed"
+      ],
+      "channels": [
+        "SubtopDemo.wstsControl.ActiveFaults",
+        "SubtopDemo.wstsControl.BusBytes",
+        "SubtopDemo.wstsControl.BusErrors",
+        "SubtopDemo.wstsControl.BusTransactions",
+        "SubtopDemo.wstsControl.FaultHits",
+        "SubtopDemo.wstsControl.Recording",
+        "SubtopDemo.wstsControl.ScenarioRunState",
+        "SubtopDemo.wstsControl.ScenarioStep",
+        "SubtopDemo.wstsControl.ScenarioSteps",
+        "SubtopDemo.wstsControl.SimRunState",
+        "SubtopDemo.wstsControl.SimTicks",
+        "SubtopDemo.wstsControl.SimTimeScale"
+      ]
+    }
+  },
+  "libraries": {
+    "kept": [
+      "../../lib/sensor-lib"
+    ],
+    "dropped": [
+      "../../../../lib/fprime-vxworks"
+    ]
+  },
+  "project_modules": [
+    "config/project"
+  ],
+  "reused_sources": {
+    "topology": [
+      "../../SubtopDemo/Top/SubtopDemoTopology.cpp"
+    ],
+    "main": [
+      "../../SubtopDemo/Main.cpp"
+    ]
+  },
+  "fidelity_notes": [
+    "Operating system: flight OSAL implementations are replaced by the Linux/POSIX ones. Task priorities are advisory and scheduling is not real-time, so timing and preemption order differ from the target.",
+    "Word size and byte order are those of the host; code that depends on the target's differs here.",
+    "Surrogates replace drivers at their port interface: driver internals (register access, interrupt handling, device files) are not exercised.",
+    "Time follows the host wall clock, scaled by the simulation rate. Runs are repeatable to tick granularity, not cycle-exact."
+  ],
+  "warnings": [],
+  "dropped_cmake_options": [
+    "VX_TARGET_TYPE=DKM",
+    "FPRIME_PLATFORM=VxWorks"
+  ],
+  "replaced_modules": [
+    {
+      "module": "SensorLib_SensorLink",
+      "original": "../../lib/sensor-lib/SensorLib/SensorLink",
+      "copy": "SensorLib/SensorLink",
+      "files": [
+        "SensorLink.fpp"
+      ]
+    }
+  ],
+  "config_overrides": [
+    {
+      "file": "CdhCoreConfig.fpp",
+      "uses": "../../config/project/CdhCoreConfig.fpp",
+      "replaces": [
+        "../../../../lib/fprime/Svc/Subtopologies/CdhCore/CdhCoreConfig/CdhCoreConfig.fpp"
+      ]
+    },
+    {
+      "file": "SensorLinkConfig.fpp",
+      "uses": "../../config/project/SensorLinkConfig.fpp",
+      "replaces": [
+        "../../lib/sensor-lib/SensorLib/SensorLink/SensorLinkConfig/SensorLinkConfig.fpp"
+      ]
+    }
+  ]
+}

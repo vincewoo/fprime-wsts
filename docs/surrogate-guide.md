@@ -202,6 +202,75 @@ A surrogate may declare its own commands, events and telemetry. They appear in t
 simulated dictionary under the replaced instance's base ID, and the report lists the
 difference from flight.
 
+### A project timer
+
+On many flight computers one project component is both the clock and the tick: a "time
+unit" driver whose interrupt cycles `Svc.RateGroupDriver` and which is also the
+`time connections` instance. Such a component usually builds on Linux (it talks to a
+register interface that has a stub), so nothing forces a substitution, and the simulated
+deployment starts and then does nothing: no interrupt, no cycle, no telemetry.
+`fprime-wsts generate` warns when the source of the rate group cycles, or the time source,
+is a project component it is keeping.
+
+`Wsts.SimTick` replaces timers whose ports are those of `Drv.Tick`. A project timer has
+its own port names, so it needs its own surrogate. Give it the ports the topology
+connects, with the flight names and types, and drive the cycle output from the WSTS tick:
+
+```fpp
+module Fc {
+  @ Stands in for Fc.TimeUnit in simulation
+  passive component SimTimeUnit {
+    @ Same name and type as the flight component's cycle output
+    output port tickOut: Svc.Cycle
+    @ Time for the rest of the topology, if the flight component supplies it
+    sync input port timeGetPort: Fw.Time
+  }
+}
+```
+
+```cpp
+SimTimeUnit::SimTimeUnit(const char* name) : SimTimeUnitComponentBase(name) {
+    // Before the runtime starts: no internal ticker is needed
+    Wsts::Control::get().registerTickSource();
+}
+
+void SimTimeUnit::wstsBind(const char* endpoint, const char* options) { /* read tick_hz=... */ }
+
+// What flight code calls to enable the interrupt
+void SimTimeUnit::enable() {
+    m_thread = std::thread([this]() {
+        Wsts::Control& control = Wsts::Control::get();
+        while (!m_quit) {
+            std::this_thread::sleep_for(period / control.rate());
+            if (control.paused()) {
+                control.onIdle();      // bridge and scenario listeners keep running
+                continue;
+            }
+            control.onTick();          // simulation time first: models, scenarios, faults
+            Os::RawTime start;
+            (void)start.now();
+            this->tickOut_out(0, start);  // then one flight cycle
+        }
+    });
+}
+
+void SimTimeUnit::timeGetPort_handler(FwIndexType, Fw::Time& time) { /* host clock, or tick count */ }
+```
+
+`Wsts/Svc/SimTick/SimTick.cpp` is the complete version of that loop, including the rate
+scaling that does not burst after a pause. Calling `Control::onTick()` from the surrogate
+makes it the simulation's tick source, so pause, resume and the time scale act on the
+flight rate groups. Then map it:
+
+```yaml
+substitute:
+  - {instance: timeUnit, with: Fc.SimTimeUnit}
+```
+
+If only the interrupt is missing, a narrower cut also works: substitute the register
+interface component the interrupt arrives on, and raise its interrupt output from the
+tick in the same way. The time unit driver then runs as in flight.
+
 ### Mirror surrogates
 
 ```bash

@@ -61,6 +61,7 @@ class Plan:
     substitutions: List[PlannedSubstitution] = field(default_factory=list)
     kept_hardware: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
+    fidelity_notes: List[str] = field(default_factory=list)
     setup_base_id: int = 0
     control_base_id: int = 0
     links: List[PlannedLink] = field(default_factory=list)
@@ -101,7 +102,72 @@ def _covers(surrogate: fpp.Component, original: fpp.Component, used_ports: Set[s
     return missing
 
 
-def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], topology: fpp.Topology, roots: List[Path]) -> Plan:
+CYCLE_PORT = "Svc.Cycle"
+# Components that produce ticks by themselves on a Linux host
+HOST_TICK_SOURCES = {"Svc.LinuxTimer", "Wsts.SimTick"}
+
+
+def resolve_instance(spec: str, names: List[str]) -> Optional[str]:
+    """The instance of a topology that a manifest names.
+
+    The qualified name always works (`SensorLink.uart`). A shorter name works when it ends
+    exactly one instance's qualified name (`uart`); naming several that way is an error.
+    Returns None when nothing matches.
+    """
+    if spec in names:
+        return spec
+    found = [name for name in names if name.endswith("." + spec)]
+    if len(found) > 1:
+        raise WstsError(
+            f"instance name '{spec}' is ambiguous: it matches {', '.join(sorted(found))}. Use the qualified name."
+        )
+    return found[0] if found else None
+
+
+def _check_tick_sources(plan: Plan, model: fpp.Model, framework: Optional[Path]) -> None:
+    """Warn when what cycles the flight rate groups, or supplies time, is a kept component
+    that will probably do nothing on a workstation"""
+    topology = plan.topology
+    substituted = {sub.instance.name for sub in plan.substitutions}
+
+    def port_type(instance: str, port: str) -> Optional[str]:
+        component = model.components.get(model.instances[instance].component)
+        found = component.ports.get(port) if component else None
+        return found.type if found else None
+
+    cycles = [c for c in topology.connections if port_type(c.to_instance, c.to_port) == CYCLE_PORT]
+    cycled = {c.to_instance for c in cycles}
+    # A rate group driver passes cycles on: what matters is where they start
+    for source in sorted({c.from_instance for c in cycles} - cycled):
+        component = model.instances[source].component
+        if source in substituted or component in HOST_TICK_SOURCES:
+            continue
+        targets = ", ".join(sorted({c.to_instance for c in cycles if c.from_instance == source}))
+        plan.warnings.append(
+            f"{source} ({component}) cycles the flight rate groups (it drives {targets}) and is kept as it is. "
+            "Unless that component produces ticks on a Linux host, the rate groups will never run: nothing "
+            "scheduled executes and no telemetry is downlinked. Write a project surrogate for it that cycles "
+            "from the WSTS tick (docs/surrogate-guide.md, 'A project timer'), and name it under 'substitute'."
+        )
+        plan.fidelity_notes.append(
+            f"The flight rate groups are cycled by {source} ({component}), which is not simulated. If it depends on "
+            "a hardware interrupt, the rate groups may never run in this simulation."
+        )
+    source = topology.time_source
+    if source and source not in substituted and source in model.instances:
+        component = model.components.get(model.instances[source].component)
+        if component and framework is not None and framework not in component.file.parents:
+            plan.warnings.append(
+                f"time comes from {source} ({component.name}), a project component that is kept as it is. If it "
+                "reads a hardware clock, time stamps will not advance: substitute it with a project surrogate."
+            )
+            plan.fidelity_notes.append(
+                f"Time stamps come from {source} ({component.name}), which is not simulated and may depend on hardware."
+            )
+
+
+def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], topology: fpp.Topology, roots: List[Path],
+              framework: Optional[Path] = None) -> Plan:
     plan = Plan(topology)
     by_surrogate = {s.name: s for s in catalog}
     replaces: Dict[str, Surrogate] = {}
@@ -114,22 +180,29 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
         used_ports.setdefault(connection.from_instance, set()).add(connection.from_port)
         used_ports.setdefault(connection.to_instance, set()).add(connection.to_port)
 
-    def matches(spec: str, instance: fpp.Instance) -> bool:
-        return spec == instance.name or spec == instance.base_name
+    # Every name in the manifest is resolved once, to a qualified instance name. Instances
+    # of imported subtopologies are in the topology under their own qualified names.
+    def named(spec: str) -> str:
+        found = resolve_instance(spec, topology.instances)
+        if found is None:
+            raise WstsError(f"manifest names instance '{spec}', which is not in topology {topology.name}")
+        return found
 
-    for unknown in [s.instance for s in manifest.substitutions if s.instance] + manifest.keep:
-        if not any(matches(unknown, model.instances[name]) for name in topology.instances):
-            raise WstsError(f"manifest names instance '{unknown}', which is not in topology {topology.name}")
+    keep = {named(spec) for spec in manifest.keep}
+    entry_instance = {id(entry): named(entry.instance) for entry in manifest.substitutions if entry.instance}
 
     # Links of a multi-element system end at byte stream driver instances of this topology
     link_ends: Dict[str, LinkEnd] = {}
     for end in manifest.links:
-        found = [name for name in topology.instances if matches(end.instance, model.instances[name])]
-        if not found:
+        try:
+            found = resolve_instance(end.instance, topology.instances)
+        except WstsError as error:
+            raise WstsError(f"link '{end.link}': {error}") from None
+        if found is None:
             raise WstsError(f"link '{end.link}' ends at instance '{end.instance}', which is not in topology {topology.name}")
-        if found[0] in link_ends:
-            raise WstsError(f"instance {found[0]} is an end of both link '{link_ends[found[0]].link}' and link '{end.link}'")
-        link_ends[found[0]] = end
+        if found in link_ends:
+            raise WstsError(f"instance {found} is an end of both link '{link_ends[found].link}' and link '{end.link}'")
+        link_ends[found] = end
 
     for name in topology.instances:
         instance = model.instances[name]
@@ -142,10 +215,10 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
         endpoint = instance.base_name
         options: Optional[str] = None
         reason = ""
-        kept = any(matches(k, instance) for k in manifest.keep)
+        kept = name in keep
 
         for entry in manifest.substitutions:
-            if (entry.instance and matches(entry.instance, instance)) or (entry.component == original.name and not kept):
+            if entry_instance.get(id(entry)) == name or (entry.component == original.name and not kept):
                 if entry.surrogate not in model.components:
                     raise WstsError(f"manifest substitutes {name} with unknown component '{entry.surrogate}'")
                 chosen = by_surrogate.get(entry.surrogate) or Surrogate(name=entry.surrogate, source="manifest")
@@ -194,11 +267,6 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
             raise WstsError(
                 f"{chosen.name} cannot replace {name} ({original.name}): connected ports it does not serve: "
                 + "; ".join(missing)
-            )
-        if instance.file.parent != topology.file.parent:
-            raise WstsError(
-                f"instance {name} is defined in {instance.file}, outside the deployment's Top directory. "
-                "Substituting instances defined elsewhere (for example inside a subtopology) is not supported yet."
             )
         if options is None:
             options = chosen.options_when_replacing(original.name)
@@ -254,7 +322,12 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
     endpoints: Dict[str, str] = {}
     for sub in plan.substitutions:
         if sub.endpoint in endpoints:
-            raise WstsError(f"endpoint '{sub.endpoint}' is used by both {endpoints[sub.endpoint]} and {sub.instance.name}")
+            raise WstsError(
+                f"endpoint '{sub.endpoint}' is used by both {endpoints[sub.endpoint]} and {sub.instance.name}. "
+                "Endpoints are named after the instance's base name unless the manifest says otherwise: give one of "
+                f"them its own name with\n  substitute:\n    - instance: {sub.instance.name}\n"
+                f"      with: {sub.surrogate.name}\n      endpoint: <name>"
+            )
         endpoints[sub.endpoint] = sub.instance.name
     for spec in manifest.models:
         if spec.kind != "none" and spec.endpoint not in endpoints:
@@ -278,6 +351,7 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
                     "a byte stream endpoint takes one or the other"
                 )
         plan.links.append(PlannedLink(end, sub.instance.name, sub.endpoint))
+    _check_tick_sources(plan, model, framework)
     return plan
 
 
@@ -386,32 +460,10 @@ def patch_packets(text: str, line: int, col: int, channels: List[str]) -> str:
 # CMake reading
 # ----------------------------------------------------------------------
 
-DIRECTIVES = {
-    "SOURCES", "AUTOCODER_INPUTS", "DEPENDS", "HEADERS", "CHOOSES_IMPLEMENTATIONS",
-    "REQUIRES_IMPLEMENTATIONS", "IMPLEMENTS", "EXCLUDE_FROM_ALL", "INTERFACE", "UT_AUTO_HELPERS",
-}
-
-
 def read_registration(cmake_file: Path, function: str) -> Dict[str, List[str]]:
     """Arguments of the first register_fprime_<function>(...) call, grouped by directive"""
-    if not cmake_file.is_file():
-        return {}
-    text = re.sub(r"#[^\n]*", "", cmake_file.read_text())
-    match = re.search(r"\b" + re.escape(function) + r"\s*\(([^)]*)\)", text, re.S)
-    if not match:
-        return {}
-    groups: Dict[str, List[str]] = {}
-    current = "_"
-    for token in re.findall(r'"[^"]*"|\S+', match.group(1)):
-        token = token.strip('"')
-        if token in DIRECTIVES:
-            current = token
-            groups.setdefault(current, [])
-        else:
-            token = token.replace("${CMAKE_CURRENT_LIST_DIR}", str(cmake_file.parent))
-            token = token.replace("${CMAKE_CURRENT_SOURCE_DIR}", str(cmake_file.parent))
-            groups.setdefault(current, []).append(token)
-    return groups
+    calls = fpp.read_calls(cmake_file, function)
+    return calls[0] if calls else {}
 
 
 def module_dir(fpp_file: Path, root: Path) -> Optional[Path]:
@@ -436,6 +488,138 @@ def module_name(directory: Path, roots: List[Path]) -> str:
             if best is None or len(relative) < len(best):
                 best = relative
     return (best or directory.name).replace("/", "_")
+
+
+# ----------------------------------------------------------------------
+# Modules replaced by a patched copy
+# ----------------------------------------------------------------------
+#
+# An instance defined outside the deployment's Top directory (in a subtopology of a
+# library, of the framework or of the project) is retyped in a copy of its FPP file. The
+# copy lives in the overlay, in a module directory that takes the original's place in the
+# build: the overlay's CMakeLists.txt redirects add_fprime_subdirectory() for that one
+# directory. See "Instances inside subtopologies" in docs/design.md.
+
+
+@dataclass
+class ReplacedModule:
+    original: Path  # module directory in the framework, a library or the flight project
+    root: Path  # the build root (framework, library or project) it belongs to
+    relative: str  # path of the module directory below its root, and below the overlay
+    files: List[Path] = field(default_factory=list)  # original FPP files that are patched
+
+
+CMAKE_PATH_CALL = re.compile(r"\b(register_fprime_\w+|add_fprime_subdirectory|add_subdirectory|include)(\s*)\(([^)]*)\)", re.S)
+
+
+def render_replaced_cmake(module: ReplacedModule, original_reference: str, dropped_depends: Set[str]) -> str:
+    """CMakeLists.txt of the overlay's copy of a module: the original's, with paths
+    pointing back at the original directory except for the patched FPP files"""
+    text = (module.original / "CMakeLists.txt").read_text()
+    text = re.sub(r"(?m)^[ \t]*#.*\n", "", text)  # comments would describe the original
+    text = re.sub(r"[ \t]+#[^\n\"]*$", "", text, flags=re.M)
+    # The copy exists to be built on the host
+    text = re.sub(r"(?m)^[ \t]*restrict_platforms\([^)]*\)[ \t]*\n", "", text)
+    for variable in ("${CMAKE_CURRENT_LIST_DIR}", "${CMAKE_CURRENT_SOURCE_DIR}"):
+        text = text.replace(variable, "${WSTS_ORIGINAL_DIR}")
+    patched = {f.name for f in module.files}
+    seen: Set[str] = set()
+
+    def fix_token(match: re.Match) -> str:
+        token = match.group(0)
+        bare = token.strip('"')
+        quote = '"' if token.startswith('"') else ""
+        if bare in dropped_depends:
+            return "\0"
+        prefix = "${WSTS_ORIGINAL_DIR}/"
+        relative = bare[len(prefix):] if bare.startswith(prefix) else bare
+        if "${" in relative or os.path.isabs(relative) or relative in fpp.CMAKE_CALL_DIRECTIVES:
+            return token
+        if relative in patched:
+            seen.add(relative)
+            return f'"${{CMAKE_CURRENT_LIST_DIR}}/{relative}"'
+        if not bare.startswith(prefix) and (module.original / relative).exists():
+            # A path written relative to the module directory
+            return f'{quote or chr(34)}{prefix}{relative}{quote or chr(34)}'
+        return token
+
+    def fix_call(match: re.Match) -> str:
+        body = re.sub(r'"[^"]*"|[^\s()]+', fix_token, match.group(3))
+        # A dependency that was dropped takes its line with it
+        body = re.sub(r"\n[ \t]*\0[ \t]*(?=\n)", "", body).replace("\0", "")
+        return f"{match.group(1)}{match.group(2)}({body})"
+
+    text = CMAKE_PATH_CALL.sub(fix_call, text)
+    missing = patched - seen
+    if missing:
+        raise WstsError(
+            f"{module.original / 'CMakeLists.txt'} does not list {', '.join(sorted(missing))} in a "
+            "register_fprime_*() call that fprime-wsts can read, so the patched copy cannot take its place"
+        )
+    text = re.sub(r"\n[ \t]*\n([ \t]*\n)+", "\n\n", text)
+    return "\n".join([
+        "# Generated by fprime-wsts. Do not edit: regenerate with `fprime-wsts generate`.",
+        "#",
+        f"# Takes the place of {module.relative} in the simulated build: the FPP listed with",
+        "# CMAKE_CURRENT_LIST_DIR is a patched copy, everything else is the original's.",
+        f'set(WSTS_ORIGINAL_DIR "${{CMAKE_CURRENT_LIST_DIR}}/{original_reference}")',
+        "",
+        text.strip("\n"),
+        "",
+    ])
+
+
+REDIRECT_TEMPLATE = """
+# Modules whose FPP is patched: the copy in this project is built in place of the original.
+# The framework and the libraries add their own modules, so the redirection has to be in
+# place before they are read.
+set(WSTS_REPLACED_MODULES
+{originals}
+)
+set(WSTS_REPLACEMENTS
+{copies}
+)
+if (COMMAND _add_fprime_subdirectory)
+    message(FATAL_ERROR "add_fprime_subdirectory() is already overridden: fprime-wsts cannot redirect modules")
+endif()
+function(add_fprime_subdirectory FP_SOURCE_DIR)
+    get_filename_component(WSTS_REQUESTED "${{FP_SOURCE_DIR}}" REALPATH)
+    get_filename_component(WSTS_HERE "${{CMAKE_CURRENT_SOURCE_DIR}}" REALPATH)
+    set(WSTS_SOURCE "")
+    set(WSTS_INDEX 0)
+    foreach (WSTS_MODULE IN LISTS WSTS_REPLACED_MODULES)
+        list(GET WSTS_REPLACEMENTS ${{WSTS_INDEX}} WSTS_REPLACEMENT)
+        get_filename_component(WSTS_MODULE "${{WSTS_MODULE}}" REALPATH)
+        get_filename_component(WSTS_REPLACEMENT "${{WSTS_REPLACEMENT}}" REALPATH)
+        if (WSTS_MODULE STREQUAL WSTS_REQUESTED)
+            set(WSTS_SOURCE "${{WSTS_REPLACEMENT}}")
+        elseif (WSTS_REPLACEMENT STREQUAL WSTS_HERE)
+            # A module the original adds from below itself, now added from the copy
+            set(WSTS_SOURCE "${{WSTS_REQUESTED}}")
+        endif()
+        math(EXPR WSTS_INDEX "${{WSTS_INDEX}} + 1")
+    endforeach()
+    if (WSTS_SOURCE STREQUAL "")
+        _add_fprime_subdirectory(${{ARGV}})
+        return()
+    endif()
+    # Same module name and same place in the build cache as in the flight build
+    get_module_name("${{WSTS_REQUESTED}}")
+    set(FPRIME_CURRENT_MODULE "${{MODULE_NAME}}")
+    get_nearest_build_root("${{WSTS_REQUESTED}}")
+    file(RELATIVE_PATH WSTS_BINARY_DIR "${{FPRIME_CLOSEST_BUILD_ROOT}}" "${{WSTS_REQUESTED}}")
+    get_filename_component(WSTS_FRAMEWORK "${{FPRIME_FRAMEWORK_PATH}}" REALPATH)
+    if (FPRIME_CLOSEST_BUILD_ROOT STREQUAL WSTS_FRAMEWORK)
+        set(WSTS_BINARY_DIR "F-Prime/${{WSTS_BINARY_DIR}}")
+    endif()
+    if (NOT WSTS_SOURCE STREQUAL WSTS_REQUESTED)
+        message(STATUS "[WSTS] ${{MODULE_NAME}} is built from ${{WSTS_SOURCE}}")
+    endif()
+    fprime_util_metadata_add_subdirectory("${{WSTS_SOURCE}}" "${{CMAKE_BINARY_DIR}}/${{WSTS_BINARY_DIR}}")
+    add_subdirectory("${{WSTS_SOURCE}}" "${{CMAKE_BINARY_DIR}}/${{WSTS_BINARY_DIR}}")
+endfunction()
+fprime_setup_included_code()
+"""
 
 
 # ----------------------------------------------------------------------
@@ -768,7 +952,7 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
         "libraries": libraries,
         "project_modules": modules,
         "reused_sources": reused,
-        "fidelity_notes": [
+        "fidelity_notes": plan.fidelity_notes + [
             "Operating system: flight OSAL implementations are replaced by the Linux/POSIX ones. Task priorities "
             "are advisory and scheduling is not real-time, so timing and preemption order differ from the target.",
             "Word size and byte order are those of the host; code that depends on the target's differs here.",
@@ -831,6 +1015,18 @@ def render_report(report: dict) -> str:
         lines.append("")
     lines += ["## Fidelity notes", ""]
     lines += [f"- {note}" for note in report["fidelity_notes"]]
+    if report.get("replaced_modules"):
+        lines += ["", "## Modules built from a patched copy", "",
+                  "These hold substituted instances outside the deployment's Top directory. The simulated build "
+                  "takes the copy in this overlay in place of the original module.", ""]
+        for module in report["replaced_modules"]:
+            lines.append(f"- `{module['module']}` (`{module['original']}`): {', '.join('`' + f + '`' for f in module['files'])}")
+    if report.get("config_overrides"):
+        lines += ["", "## Configuration overrides applied", "",
+                  "FPP configuration replaced through `CONFIGURATION_OVERRIDES`, as the build does.", ""]
+        for override in report["config_overrides"]:
+            lines.append(f"- `{override['file']}`: `{override['uses']}` replaces "
+                         + ", ".join(f"`{r}`" for r in override["replaces"]))
     if report["warnings"]:
         lines += ["", "## Warnings", ""]
         lines += [f"- {warning}" for warning in report["warnings"]]
@@ -909,10 +1105,24 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
     catalog += load_catalog(DEFAULT_CATALOG)
 
     # ---- Analyse the flight topology ----
+    early_warnings: List[str] = []
+    version_warning = fpp.check_tool_version(settings.framework_path)
+    if version_warning:
+        early_warnings.append(version_warning)
     with tempfile.TemporaryDirectory(prefix="wsts-work-") as scratch:
         work = Path(scratch)
         toolkit_fpp_root = TOOLKIT_ROOT / "Wsts"
         roots = [settings.framework_path, *settings.library_locations, project_root, toolkit_fpp_root, *sim_roots]
+        # Build roots in the order F Prime registers configuration: the last override wins
+        config_overrides, override_warnings = fpp.find_config_overrides(
+            [settings.framework_path, *settings.library_locations, toolkit_fpp_root, project_root, *sim_roots])
+        early_warnings += override_warnings
+
+        def owner(path: Path) -> Optional[Path]:
+            """A file belongs to the deepest root that contains it: the framework is often
+            checked out inside the project, and a library may be too"""
+            containing = [root for root in roots if root in path.parents]
+            return max(containing, key=lambda root: len(root.parts)) if containing else None
         top_registration = read_registration(top_dir / "CMakeLists.txt", "register_fprime_module")
         if manifest.topology_fpp:
             top_fpp = [manifest.resolve(f, project_root) for f in manifest.topology_fpp]
@@ -921,7 +1131,10 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
             top_fpp = top_fpp or sorted(top_dir.glob("*.fpp"))
         if not top_fpp:
             raise WstsError(f"no topology FPP files found in {top_dir}")
-        candidates = fpp.select_candidates(fpp.find_fpp_files(roots, manifest.fpp_exclude), settings.framework_path)
+        found_files = fpp.find_fpp_files(roots, manifest.fpp_exclude)
+        # Only overrides that the analysis can see count: fpp_exclude may have removed them
+        config_overrides = [o for o in config_overrides if o.winner in found_files and any(r in found_files for r in o.replaced)]
+        candidates = fpp.select_candidates(found_files, settings.framework_path, config_overrides)
         # Other deployments in the project may define the same names; only this one is read
         candidates = [c for c in candidates if c not in set(top_fpp)]
         located = fpp.locate_defs(work, candidates)
@@ -941,7 +1154,34 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
             raise WstsError(f"expected exactly one topology in {top_dir}, found: {names}. Set 'topology' in the manifest.")
         topology = local[0]
 
-        plan = make_plan(model, manifest, catalog, topology, roots)
+        plan = make_plan(model, manifest, catalog, topology, roots, settings.framework_path)
+        plan.warnings[:0] = early_warnings
+
+        # ---- Instances outside Top: their modules are replaced by patched copies ----
+        replaced: Dict[Path, ReplacedModule] = {}
+        for sub in plan.substitutions:
+            file = sub.instance.file
+            if file in top_fpp or file.parent == top_dir:
+                continue
+            root = owner(file)
+            directory = module_dir(file, root) if root is not None else None
+            if directory is None or directory == root:
+                raise WstsError(
+                    f"instance {sub.instance.name} is defined in {file}, which is not inside a module directory of "
+                    "the framework, a library or the project: there is no module to replace with a patched copy"
+                )
+            if root in (toolkit_fpp_root, *sim_roots):
+                raise WstsError(f"instance {sub.instance.name} is defined in {file}, inside the simulation sources")
+            module = replaced.setdefault(directory, ReplacedModule(directory, root, directory.relative_to(root).as_posix()))
+            if file not in module.files:
+                module.files.append(file)
+        for module in replaced.values():
+            first = module.relative.split("/")[0]
+            if first == deployment or sum(1 for other in replaced.values() if other.relative == module.relative) > 1:
+                raise WstsError(
+                    f"cannot place the patched copy of {module.original}: its path '{module.relative}' is already "
+                    "taken in the overlay"
+                )
 
         # ---- Write the overlay ----
         if output.exists():
@@ -955,9 +1195,11 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
 
         texts: Dict[Path, str] = {}
 
+        patchable = {f for module in replaced.values() for f in module.files}
+
         def text_of(path: Path) -> str:
             if path not in texts:
-                if path.parent != top_dir:
+                if path.parent != top_dir and path not in patchable:
                     raise WstsError(f"{path} needs patching but is outside {top_dir}")
                 texts[path] = path.read_text()
             return texts[path]
@@ -989,24 +1231,33 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         instances_file.write_text(render_instances(plan, manifest))
         patched_fpp.append(instances_file)
 
+        # Patched copies of modules outside Top, at the same path below the overlay as the
+        # original has below its root: generated code and module names come out the same
+        copy_of: Dict[Path, Path] = {}  # patched copy -> original
+        for module in replaced.values():
+            target_dir = output / module.relative
+            target_dir.mkdir(parents=True, exist_ok=True)
+            for path in sorted(module.original.iterdir()):
+                if path in module.files:
+                    (target_dir / path.name).write_text(texts[path])
+                    copy_of[target_dir / path.name] = path
+                elif path.suffix == ".fppi":
+                    shutil.copy(path, target_dir / path.name)  # included relative to the FPP file
+
         # ---- Validate the patched model and find what it needs ----
-        post_candidates = [c for c in candidates if c not in set(top_fpp)]
+        post_candidates = [c for c in candidates if c not in set(top_fpp) and c not in patchable] + list(copy_of)
         fpp.locate_defs(work, post_candidates)
-        closure = fpp.depend(work, patched_fpp)
+        # From here on a patched copy stands for its original: it is built in its place
+        closure = [copy_of.get(f, f) for f in fpp.depend(work, patched_fpp)]
+        check_files = [next((copy for copy, original in copy_of.items() if original == f), f) for f in closure]
         try:
-            fpp.check(work, closure + patched_fpp)
+            fpp.check(work, check_files + patched_fpp)
         except WstsError as error:
             raise WstsError(f"the generated topology does not pass fpp-check:\n{error}") from None
 
     # ---- Libraries and project modules the simulated deployment builds ----
     # A file belongs to the deepest root that contains it: the framework is often checked
     # out inside the project, and a project may itself live inside a library's repository.
-    all_roots = [settings.framework_path, *settings.library_locations, TOOLKIT_ROOT / "Wsts", project_root, *sim_roots]
-
-    def owner(path: Path) -> Optional[Path]:
-        containing = [root for root in all_roots if root in path.parents]
-        return max(containing, key=lambda root: len(root.parts)) if containing else None
-
     libraries = {"kept": [], "dropped": []}
     library_paths: List[Path] = [TOOLKIT_ROOT]
     for library in settings.library_locations:
@@ -1041,6 +1292,10 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
             plan.warnings.append(f"{f} is not inside a module directory; it will not be built")
         elif directory != top_dir and directory not in excluded:
             module_dirs[directory] = None
+    # A module with CONFIGURATION_OVERRIDES has to be registered after the configuration
+    # it replaces, which may itself be a project module
+    overriding_dirs = {o.winner.parent for o in config_overrides}
+    module_dirs = {d: None for d in sorted(module_dirs, key=lambda d: d in overriding_dirs)}
     for extra in manifest.extra_subdirectories:
         module_dirs[manifest.resolve(extra, project_root)] = None
 
@@ -1049,9 +1304,16 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         topology_sources = [manifest.resolve(s, project_root) for s in manifest.topology_sources]
     else:
         topology_sources = [Path(s).resolve() for s in top_registration.get("SOURCES", [])]
+    # A flight driver's module leaves the build when no instance still uses the component
+    still_used = {
+        model.instances[name].component
+        for name in topology.instances
+        if name not in {s.instance.name for s in plan.substitutions}
+    }
     substituted_modules = set()
     for sub in plan.substitutions:
-        substituted_modules.add(module_name(sub.original.file.parent, [settings.framework_path, *settings.library_locations, project_root]))
+        if sub.original.name not in still_used:
+            substituted_modules.add(module_name(sub.original.file.parent, [settings.framework_path, *settings.library_locations, project_root]))
     top_depends = [d for d in top_registration.get("DEPENDS", []) if d not in substituted_modules and "${" not in d]
     top_depends += [d for d in manifest.extra_depends if d not in top_depends]
     if "Wsts_Core" not in top_depends:
@@ -1145,6 +1407,17 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
     def rel(path: Path) -> str:
         return _rel(path, final_output)
 
+    for module in replaced.values():
+        final_dir = final_output / module.relative
+        (output / module.relative / "CMakeLists.txt").write_text(
+            render_replaced_cmake(module, _rel(module.original, final_dir), substituted_modules))
+    redirect: List[str] = []
+    if replaced:
+        redirect = REDIRECT_TEMPLATE.format(
+            originals="\n".join(f'    "${{CMAKE_CURRENT_LIST_DIR}}/{rel(m.original)}"' for m in replaced.values()),
+            copies="\n".join(f'    "${{CMAKE_CURRENT_LIST_DIR}}/{m.relative}"' for m in replaced.values()),
+        ).rstrip("\n").split("\n")
+
     defines = ["WSTS_SIM=1", *manifest.defines]
     root_cmake = [
         "# Generated by fprime-wsts. Do not edit: regenerate with `fprime-wsts generate`.",
@@ -1155,7 +1428,10 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         f"project({deployment}Sim VERSION 1.0.0 LANGUAGES C CXX)",
         "",
         f"add_compile_definitions({' '.join(defines)})",
+        *(["# The framework's and the libraries' modules are added below, once the redirection is set up",
+           "set(FPRIME_INCLUDE_FRAMEWORK_CODE OFF)"] if replaced else []),
         f'find_package(FPrime REQUIRED PATHS "${{CMAKE_CURRENT_LIST_DIR}}/{rel(settings.framework_path)}/cmake")',
+        *redirect,
         "",
         f'set(WSTS_FLIGHT_PROJECT "${{CMAKE_CURRENT_LIST_DIR}}/{rel(project_root)}")',
         *[
@@ -1203,6 +1479,17 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
     report["dropped_cmake_options"] = dropped_options
     if sim_root is not None:
         report["simulation_project"] = rel(sim_root)
+    # Only when there are any, so that reports of deployments without them are unchanged
+    if replaced:
+        report["replaced_modules"] = [
+            {"module": module_name(m.original, [settings.framework_path, *settings.library_locations, project_root]),
+             "original": rel(m.original), "copy": m.relative, "files": sorted(f.name for f in m.files)}
+            for m in replaced.values()
+        ]
+    if config_overrides:
+        report["config_overrides"] = [
+            {"file": o.name, "uses": rel(o.winner), "replaces": [rel(r) for r in o.replaced]} for o in config_overrides
+        ]
     report["reused_sources"] = {
         k: [rel(Path(p)) if os.path.isabs(p) else p for p in v] for k, v in reused.items()
     }
