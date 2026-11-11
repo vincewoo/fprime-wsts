@@ -30,6 +30,7 @@ jobs:
         run: |
           fprime-wsts generate examples/linux-demo/LinuxDemo/wsts.yaml --check
           fprime-wsts generate examples/vx-demo/VxDemo/wsts.yaml --check
+          fprime-wsts generate examples/hub-demo/wsts-system.yaml --check
 
       - name: C++ unit tests for the WSTS core
         run: |
@@ -76,9 +77,24 @@ jobs:
             --wsts-deployment "$D" --wsts-gds \
             --dictionary "$D/build-artifacts/Linux/LinuxDemo/dict/LinuxDemoTopologyDictionary.json"
 
+      - name: Build the simulated HubDemo system (two elements joined by a hub)
+        run: |
+          for element in cdh payload; do
+            (cd examples/hub-demo/wsts/HubDemo/$element && fprime-util generate && fprime-util build -j"$(nproc)")
+          done
+
+      - name: End-to-end tests, HubDemo system
+        run: |
+          D=examples/hub-demo/wsts/HubDemo
+          pytest tests/e2e/test_hub_demo.py -p fprime_wsts.pytest_plugin \
+            --wsts-system "$D" --wsts-gds \
+            --dictionary "$D/wsts-logs/HubDemoDictionary.json"
+
       - name: Keep simulation logs when something fails
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: wsts-logs
-          path: examples/*/wsts/*/wsts-logs
+          path: |
+            examples/*/wsts/*/wsts-logs
+            !examples/*/wsts/*/wsts-logs/*Dictionary*.json

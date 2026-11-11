@@ -124,6 +124,30 @@ uses no flight rate-group port: the simulation tick notifies it.
 
 `control: none` in the manifest leaves it out. The bridge and scenarios still work.
 
+## Systems of several elements
+
+A flight system with more than one computer is one process per element, not one process
+for all: an F´ deployment owns its process (topology globals, OSAL singletons), elements
+may target different platforms, and each keeps its own dictionary and base IDs. The
+system layer sits on top of the single-deployment transform and adds three things.
+
+- **A system manifest** naming the elements (each an ordinary deployment manifest), the
+  links between them, and the ID window routed to each. `generate` runs the transform
+  once per element and writes `wsts-system.json`.
+- **Links.** A link ends at a byte stream driver instance in each of two elements. Being
+  the end of a link is a reason to substitute the instance, like a catalog entry. A
+  `Wsts::LinkByteStream` model attached to each endpoint forwards what flight software
+  sends over a Unix socket to its peer, which injects it on its own bus. Because the link
+  is a model, faults and recording apply to it with no new mechanism, and everything
+  above the driver (an F´ `GenericHub`, framing) runs as in flight.
+- **One runner and one client.** `fprime-wsts run` starts every element, waits for the
+  links, merges the dictionaries with F´'s own `fprime-merge-dictionary` and starts a
+  single GDS on the ground element. `WstsSystem` holds a bridge per element.
+
+Each element's `wstsControl` is placed inside the element's ID window, so the flight
+routing (a command splitter and hub, say) delivers its commands and the merged dictionary
+keeps the instances apart. Time remains per element: see [systems.md](systems.md).
+
 ## Dictionary fidelity
 
 A general-purpose surrogate has no events or telemetry of its own, so when it replaces a
@@ -157,3 +181,5 @@ Replay is repeatable to tick granularity. It is not cycle-exact: see
    (`/ram0`, `/tffs0`) into a sandbox directory.
 4. Substituting instances defined outside the deployment's `Top` directory (subtopologies).
 5. 32-bit and big-endian build options; adapters to external dynamics simulators.
+6. Systems: GPIO links, datagram and connection semantics for socket links, system-wide
+   scenarios and merged recordings, and lockstep time across elements (after item 1).

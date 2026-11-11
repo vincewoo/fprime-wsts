@@ -1,0 +1,5 @@
+# WSTS manifest for the Payload deployment: the remote element of the HubDemo system.
+#
+# Nothing to add: the timer is replaced from the surrogate catalog, and the Ethernet driver
+# to the Cdh computer is replaced because wsts-system.yaml ends a link at it.
+deployment: Payload

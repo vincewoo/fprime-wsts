@@ -1,16 +1,21 @@
 // ======================================================================
 // \title  CoreTestMain.cpp
-// \brief  Unit tests for the WSTS core: JSON, bus, faults, control, scenarios, recording
+// \brief  Unit tests for the WSTS core: JSON, bus, faults, control, scenarios, recording, links
 // ======================================================================
 #include <gtest/gtest.h>
 
 #include <unistd.h>
+#include <chrono>
 #include <cstdio>
 #include <fstream>
+#include <functional>
+#include <mutex>
 #include <string>
+#include <thread>
 
 #include <Wsts/Core/Bus.hpp>
 #include <Wsts/Core/Control.hpp>
+#include <Wsts/Core/Link.hpp>
 #include <Wsts/Core/Models.hpp>
 
 namespace {
@@ -35,6 +40,16 @@ bool run(const std::string& line, std::string* error = nullptr) {
 
 std::string tempFile(const char* name) {
     return std::string("/tmp/wsts-ut-") + std::to_string(::getpid()) + "-" + name;
+}
+
+bool eventually(const std::function<bool()>& condition) {
+    for (int i = 0; i < 500; i++) {
+        if (condition()) {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return condition();
 }
 
 class CoreTest : public ::testing::Test {
@@ -335,6 +350,106 @@ TEST_F(CoreTest, RecordingReplaysAsStimulusAndAsResponses) {
 }
 
 }  // namespace
+
+// ----------------------------------------------------------------------
+// Links between elements
+// ----------------------------------------------------------------------
+
+// Both ends live in this one process here, on two endpoints of the same bus. In a system
+// each end is in its own deployment.
+TEST_F(CoreTest, LinkCarriesBytesBetweenEndpointsBothWays) {
+    std::mutex mutex;
+    std::vector<Bytes> atA;
+    std::vector<Bytes> atB;
+    Bus::get().bindByteStream("linkA", [&](const Bytes& data) {
+        std::lock_guard<std::mutex> lock(mutex);
+        atA.push_back(data);
+    });
+    Bus::get().bindByteStream("linkB", [&](const Bytes& data) {
+        std::lock_guard<std::mutex> lock(mutex);
+        atB.push_back(data);
+    });
+    const std::string path = tempFile("link.sock");
+    Wsts::LinkByteStream a;
+    Wsts::LinkByteStream b;
+    ASSERT_TRUE(a.set("endpoint", "linkA") && a.set("link", "x") && a.set("role", "listen") && a.set("address", path));
+    ASSERT_TRUE(b.set("endpoint", "linkB") && b.set("link", "x") && b.set("role", "connect") && b.set("address", path));
+    EXPECT_FALSE(a.set("role", "sideways"));
+    Bus::get().attachByteStream("linkA", &a);
+    Bus::get().attachByteStream("linkB", &b);
+
+    // Nothing at the far end yet: the bytes are lost, as on an unplugged cable
+    EXPECT_EQ(Bus::get().byteStreamSend("linkA", text("lost")), 0);
+    EXPECT_EQ(a.dropped(), 1u);
+
+    b.start();  // the connecting side may come up first
+    a.start();
+    ASSERT_TRUE(eventually([&]() { return a.up() && b.up(); }));
+    EXPECT_EQ(Wsts::LinkByteStream::started(), 2u);
+    EXPECT_EQ(Wsts::LinkByteStream::connected(), 2u);
+
+    EXPECT_EQ(Bus::get().byteStreamSend("linkA", text("to b")), 0);
+    EXPECT_EQ(Bus::get().byteStreamSend("linkA", text("again")), 0);
+    EXPECT_EQ(Bus::get().byteStreamSend("linkB", text("to a")), 0);
+    ASSERT_TRUE(eventually([&]() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return atB.size() == 2 && atA.size() == 1;
+    }));
+    {
+        // Each send arrives whole and in order
+        std::lock_guard<std::mutex> lock(mutex);
+        EXPECT_EQ(atB[0], text("to b"));
+        EXPECT_EQ(atB[1], text("again"));
+        EXPECT_EQ(atA[0], text("to a"));
+    }
+
+    // A fault on one endpoint cuts that direction of the link
+    ASSERT_TRUE(run(R"({"op": "fault_set", "endpoint": "linkA", "kind": "drop", "dir": "to_device"})"));
+    EXPECT_EQ(Bus::get().byteStreamSend("linkA", text("dropped")), 0);
+    EXPECT_EQ(Bus::get().byteStreamSend("linkB", text("passes")), 0);
+    ASSERT_TRUE(eventually([&]() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return atA.size() == 2;
+    }));
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        EXPECT_EQ(atB.size(), 2u);
+    }
+
+    // One end going away takes the link down; it comes back when that end restarts
+    b.stop();
+    ASSERT_TRUE(eventually([&]() { return !a.up(); }));
+    b.start();
+    ASSERT_TRUE(eventually([&]() { return a.up() && b.up(); }));
+    a.stop();
+    b.stop();
+    EXPECT_EQ(Wsts::LinkByteStream::started(), 0u);
+    Bus::get().detach("linkA");
+    Bus::get().detach("linkB");
+}
+
+// While recorded responses are replayed, what the linked element sent comes from the
+// recording, like the output of any other model
+TEST_F(CoreTest, LinkTrafficIsReplacedByTheRecordingDuringReplay) {
+    Bus::get().setReplay(true);
+    Bus::get().byteStreamInject("uart", text("live"), "link");
+    EXPECT_TRUE(received.empty());
+    Bus::get().byteStreamInject("uart", text("recorded"), "replay");
+    ASSERT_EQ(received.size(), 1u);
+    EXPECT_EQ(received[0], text("recorded"));
+    Bus::get().setReplay(false);
+    Bus::get().byteStreamInject("uart", text("live"), "link");
+    EXPECT_EQ(received.size(), 2u);
+}
+
+TEST_F(CoreTest, LinkWithoutAnAddressStaysDown) {
+    ::unsetenv("WSTS_LINK_DIR");
+    Wsts::LinkByteStream link;
+    ASSERT_TRUE(link.set("link", "alone"));
+    link.start();
+    EXPECT_FALSE(link.up());
+    EXPECT_EQ(Wsts::LinkByteStream::started(), 0u);
+}
 
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);

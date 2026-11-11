@@ -1,0 +1,45 @@
+{
+  "generator": "fprime-wsts",
+  "system": "HubDemo",
+  "ground": "cdh",
+  "elements": [
+    {
+      "name": "cdh",
+      "directory": "cdh",
+      "topology": "Cdh.Cdh",
+      "bridge": "tcp:50100",
+      "ids": [
+        0,
+        536870911
+      ],
+      "control_base_id": 268582912
+    },
+    {
+      "name": "payload",
+      "directory": "payload",
+      "topology": "Payload.Payload",
+      "bridge": "tcp:50101",
+      "ids": [
+        536870912,
+        805306367
+      ],
+      "control_base_id": 537014272
+    }
+  ],
+  "links": [
+    {
+      "name": "hub",
+      "kind": "bytestream",
+      "a": {
+        "element": "cdh",
+        "instance": "Cdh.hubDriver",
+        "endpoint": "hubDriver"
+      },
+      "b": {
+        "element": "payload",
+        "instance": "Payload.hubDriver",
+        "endpoint": "hubDriver"
+      }
+    }
+  ]
+}

@@ -347,8 +347,9 @@ void Bus::deliverToFlight(const std::string& endpoint, Bytes data, const char* s
 }
 
 void Bus::byteStreamInject(const std::string& endpoint, const Bytes& data, const char* src) {
-    // Recorded model output is replaced by the recording while replaying responses
-    if (m_replay.load() && std::string(src) == "model") {
+    // Recorded model output is replaced by the recording while replaying responses. What a
+    // linked element sent is part of that recording too.
+    if (m_replay.load() && (std::string(src) == "model" || std::string(src) == "link")) {
         return;
     }
     const Effects effects = this->applyFaults(endpoint, FaultDir::TO_FLIGHT);
