@@ -8,11 +8,12 @@ Start with [README.md](README.md); the design is in [docs/design.md](docs/design
 | Path | Contents |
 |---|---|
 | `Wsts/Core/` | Plain C++: bus, faults, control core, scenario player, recorder, bridge, reference models, links between elements. No F´ dependencies |
-| `Wsts/Drv/`, `Wsts/Svc/` | F´ components: surrogates, `SimControl` (commands/events/telemetry), `SimSetup` (anchor) |
+| `Wsts/Drv/`, `Wsts/Svc/` | F´ components: surrogates, `BusByteStreamDevice` (adapter that puts an F´ simulator on a bus endpoint), `SimControl` (commands/events/telemetry), `SimSetup` (anchor) |
 | `catalog/wsts-catalog.yaml` | Which flight components each surrogate replaces |
-| `python/fprime_wsts/` | `generate.py` (transform), `fpp.py` (model loading), `manifest.py`, `system.py` (multi-element systems), `bridge.py`, `runner.py`, `scaffold.py`, `cli.py` |
+| `python/fprime_wsts/` | `generate.py` (transform), `fpp.py` (model loading), `manifest.py`, `simulators.py` (added F´ instances, bus devices), `system.py` (multi-element systems), `bridge.py`, `runner.py`, `scaffold.py`, `cli.py` |
 | `examples/linux-demo/`, `examples/vx-demo/` | Flight projects. `examples/*/wsts/` is **generated**: change the generator or `wsts.yaml`, then regenerate |
 | `examples/subtop-demo/` | Flight project whose UART driver is inside a library subtopology (`lib/sensor-lib`), with `CONFIGURATION_OVERRIDES` and a `system.fpp`. `wsts/SubtopDemo/` is **generated**, including its copy of the subtopology under `SensorLib/` |
+| `examples/subtop-demo-sim/` | Standalone simulation project for `subtop-demo` with a device simulator written as an F´ component (`simulators`, `devices`, `cmake.cache` in its manifest). Its `wsts/SubtopDemo/` is **generated** and checked in |
 | `examples/hub-demo/` | Flight project with two deployments (`Cdh`, `Payload`) joined by a `GenericHub`; `wsts-system.yaml` makes them one system. `wsts/HubDemo/` is **generated** |
 | `examples/linux-demo-sim/` | Standalone simulation project for `linux-demo`: manifest, project surrogate and model. Its `wsts/` is generated and not checked in |
 | `tests/e2e/` | End-to-end tests against a running simulation and GDS |
@@ -57,6 +58,11 @@ version, unset `JAVA_HOME` so the bundled JRE is used.
   not the deployment's. A substituted instance outside `Top` is patched in a copy of its
   module, which the overlay's root `CMakeLists.txt` redirects `add_fprime_subdirectory()`
   to (`docs/design.md`, "Instances inside subtopologies").
+- Adding instances to a topology must not move flight port numbers. Health ping ports are
+  numbered by instance name, not by position in the topology: `simulators.py` pins the
+  flight targets, and `verify_flight_connections` compares the patched model with flight.
+- FPP checks base IDs across every instance definition it reads, used in a topology or not.
+- A component with parameters asserts in `loadParameters()` if `prmGetOut` is unconnected.
 - Autocoded handlers take enum and string arguments by `const&`.
 - `fprime-util generate` fails if the build directory already exists: after regenerating
   an overlay, run only `fprime-util build`.

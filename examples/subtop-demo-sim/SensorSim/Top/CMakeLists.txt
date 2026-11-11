@@ -1,0 +1,13 @@
+register_fprime_module(
+    EXCLUDE_FROM_ALL
+    AUTOCODER_INPUTS
+        "${CMAKE_CURRENT_LIST_DIR}/SensorSim.fpp"
+    HEADERS
+        "${CMAKE_CURRENT_LIST_DIR}/SubtopologyTopologyDefs.hpp"
+    INTERFACE
+    DEPENDS
+        SensorSim_SerialSensorSim
+        Wsts_Drv_BusByteStreamDevice
+        Svc_BufferManager
+        Svc_PrmDb
+)

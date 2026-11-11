@@ -146,6 +146,135 @@ The handler runs for each transaction; if it does not answer within two seconds 
 software gets an error status. When the client disconnects the device disappears from the
 bus (I2C then reports an address error).
 
+## Device simulators as F´ components
+
+A device simulator can also be an ordinary F´ component: active or queued, scheduled by
+a rate group, with commands, events, telemetry and parameters of its own. Many projects
+have such simulators already, written for hand-built test deployments where a loopback
+component stood in for the driver. They go into a generated deployment unchanged, behind
+the stock surrogate:
+
+```mermaid
+flowchart LR
+  mgr["Flight manager<br/>SensorLib.SerialSensor"]:::flight
+  sur["Flight driver instance,<br/>retyped: Wsts.SimByteStream"]:::toolkit
+  bus["Wsts bus endpoint 'uart'<br/>faults, recorder, bridge"]:::toolkit
+  dev["Adapter instance<br/>Wsts.BusByteStreamDevice"]:::toolkit
+  sim["Simulator component<br/>SensorSim.SerialSensorSim"]:::user
+  rg["Flight rate group"]:::flight
+  gds["F´ GDS"]:::external
+
+  mgr <-->|"Drv.ByteStreamDriver"| sur
+  sur <--> bus
+  bus <--> dev
+  dev <-->|"Drv.ByteStreamDriver"| sim
+  rg -->|"Svc.Sched, a free port"| sim
+  gds <-.->|"commands, telemetry,<br/>parameters"| sim
+
+  classDef flight fill:#dbeafe,stroke:#1d4ed8,color:#0b1f4d
+  classDef toolkit fill:#dcfce7,stroke:#15803d,color:#052e16
+  classDef generated fill:#ffedd5,stroke:#c2410c,color:#431407
+  classDef user fill:#f3e8ff,stroke:#7e22ce,color:#3b0764
+  classDef external fill:#f1f5f9,stroke:#64748b,color:#0f172a,stroke-dasharray:4 3
+```
+
+**When to use one rather than a C++ model.** Use a component when the simulator exists
+already as one, when operators should command and observe it through the ground system
+with its own dictionary entries, when it needs parameters, or when it is several
+components wired together. Use a C++ model ([Device models](#device-models)) when the
+device is simple and nothing but tests talks to it: a model costs no IDs, no command
+dispatcher or rate group capacity, and no topology changes. Both sit behind the same bus
+endpoint, so faults, recording, replay and the bridge work the same either way.
+
+**What you write.** In the simulation project:
+
+1. The simulator component, a client of the driver interface. For a serial device that
+   is the four ports of `Drv.ByteStreamDriverClient` (`drvConnected`, `drvReceiveIn`,
+   `drvReceiveReturnOut`, `drvSendOut`), under any names.
+2. FPP with the instances: the simulator, whatever it needs (a `Svc.BufferManager` for
+   its transmit buffers), and one `Wsts.BusByteStreamDevice` adapter per bus endpoint.
+   Phase code configures them, as in any topology. A subtopology keeps it together and
+   keeps flight names out of it:
+
+   ```fpp
+   module SensorSim {
+     instance sensorSim: SensorSim.SerialSensorSim base id 0x70000000 queue size 10
+     instance sensorPort: Wsts.BusByteStreamDevice base id 0x70002000
+
+     topology Simulator {
+       instance sensorSim
+       instance sensorPort
+       connections Device {
+         sensorPort.ready              -> sensorSim.drvConnected
+         sensorPort.$recv              -> sensorSim.drvReceiveIn
+         sensorSim.drvReceiveReturnOut -> sensorPort.recvReturnIn
+         sensorSim.drvSendOut          -> sensorPort.$send
+       }
+       port schedIn = sensorSim.schedIn
+     }
+   }
+   ```
+
+3. In the manifest, what joins it to this deployment:
+
+   ```yaml
+   simulators:
+     topologies: [SensorSim.Simulator]
+     headers: [SensorSim/Top/SubtopologyTopologyDefs.hpp]    # for the phase code
+     connections:
+       - rateGroup1Hz.RateGroupMemberOut -> SensorSim.Simulator.schedIn
+   devices:
+     - {instance: SensorSim.sensorPort, endpoint: uart}
+   ```
+
+[`examples/subtop-demo-sim`](../examples/subtop-demo-sim) is a complete one, for the
+`subtop-demo` flight project. The keys are described in
+[reference.md](reference.md#simulator-components).
+
+**Base IDs.** Give the simulator instances a block of IDs that the flight software does
+not use and is unlikely to grow into. Flight IDs never move; a collision is an error.
+
+**Threading.** The adapter delivers what flight software sent from inside the flight
+driver's `send` call, on the thread of the flight component that sent it.
+
+- If the simulator's receive port is `async` (a queued or active simulator), delivery
+  only queues the data. The simulator handles it on its own thread, or for a queued
+  component when its rate group calls it. This is the arrangement to prefer.
+- If the receive port is `sync`, the simulator's handler runs on the flight thread, inside
+  the flight component's send. It may reply at once: the adapter holds no lock while it
+  calls the simulator. Keep such handlers short, and do not have the simulator and the
+  flight manager both reply synchronously to each other without end.
+- `ready` reaches the simulator on the simulation's tick thread, on the first tick after
+  the flight side of the endpoint is bound.
+- The simulator's sends go to flight software on the simulator's own thread, through the
+  fault table, and are recorded as `model` traffic, like a C++ model's replies.
+
+**Buffer ownership.** As with a real byte stream driver:
+
+- Data to the simulator arrives in a buffer the adapter obtained from its `allocate` port
+  (or allocated itself when that port is unconnected). The simulator must return it on
+  the adapter's `recvReturnIn`, as it would to a UART driver. Connect `allocate` and
+  `deallocate` to a buffer manager when you want exhaustion to behave as on the target:
+  with no buffer left the data is dropped.
+- For a send, the simulator keeps its buffer: `send` is synchronous and copies. Return
+  the buffer to its own manager after the call.
+
+**Scheduling and pause.** A simulator connected to a flight rate group runs at that
+group's rate and stops with it when the simulation is paused, since the same tick drives
+both. A simulator that needs a rate of its own (higher than any flight rate group) is not
+catered for yet: the tick surrogate's cycle output is already connected to the flight rate
+group driver, and an output port drives one input. Schedule such a simulator from the
+fastest flight rate group and let it step several times per call.
+While paused, `inject_bytes` from the bridge still reaches flight software.
+
+**Parameters and health.** If the flight topology has a parameter database, the
+simulator's parameters are loaded from it. If it has none, add a `Svc.PrmDb` to the
+simulator's subtopology and connect the parameter ports to it there. Simulator instances
+are not pinged by the flight health component.
+
+**Other buses.** Only the byte stream adapter exists. For I2C, SPI and GPIO endpoints
+use a C++ model, which can forward to whatever you need.
+
 ## Surrogates
 
 A surrogate is a normal F´ component with three conventions.
@@ -171,6 +300,13 @@ A surrogate is a normal F´ component with three conventions.
    ```
 
    Flight code can also use `#ifdef WSTS_SIM`, which is defined in every simulated build.
+
+   The same holds for **phase code in a flight subtopology**. A subtopology that defines
+   the driver instance usually configures it there
+   (`phase Fpp.ToCpp.Phases.configComponents """ Lib::driver.setup(regBase, irq); """`).
+   That code is emitted into the deployment's topology module and compiled against your
+   surrogate, so the surrogate needs a `setup` that accepts those arguments. Type names
+   used in it resolve through the alias as well.
 
 Port handlers forward to the bus:
 
@@ -201,6 +337,49 @@ surrogates:
 A surrogate may declare its own commands, events and telemetry. They appear in the
 simulated dictionary under the replaced instance's base ID, and the report lists the
 difference from flight.
+
+### A surrogate that is not shaped like the driver
+
+A simulator's replacement for a driver is often not a drop-in: it is queued where the
+driver is passive, its ports have other names, and it lacks ports the driver has (a
+register interface to hardware that is not there). The manifest, or a catalog entry, can
+say so:
+
+```yaml
+substitute:
+  - instance: Payload.fpgaDriver
+    with: PayloadSim.FpgaSim
+    queue_size: 20                 # the flight definition has none: the driver is passive
+    ports:
+      runIn: schedIn               # same port type, another name
+      resetIn: deviceResetIn
+      regReadOut:                  # no counterpart: these flight connections are dropped
+      regWriteOut:
+```
+
+Renamed ports are renamed wherever the flight model connects them, including inside
+subtopologies and where a subtopology exports them. Dropped connections are commented out
+and listed in the report. If that leaves a flight instance with no connections (the
+register component the driver talked to), the generator says so; it is still built.
+Further simulator components behind the replacement are added with `simulators`, and
+connect to the replacement's own ports by its instance name.
+
+The alternative needs no mapping: a thin wrapper component in the simulation project
+with exactly the flight driver's port names and kind, which forwards each port to the
+simulator.
+
+```fpp
+passive component FpgaDriverShim {
+  sync input port runIn: Svc.Sched          # the flight names
+  output port schedOut: Svc.Sched           # to the simulator's schedIn
+  output port regReadOut: Proj.RegRead      # left unconnected, or answered by the shim
+  ...
+}
+```
+
+Substitute the driver with the shim, add the simulator with `simulators`, and connect
+shim to simulator in the simulation's FPP. Use this when the mapping is not one port to
+one port.
 
 ### A project timer
 

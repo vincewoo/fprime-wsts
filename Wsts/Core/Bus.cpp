@@ -152,6 +152,20 @@ void Bus::detach(const std::string& endpoint) {
     }
 }
 
+void Bus::detachByteStream(const std::string& endpoint, ByteStreamDevice* device) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto it = m_endpoints.find(endpoint);
+    if (it != m_endpoints.end() && it->second.byteStream == device) {
+        it->second.byteStream = nullptr;
+    }
+}
+
+bool Bus::byteStreamBound(const std::string& endpoint) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto it = m_endpoints.find(endpoint);
+    return it != m_endpoints.end() && static_cast<bool>(it->second.rx);
+}
+
 bool Bus::known(const std::string& endpoint) {
     std::lock_guard<std::mutex> lock(m_mutex);
     return m_endpoints.find(endpoint) != m_endpoints.end();

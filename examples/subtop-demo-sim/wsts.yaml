@@ -1,0 +1,38 @@
+# WSTS manifest for SubtopDemo with a device simulator written as an F Prime component.
+#
+# The flight project (../subtop-demo) is only read. Its UART driver, inside the SensorLink
+# subtopology, is replaced by the stock surrogate as usual. What sits behind the bus
+# endpoint is not a C++ model but SensorSim.SerialSensorSim, a component of this project
+# with its own command, parameter, event and telemetry.
+project: ../subtop-demo
+deployment: SubtopDemo
+
+keep:
+  - comDriver
+
+# Instances this project adds to the simulated topology. SensorSim.Simulator is a
+# subtopology (SensorSim/Top/SensorSim.fpp): the simulator, its buffer manager and the
+# adapter that puts it on the bus.
+simulators:
+  topologies:
+    - SensorSim.Simulator
+  # Included for the phase code of those instances
+  headers:
+    - SensorSim/Top/SubtopologyTopologyDefs.hpp
+  # Connections between the added instances and flight ones. No port numbers: a free
+  # rate group port is chosen, and the flight connections keep theirs.
+  connections:
+    - rateGroup1Hz.RateGroupMemberOut -> SensorSim.Simulator.schedIn
+    - rateGroup1Hz.RateGroupMemberOut -> SensorSim.txBuffers.schedIn
+
+# The adapter instance is the device on the endpoint of the flight UART
+devices:
+  - instance: SensorSim.sensorPort
+    endpoint: uart
+
+cmake:
+  # This project's library.cmake builds only what this list names
+  cache:
+    SENSOR_SIM_COMPONENTS: [SerialSensorSim, Top]
+
+bridge: tcp:50103
