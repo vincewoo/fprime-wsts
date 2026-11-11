@@ -1,0 +1,10 @@
+register_fprime_library(
+    AUTOCODER_INPUTS
+        "${CMAKE_CURRENT_LIST_DIR}/SimI2c.fpp"
+    SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/SimI2c.cpp"
+    HEADERS
+        "${CMAKE_CURRENT_LIST_DIR}/SimI2c.hpp"
+    DEPENDS
+        Sse_Core
+)

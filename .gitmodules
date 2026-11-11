@@ -1,0 +1,6 @@
+[submodule "lib/fprime"]
+	path = lib/fprime
+	url = https://github.com/nasa/fprime
+[submodule "lib/fprime-vxworks"]
+	path = lib/fprime-vxworks
+	url = https://github.com/fprime-community/fprime-vxworks

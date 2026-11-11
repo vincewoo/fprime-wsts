@@ -1,0 +1,10 @@
+register_fprime_library(
+    AUTOCODER_INPUTS
+        "${CMAKE_CURRENT_LIST_DIR}/SimSpi.fpp"
+    SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/SimSpi.cpp"
+    HEADERS
+        "${CMAKE_CURRENT_LIST_DIR}/SimSpi.hpp"
+    DEPENDS
+        Sse_Core
+)

@@ -1,0 +1,10 @@
+# F Prime build output
+build-fprime-automatic-*/
+build-artifacts/
+# Python
+__pycache__/
+*.egg-info/
+.pytest_cache/
+# SSE run output
+sse-logs/
+*.sse-rec.jsonl

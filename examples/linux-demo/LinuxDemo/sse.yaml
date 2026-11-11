@@ -1,0 +1,32 @@
+# SSE manifest for the LinuxDemo deployment.
+#
+# Nothing here names the hardware drivers: the UART, I2C, GPIO and timer instances are
+# found and replaced from the surrogate catalog. The manifest only adds what cannot be
+# inferred: which device models sit behind the buses, and where the bridge listens.
+deployment: LinuxDemo
+
+# The ground link stays a real TCP client so the GDS connects exactly as in flight
+keep:
+  - comDriver
+
+models:
+  # IMU at I2C address 0x68: WHO_AM_I and a 1 g reading on the Z axis
+  - name: imu
+    class: Sse::RegisterMapI2c
+    endpoint: imuBus
+    kind: i2c
+    address: 0x68
+    params:
+      "0x75": "0x68"
+      "0x3B": "0x00 0x10 0x00 0x20 0x40 0x00"
+
+  # Serial temperature sensor reporting once a second (10 ticks at 10 Hz)
+  - name: tempSensor
+    class: Sse::ScriptedByteStream
+    endpoint: sensorUart
+    kind: bytestream
+    params:
+      text: "$TEMP,21.5\n"
+      period: "10"
+
+bridge: tcp:50100
