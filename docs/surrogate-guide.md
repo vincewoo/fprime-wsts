@@ -11,17 +11,17 @@ There are two things you might write, and most projects need only the second.
 
 ## Device models
 
-Implement one of the interfaces in `Sse/Core/Bus.hpp`. Derive from `Sse::Model` as well if
+Implement one of the interfaces in `Wsts/Core/Bus.hpp`. Derive from `Wsts::Model` as well if
 the model takes parameters or needs to act on every tick.
 
 ```cpp
-#include <Sse/Core/Bus.hpp>
-#include <Sse/Core/Control.hpp>
+#include <Wsts/Core/Bus.hpp>
+#include <Wsts/Core/Control.hpp>
 
-class Thermometer : public Sse::Model, public Sse::I2cDevice {
+class Thermometer : public Wsts::Model, public Wsts::I2cDevice {
   public:
     // Return 0, or a Drv::I2cStatus value. `read` arrives sized to the requested length.
-    int transact(std::uint32_t addr, const Sse::Bytes& write, Sse::Bytes& read) override {
+    int transact(std::uint32_t addr, const Wsts::Bytes& write, Wsts::Bytes& read) override {
         for (auto& byte : read) byte = m_raw;
         return 0;
     }
@@ -52,16 +52,16 @@ Notes:
 - Model methods are called from flight threads (inside the port call), from the tick thread
   and from bridge threads. Guard shared state.
 - A byte stream model replies through the `ByteSink` it is handed, or at any time with
-  `Sse::Bus::get().byteStreamInject(endpoint, bytes)`. It is told its endpoint through
+  `Wsts::Bus::get().byteStreamInject(endpoint, bytes)`. It is told its endpoint through
   `set("endpoint", …)` at start-up.
 - Do not block in a model for long: the flight thread that made the port call is waiting.
 
 ### Models in Python
 
 ```python
-from fprime_sse.bridge import SseBridge
+from fprime_wsts.bridge import WstsBridge
 
-sim = SseBridge("tcp:50100")
+sim = WstsBridge("tcp:50100")
 sim.serve_i2c("thermoBus", 0x48, lambda write, length: (0, bytes([42] * length)))
 ```
 
@@ -80,7 +80,7 @@ A surrogate is a normal F´ component with three conventions.
 2. **A binding hook**, called by generated code during `configComponents`:
 
    ```cpp
-   void sseBind(const char* endpoint, const char* options = "");
+   void wstsBind(const char* endpoint, const char* options = "");
    ```
 
 3. **The methods flight topology code calls** on the flight class, if that code is to
@@ -93,21 +93,21 @@ A surrogate is a normal F´ component with three conventions.
    template <typename... Args> bool open(Args&&...) { return true; }
    ```
 
-   Flight code can also use `#ifdef SSE_SIM`, which is defined in every simulated build.
+   Flight code can also use `#ifdef WSTS_SIM`, which is defined in every simulated build.
 
 Port handlers forward to the bus:
 
 ```cpp
 Drv::I2cStatus SimI2c::writeRead_handler(FwIndexType, U32 addr, Fw::Buffer& w, Fw::Buffer& r) {
-    Sse::Bytes write(w.getData(), w.getData() + w.getSize());
-    Sse::Bytes read(r.getSize(), 0);
-    const int status = Sse::Bus::get().i2cTransact(m_endpoint, addr, write, read);
+    Wsts::Bytes write(w.getData(), w.getData() + w.getSize());
+    Wsts::Bytes read(r.getSize(), 0);
+    const int status = Wsts::Bus::get().i2cTransact(m_endpoint, addr, write, read);
     std::memcpy(r.getData(), read.data(), read.size());
     return static_cast<Drv::I2cStatus::T>(status);
 }
 ```
 
-`Sse/Drv/SimByteStream` is the fullest example (receive path, buffer ownership, the ready
+`Wsts/Drv/SimByteStream` is the fullest example (receive path, buffer ownership, the ready
 signal). Going through the bus is what gives a surrogate fault injection, recording and
 bridge access for free. A surrogate for a device manager may skip the bus and produce its
 outputs directly; it then has none of those.
@@ -115,7 +115,7 @@ outputs directly; it then has none of those.
 Register the surrogate in a catalog so it is chosen automatically:
 
 ```yaml
-# sim/sse-catalog.yaml, named under `catalogs:` in the manifest
+# sim/wsts-catalog.yaml, named under `catalogs:` in the manifest
 surrogates:
   - surrogate: Proj.SimFpga
     replaces: [Proj.FpgaDriver]
@@ -128,7 +128,7 @@ difference from flight.
 ### Mirror surrogates
 
 ```bash
-fprime-sse scaffold VxWorksDrv.VxWorksUartDriver --project examples/vx-demo --output Sim/SimVxUart
+fprime-wsts scaffold VxWorksDrv.VxWorksUartDriver --project examples/vx-demo --output Sim/SimVxUart
 ```
 
 This copies the component's model, with its included event and telemetry definitions,

@@ -1,5 +1,5 @@
 ####
-# SSE toolkit example project: VxDemo, a VxWorks deployment
+# WSTS toolkit example project: VxDemo, a VxWorks deployment
 ####
 cmake_minimum_required(VERSION 3.26)
 project(VxDemoProject VERSION 1.0.0 LANGUAGES C CXX)

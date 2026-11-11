@@ -1,0 +1,10 @@
+register_fprime_library(
+    AUTOCODER_INPUTS
+        "${CMAKE_CURRENT_LIST_DIR}/SimSetup.fpp"
+    SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/SimSetup.cpp"
+    HEADERS
+        "${CMAKE_CURRENT_LIST_DIR}/SimSetup.hpp"
+    DEPENDS
+        Wsts_Core
+)

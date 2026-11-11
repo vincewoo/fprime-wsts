@@ -1,7 +1,7 @@
 import pytest
 
-from fprime_sse.fpp import SseError
-from fprime_sse.manifest import DEFAULT_CATALOG, load_catalog, parse_manifest
+from fprime_wsts.fpp import WstsError
+from fprime_wsts.manifest import DEFAULT_CATALOG, load_catalog, parse_manifest
 
 
 def test_minimal_manifest_defaults():
@@ -15,7 +15,7 @@ def test_full_manifest():
         "deployment": "Dep",
         "keep": ["comDriver"],
         "substitute": [{"instance": "radio", "with": "Proj.SimRadio", "endpoint": "rf", "options": "a=1"}],
-        "models": [{"name": "imu", "class": "Sse::RegisterMapI2c", "endpoint": "bus", "kind": "I2C",
+        "models": [{"name": "imu", "class": "Wsts::RegisterMapI2c", "endpoint": "bus", "kind": "I2C",
                     "address": "0x68", "params": {"0x75": 104}}],
         "control": {"enabled": False, "base_id": "0x7000"},
         "main": {"generate": True, "start": "go()", "stop": "halt()"},
@@ -43,7 +43,7 @@ def test_control_can_be_disabled(control):
     ({"deployment": "D", "tick_hz": "fast"}, "not a number"),
 ])
 def test_manifest_errors_say_what_is_wrong(data, message):
-    with pytest.raises(SseError, match=message):
+    with pytest.raises(WstsError, match=message):
         parse_manifest(data)
 
 
@@ -52,7 +52,7 @@ def test_default_catalog_covers_the_standard_drivers():
     replaced = {component for s in catalog.values() for component in s.replaces}
     assert {"Drv.LinuxI2cDriver", "Drv.LinuxSpiDriver", "Drv.LinuxGpioDriver", "Drv.PosixUartDriver",
             "Svc.LinuxTimer", "VxWorksDrv.VxWorksUartDriver", "VxWorksSvc.VxWatchDogTimer"} <= replaced
-    tick = catalog["Sse.SimTick"]
+    tick = catalog["Wsts.SimTick"]
     assert "mode=thread" in tick.options_when_replacing("VxWorksSvc.VxWatchDogTimer")
     assert tick.options_when_replacing("Svc.LinuxTimer") == "mode=block"
-    assert tick.cpp_name == "::Sse::SimTick"
+    assert tick.cpp_name == "::Wsts::SimTick"

@@ -1,7 +1,7 @@
 # Fidelity
 
 A simulated deployment is the flight software with specific things replaced. This page
-says what those are. Each generated deployment also carries its own `sse-report.md` with
+says what those are. Each generated deployment also carries its own `wsts-report.md` with
 the concrete list for that deployment.
 
 ## What is the same as flight
@@ -23,7 +23,7 @@ the concrete list for that deployment.
 | Time | Host wall clock, optionally scaled | Not cycle-exact. A loaded host stretches ticks; the tick source does not burst to catch up |
 | Interrupts | Delivered on ordinary threads | Code that relies on interrupt context (no blocking, masking) is not checked |
 | Word size, byte order | Host's (64-bit little-endian on x86-64) | Code that depends on the target's representation behaves differently |
-| Dictionary | Entries of replaced drivers are missing unless a mirror surrogate is used; SSE entries are added | Ground procedures that use a replaced driver's telemetry need a mirror surrogate |
+| Dictionary | Entries of replaced drivers are missing unless a mirror surrogate is used; WSTS entries are added | Ground procedures that use a replaced driver's telemetry need a mirror surrogate |
 | File system | Host paths | Target-specific paths need to exist or be changed until path remapping is built |
 
 ## Choosing a seam

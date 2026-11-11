@@ -4,35 +4,35 @@
 
 | Command | Purpose |
 |---|---|
-| `fprime-sse generate <sse.yaml> [--project DIR] [--output DIR] [--check] [--json]` | Create or refresh a simulated deployment. `--check` writes nothing and exits 1 if the output is out of date |
-| `fprime-sse run [DIR] [--gds] [--scenario F] [--scenario-mode stimulus\|responses] [--record F] [--duration S] [--bridge ADDR] [--files-dir DIR] [--json]` | Run a built simulated deployment, optionally with a headless GDS. Logs go to `DIR/sse-logs` |
-| `fprime-sse report [DIR] [--json]` | Print a generated deployment's fidelity report |
-| `fprime-sse scaffold <Component> --output DIR [--project DIR] [--name NAME]` | Start a mirror surrogate for a flight component |
+| `fprime-wsts generate <wsts.yaml> [--project DIR] [--output DIR] [--check] [--json]` | Create or refresh a simulated deployment. `--check` writes nothing and exits 1 if the output is out of date |
+| `fprime-wsts run [DIR] [--gds] [--scenario F] [--scenario-mode stimulus\|responses] [--record F] [--duration S] [--bridge ADDR] [--files-dir DIR] [--json]` | Run a built simulated deployment, optionally with a headless GDS. Logs go to `DIR/wsts-logs` |
+| `fprime-wsts report [DIR] [--json]` | Print a generated deployment's fidelity report |
+| `fprime-wsts scaffold <Component> --output DIR [--project DIR] [--name NAME]` | Start a mirror surrogate for a flight component |
 
-Errors the user can fix are printed as `fprime-sse: error: …` with exit code 2.
+Errors the user can fix are printed as `fprime-wsts: error: …` with exit code 2.
 
-## Manifest (`sse.yaml`)
+## Manifest (`wsts.yaml`)
 
 Paths are relative to the project root. Only `deployment` is required.
 
 ```yaml
 deployment: LinuxDemo            # deployment directory (the one containing Top/)
 topology: LinuxDemo.LinuxDemo    # only needed if Top/ defines more than one topology
-output: sse/LinuxDemo            # default: sse/<deployment>
+output: wsts/LinuxDemo            # default: wsts/<deployment>
 
 keep: [comDriver]                # instances never substituted
 substitute:                      # explicit choices; override the catalog
   - instance: radioUart          # an instance name ...
-    with: Sse.SimByteStream
+    with: Wsts.SimByteStream
     endpoint: radio              # bus endpoint name; default is the instance name
-    options: "chunk=256"         # passed to the surrogate's sseBind()
+    options: "chunk=256"         # passed to the surrogate's wstsBind()
   - component: Proj.FpgaDriver   # ... or every instance of a component
     with: Proj.SimFpga
 
 models:                          # in-process C++ device models
   - name: imu                    # used by model_set / MODEL_SET
-    class: Sse::RegisterMapI2c
-    header: Sse/Core/Models.hpp  # default
+    class: Wsts::RegisterMapI2c
+    header: Wsts/Core/Models.hpp  # default
     endpoint: imuBus
     kind: i2c                    # bytestream | i2c | spi | gpio | none
     address: 0x68                # i2c only
@@ -44,7 +44,7 @@ control:                         # or `control: none`
 bridge: tcp:50100                # tcp:<port> | tcp:<host>:<port> | unix:<path> | none
 tick_hz: 10                      # only used when no tick source was substituted
 
-catalogs: [sim/sse-catalog.yaml] # project surrogate catalogs, searched before the built-in one
+catalogs: [sim/wsts-catalog.yaml] # project surrogate catalogs, searched before the built-in one
 sources:
   fpp: [...]                     # topology model files (default: Top/CMakeLists.txt AUTOCODER_INPUTS)
   topology: [...]                # hand-written topology sources (default: Top/CMakeLists.txt SOURCES)
@@ -61,14 +61,14 @@ cmake:
   depends: [Proj_Math]               # extra link dependencies of the topology module
 libraries: {keep: [...], drop: [...]}
 fpp_exclude: ["*/Experimental/*"]    # FPP files to leave out of the analysis
-defines: [MY_SIM_FLAG]               # compile definitions, in addition to SSE_SIM=1
+defines: [MY_SIM_FLAG]               # compile definitions, in addition to WSTS_SIM=1
 ```
 
 ## Surrogate catalog
 
 ```yaml
 surrogates:
-  - surrogate: Sse.SimTick
+  - surrogate: Wsts.SimTick
     replaces: [Svc.LinuxTimer, VxWorksSvc.VxWatchDogTimer]
     options: "mode=block"
     options_for: {VxWorksSvc.VxWatchDogTimer: "mode=thread tick_hz=60"}
@@ -76,19 +76,19 @@ surrogates:
       ...
 ```
 
-Built-in surrogates (`catalog/sse-catalog.yaml`):
+Built-in surrogates (`catalog/wsts-catalog.yaml`):
 
-| Surrogate | Interface | Replaces | `sseBind` options |
+| Surrogate | Interface | Replaces | `wstsBind` options |
 |---|---|---|---|
-| `Sse.SimByteStream` | `Drv.ByteStreamDriver` + `allocate`, `deallocate`, `run` | `Drv.PosixUartDriver`, `Drv.LinuxUartDriver`, `VxWorksDrv.VxWorksUartDriver` | `chunk=<bytes>` largest buffer per `recv` (default 1024) |
-| `Sse.SimI2c` | `Drv.I2c` | `Drv.LinuxI2cDriver` | |
-| `Sse.SimSpi` | `Drv.Spi` | `Drv.LinuxSpiDriver` | |
-| `Sse.SimGpio` | `Drv.Gpio` (one pin per instance) | `Drv.LinuxGpioDriver` | |
-| `Sse.SimTick` | `Drv.Tick` | `Svc.LinuxTimer`, `VxWorksSvc.VxWatchDogTimer` | `mode=block\|thread`, `tick_hz=<n>` |
+| `Wsts.SimByteStream` | `Drv.ByteStreamDriver` + `allocate`, `deallocate`, `run` | `Drv.PosixUartDriver`, `Drv.LinuxUartDriver`, `VxWorksDrv.VxWorksUartDriver` | `chunk=<bytes>` largest buffer per `recv` (default 1024) |
+| `Wsts.SimI2c` | `Drv.I2c` | `Drv.LinuxI2cDriver` | |
+| `Wsts.SimSpi` | `Drv.Spi` | `Drv.LinuxSpiDriver` | |
+| `Wsts.SimGpio` | `Drv.Gpio` (one pin per instance) | `Drv.LinuxGpioDriver` | |
+| `Wsts.SimTick` | `Drv.Tick` | `Svc.LinuxTimer`, `VxWorksSvc.VxWatchDogTimer` | `mode=block\|thread`, `tick_hz=<n>` |
 
 ## Actions
 
-Used identically by the bridge, scenario files and (through its commands) `Sse.SimControl`.
+Used identically by the bridge, scenario files and (through its commands) `Wsts.SimControl`.
 
 | `op` | Fields | Effect |
 |---|---|---|
@@ -105,7 +105,7 @@ Used identically by the bridge, scenario files and (through its commands) `Sse.S
 | `scenario_start` / `scenario_stop` | | |
 | `log` | `text` | Marker event |
 
-Relative `path` values resolve against the directory in `SSE_DIR` (`fprime-sse run` sets it
+Relative `path` values resolve against the directory in `WSTS_DIR` (`fprime-wsts run` sets it
 to the log directory, or `--files-dir`).
 
 ### Faults
@@ -147,18 +147,18 @@ Newline-delimited JSON. A client sends `{"id": n, "op": …}` and receives
 Byte stream and GPIO models need no `attach`: subscribe, watch `bs_tx` / `gpio_out`
 records, and answer with `inject_bytes` / `gpio_force`.
 
-`fprime_sse.bridge.SseBridge` wraps all of this.
+`fprime_wsts.bridge.WstsBridge` wraps all of this.
 
 ## Environment variables read by a simulated deployment
 
 | Variable | Meaning |
 |---|---|
-| `SSE_BRIDGE` | Bridge address, overriding the manifest |
-| `SSE_SCENARIO`, `SSE_SCENARIO_MODE` | Scenario to load and start at start-up |
-| `SSE_RECORD` | File to record to from start-up |
-| `SSE_DIR` | Base directory for relative scenario and recording paths |
+| `WSTS_BRIDGE` | Bridge address, overriding the manifest |
+| `WSTS_SCENARIO`, `WSTS_SCENARIO_MODE` | Scenario to load and start at start-up |
+| `WSTS_RECORD` | File to record to from start-up |
+| `WSTS_DIR` | Base directory for relative scenario and recording paths |
 
-## `Sse.SimControl`
+## `Wsts.SimControl`
 
 Commands mirror the actions (see the README). Events: `SimPaused`, `SimResumed`,
 `SimRateSet`, `FaultArmed`, `FaultTriggered` (first application of a fault only),
@@ -169,5 +169,5 @@ Commands mirror the actions (see the README). Events: `SimPaused`, `SimResumed`,
 `ScenarioStep`, `ScenarioSteps`, `Recording`, `BusTransactions`, `BusBytes`, `BusErrors`.
 
 Command string arguments are limited by the project's `FW_CMD_STRING_MAX_SIZE` (40
-characters by default). Name scenario files relative to `SSE_DIR`, and send long payloads
+characters by default). Name scenario files relative to `WSTS_DIR`, and send long payloads
 through the bridge or a scenario file.

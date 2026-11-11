@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from fprime_sse.bridge import BridgeError, SseBridge
+from fprime_wsts.bridge import BridgeError, WstsBridge
 
 
 class FakeSim:
@@ -49,7 +49,7 @@ def sim():
 
 @pytest.fixture
 def bridge(sim):
-    with SseBridge(f"tcp:{sim.port}", request_timeout=2) as client:
+    with WstsBridge(f"tcp:{sim.port}", request_timeout=2) as client:
         yield client
 
 
@@ -95,6 +95,6 @@ def test_serving_an_i2c_device(sim, bridge):
 
 def test_unreachable_bridge():
     with pytest.raises(BridgeError, match="cannot connect"):
-        SseBridge("tcp:1", connect_timeout=0.3)
+        WstsBridge("tcp:1", connect_timeout=0.3)
     with pytest.raises(BridgeError, match="unrecognized"):
-        SseBridge("carrier-pigeon", connect_timeout=0.3)
+        WstsBridge("carrier-pigeon", connect_timeout=0.3)

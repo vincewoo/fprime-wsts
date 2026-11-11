@@ -1,0 +1,55 @@
+# WSTS surrogate catalog.
+#
+# Each entry names a surrogate component and the flight components it can stand in for.
+# `fprime-wsts generate` substitutes automatically from `replaces`; anything else is chosen
+# in the deployment manifest. Projects add their own catalogs with `catalogs:` there.
+#
+#   surrogate    FPP name of the surrogate component
+#   replaces     FPP names of components it replaces without being asked
+#   options      default options passed to the surrogate's wstsBind()
+#   options_for  per-replaced-component options
+#   compat       C++ made visible to hand-written topology code, for declarations that
+#                lived in the replaced driver's header outside its class
+surrogates:
+  - surrogate: Wsts.SimByteStream
+    replaces:
+      - Drv.PosixUartDriver
+      - Drv.LinuxUartDriver
+      - VxWorksDrv.VxWorksUartDriver
+
+  - surrogate: Wsts.SimI2c
+    replaces:
+      - Drv.LinuxI2cDriver
+
+  - surrogate: Wsts.SimSpi
+    replaces:
+      - Drv.LinuxSpiDriver
+    compat: |
+      namespace Drv {
+      enum SpiFrequency {
+          SPI_FREQUENCY_1MHZ = 1000000UL,
+          SPI_FREQUENCY_5MHZ = 5000000UL,
+          SPI_FREQUENCY_10MHZ = 10000000UL,
+          SPI_FREQUENCY_15MHZ = 15000000UL,
+          SPI_FREQUENCY_20MHZ = 20000000UL,
+      };
+      enum SpiMode {
+          SPI_MODE_CPOL_LOW_CPHA_LOW,
+          SPI_MODE_CPOL_LOW_CPHA_HIGH,
+          SPI_MODE_CPOL_HIGH_CPHA_LOW,
+          SPI_MODE_CPOL_HIGH_CPHA_HIGH,
+      };
+      }  // namespace Drv
+
+  - surrogate: Wsts.SimGpio
+    replaces:
+      - Drv.LinuxGpioDriver
+
+  - surrogate: Wsts.SimTick
+    replaces:
+      - Svc.LinuxTimer
+      - VxWorksSvc.VxWatchDogTimer
+    options: "mode=block"
+    options_for:
+      # A watchdog timer fires from interrupt context: startTimer() returns immediately
+      VxWorksSvc.VxWatchDogTimer: "mode=thread tick_hz=60"

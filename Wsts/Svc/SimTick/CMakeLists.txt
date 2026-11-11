@@ -1,0 +1,10 @@
+register_fprime_library(
+    AUTOCODER_INPUTS
+        "${CMAKE_CURRENT_LIST_DIR}/SimTick.fpp"
+    SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/SimTick.cpp"
+    HEADERS
+        "${CMAKE_CURRENT_LIST_DIR}/SimTick.hpp"
+    DEPENDS
+        Wsts_Core
+)

@@ -2,11 +2,11 @@ from pathlib import Path
 
 import pytest
 
-from fprime_sse import fpp
-from fprime_sse.fpp import SseError
-from fprime_sse.generate import (PlannedSubstitution, _mask, module_dir, module_name, patch_instance, patch_packets,
+from fprime_wsts import fpp
+from fprime_wsts.fpp import WstsError
+from fprime_wsts.generate import (PlannedSubstitution, _mask, module_dir, module_name, patch_instance, patch_packets,
                                  patch_topology, read_registration)
-from fprime_sse.manifest import Surrogate
+from fprime_wsts.manifest import Surrogate
 
 INSTANCES = '''module Demo {
 
@@ -29,8 +29,8 @@ def substitution(line, col, has_queue, kind="passive"):
     instance = fpp.Instance("Demo.uart", "Drv.Uart", 0x100, 0x1FF, Path("i.fpp"), line, 3, line, col, "Drv.Uart",
                             has_queue=has_queue)
     original = fpp.Component("Drv.Uart", "active", Path("u.fpp"))
-    surrogate = fpp.Component("Sse.SimByteStream", kind, Path("s.fpp"))
-    return PlannedSubstitution(instance, original, surrogate, Surrogate("Sse.SimByteStream"), "uart", "", "catalog")
+    surrogate = fpp.Component("Wsts.SimByteStream", kind, Path("s.fpp"))
+    return PlannedSubstitution(instance, original, surrogate, Surrogate("Wsts.SimByteStream"), "uart", "", "catalog")
 
 
 def test_mask_blanks_comments_and_strings_but_keeps_length():
@@ -42,7 +42,7 @@ def test_mask_blanks_comments_and_strings_but_keeps_length():
 
 def test_instance_is_retyped_and_loses_task_attributes():
     patched = patch_instance(INSTANCES, substitution(4, 18, has_queue=True))
-    assert "instance uart: Sse.SimByteStream base id 0x100" in patched
+    assert "instance uart: Wsts.SimByteStream base id 0x100" in patched
     definition = patched.split("instance uart")[1].split("instance other")[0]
     assert "queue size" not in definition and "stack size" not in definition and "priority" not in definition
     assert 'uart.open("/dev/ttyS0")' in definition, "phase code is kept"
@@ -56,7 +56,7 @@ def test_active_surrogate_keeps_task_attributes():
 
 
 def test_patch_refuses_when_source_does_not_match_the_model():
-    with pytest.raises(SseError, match="expected 'Drv.Uart'"):
+    with pytest.raises(WstsError, match="expected 'Drv.Uart'"):
         patch_instance(INSTANCES, substitution(4, 3, has_queue=False))
 
 
@@ -76,24 +76,24 @@ TOPOLOGY = '''module Demo {
 
 def test_topology_gains_instances_inside_its_body():
     topology = fpp.Topology("Demo.Demo", Path("t.fpp"), 3, 3)
-    patched = patch_topology(TOPOLOGY, topology, ["sseSetup", "sseControl"])
+    patched = patch_topology(TOPOLOGY, topology, ["wstsSetup", "wstsControl"])
     body = patched.split("deployment topology Demo {")[1]
-    assert body.index("instance sseSetup") < body.index("instance uart")
-    assert "instance sseControl" in body
+    assert body.index("instance wstsSetup") < body.index("instance uart")
+    assert "instance wstsControl" in body
     assert "# topology Fake { }" in patched
 
 
 def test_packets_extend_an_existing_omit_list():
-    patched = patch_packets(TOPOLOGY, 5, 5, ["Demo.sseControl.SimTicks"])
+    patched = patch_packets(TOPOLOGY, 5, 5, ["Demo.wstsControl.SimTicks"])
     omit = patched.split("} omit {")[1]
-    assert "Demo.sseControl.SimTicks" in omit and "uart.Other" in omit
+    assert "Demo.wstsControl.SimTicks" in omit and "uart.Other" in omit
     assert patched.count("omit") == 1
 
 
 def test_packets_gain_an_omit_list_when_there_is_none():
     text = TOPOLOGY.replace(" omit {\n      uart.Other\n    }", "")
-    patched = patch_packets(text, 5, 5, ["Demo.sseControl.SimTicks"])
-    assert "} omit {" in patched and "Demo.sseControl.SimTicks" in patched
+    patched = patch_packets(text, 5, 5, ["Demo.wstsControl.SimTicks"])
+    assert "} omit {" in patched and "Demo.wstsControl.SimTicks" in patched
 
 
 def test_read_registration(tmp_path):

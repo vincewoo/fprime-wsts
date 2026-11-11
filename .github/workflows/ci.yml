@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install F Prime tools and fprime-sse
+      - name: Install F Prime tools and fprime-wsts
         run: pip install -r lib/fprime/requirements.txt ./python pytest
 
       - name: Python tests (manifest, patching, bridge client, generator)
@@ -28,43 +28,43 @@ jobs:
 
       - name: Generated examples are up to date
         run: |
-          fprime-sse generate examples/linux-demo/LinuxDemo/sse.yaml --check
-          fprime-sse generate examples/vx-demo/VxDemo/sse.yaml --check
+          fprime-wsts generate examples/linux-demo/LinuxDemo/wsts.yaml --check
+          fprime-wsts generate examples/vx-demo/VxDemo/wsts.yaml --check
 
-      - name: C++ unit tests for the SSE core
+      - name: C++ unit tests for the WSTS core
         run: |
           fprime-util generate --ut
-          cd Sse/Core && fprime-util check -j"$(nproc)"
+          cd Wsts/Core && fprime-util check -j"$(nproc)"
 
       - name: Build the simulated LinuxDemo
-        working-directory: examples/linux-demo/sse/LinuxDemo
+        working-directory: examples/linux-demo/wsts/LinuxDemo
         run: |
           fprime-util generate
           fprime-util build -j"$(nproc)"
 
       - name: End-to-end tests, LinuxDemo
         run: |
-          D=examples/linux-demo/sse/LinuxDemo
-          pytest tests/e2e/test_linux_demo.py -p fprime_sse.pytest_plugin \
-            --sse-deployment "$D" --sse-gds \
+          D=examples/linux-demo/wsts/LinuxDemo
+          pytest tests/e2e/test_linux_demo.py -p fprime_wsts.pytest_plugin \
+            --wsts-deployment "$D" --wsts-gds \
             --dictionary "$D/build-artifacts/Linux/LinuxDemo/dict/LinuxDemoTopologyDictionary.json"
 
       - name: Build the simulated VxDemo (VxWorks deployment, no VxWorks toolchain)
-        working-directory: examples/vx-demo/sse/VxDemo
+        working-directory: examples/vx-demo/wsts/VxDemo
         run: |
           fprime-util generate
           fprime-util build -j"$(nproc)"
 
       - name: End-to-end tests, VxDemo
         run: |
-          D=examples/vx-demo/sse/VxDemo
-          pytest tests/e2e/test_vx_demo.py -p fprime_sse.pytest_plugin \
-            --sse-deployment "$D" --sse-gds \
+          D=examples/vx-demo/wsts/VxDemo
+          pytest tests/e2e/test_vx_demo.py -p fprime_wsts.pytest_plugin \
+            --wsts-deployment "$D" --wsts-gds \
             --dictionary "$D/build-artifacts/Linux/VxDemo/dict/VxDemoTopologyDictionary.json"
 
       - name: Keep simulation logs when something fails
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: sse-logs
-          path: examples/*/sse/*/sse-logs
+          name: wsts-logs
+          path: examples/*/wsts/*/wsts-logs

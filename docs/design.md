@@ -27,38 +27,38 @@ The seam is chosen per instance. The default is S1 from the surrogate catalog.
 
 ## Runtime
 
-**Bus** (`Sse/Core/Bus`). An in-process backplane with named endpoints. Surrogates call it
+**Bus** (`Wsts/Core/Bus`). An in-process backplane with named endpoints. Surrogates call it
 from their port handlers; device models attach to it. Every transaction passes through the
 fault table and is reported to the recorder and bridge. Because faults and recording sit
 on the bus, they work the same whether a model is C++ in the process, Python on the other
 end of the bridge, or absent.
 
-**Control core** (`Sse/Core/Control`). Owns run state, the tick count, the scenario player
+**Control core** (`Wsts/Core/Control`). Owns run state, the tick count, the scenario player
 and the recorder. It executes *actions*: small flat JSON objects such as
 `{"op": "fault_set", "endpoint": "imuBus", "kind": "error"}`. Three front ends produce
 actions, so they can all do the same things:
 
-- `Sse.SimControl`, an F´ component with commands, events and telemetry;
-- the socket bridge (`Sse/Core/Bridge`), newline-delimited JSON over TCP or a Unix socket;
+- `Wsts.SimControl`, an F´ component with commands, events and telemetry;
+- the socket bridge (`Wsts/Core/Bridge`), newline-delimited JSON over TCP or a Unix socket;
 - scenario files, one action per line with a tick.
 
-**Surrogates** (`Sse/Drv`, `Sse/Svc`). Passive F´ components. Each is bound to one bus
-endpoint by generated code calling `sseBind(endpoint, options)`. The standard ones also
+**Surrogates** (`Wsts/Drv`, `Wsts/Svc`). Passive F´ components. Each is bound to one bus
+endpoint by generated code calling `wstsBind(endpoint, options)`. The standard ones also
 accept the calls flight topology code makes on the drivers they replace (`open`, `start`,
 `startTimer`, ...), so that code compiles unchanged.
 
-**Models** (`Sse/Core/Models`). Plain C++ classes implementing `I2cDevice`, `SpiDevice`,
+**Models** (`Wsts/Core/Models`). Plain C++ classes implementing `I2cDevice`, `SpiDevice`,
 `ByteStreamDevice` or `GpioDevice`. They are not F´ components, so they add nothing to the
 flight dictionary or connection graph.
 
-**Time.** `Sse.SimTick` replaces the deployment's tick source. Each tick it advances the
+**Time.** `Wsts.SimTick` replaces the deployment's tick source. Each tick it advances the
 control core (fault expiry, scenario steps, model ticks) and then cycles the flight rate
 groups. Ticks are paced by the wall clock divided by the time scale. Pausing stops the
 ticks, so the flight rate groups stop too.
 
 ## The transform
 
-`fprime-sse generate <manifest>` does the following.
+`fprime-wsts generate <manifest>` does the following.
 
 1. **Analyse.** FPP files are found under the framework, the project's libraries, the
    project and this toolkit, then `fpp-locate-defs`, `fpp-depend` and `fpp-to-json` produce
@@ -73,7 +73,7 @@ ticks, so the flight rate groups stop too.
 3. **Patch.** The topology FPP files are copied and edited at positions taken from the FPP
    AST: the component name in each substituted instance definition is replaced (queue and
    task attributes are removed when a passive surrogate replaces an active component), and
-   the SSE instances are added to the topology. Base IDs do not move. The result is run
+   the WSTS instances are added to the topology. Base IDs do not move. The result is run
    through `fpp-check`.
 4. **Emit** an overlay project (below) and the fidelity report.
 
@@ -82,13 +82,13 @@ ticks, so the flight rate groups stop too.
 ```
 <output>/
   settings.ini, CMakeLists.txt     host toolchain; adds only the project modules the topology needs
-  <Deployment>/CMakeLists.txt      reuses the flight Main.cpp, or SseMain.cpp when there is no main()
+  <Deployment>/CMakeLists.txt      reuses the flight Main.cpp, or WstsMain.cpp when there is no main()
   <Deployment>/Top/
     *.fpp                          patched copies of the topology model
-    sse_instances.fpp              the sseSetup and sseControl instances
-    SseSetup.cpp                   binds surrogates, builds and attaches models, starts the runtime
-    SseCompat.hpp                  force-included: aliases flight driver classes to their surrogates
-  sse-report.json, sse-report.md   fidelity report
+    wsts_instances.fpp              the wstsSetup and wstsControl instances
+    WstsSetup.cpp                   binds surrogates, builds and attaches models, starts the runtime
+    WstsCompat.hpp                  force-included: aliases flight driver classes to their surrogates
+  wsts-report.json, wsts-report.md   fidelity report
 ```
 
 Three things make it work without touching the flight project:
@@ -96,13 +96,13 @@ Three things make it work without touching the flight project:
 - **Same names.** The overlay keeps the deployment's FPP module, topology name and
   directory name, so the generated `…TopologyAc.hpp`, the C++ namespace and the dictionary
   names are what the hand-written code and ground configuration expect.
-- **Type aliases.** `SseCompat.hpp` declares, for example,
-  `namespace Drv { using LinuxGpioDriver = ::Sse::SimGpio; }`. Flight code such as
+- **Type aliases.** `WstsCompat.hpp` declares, for example,
+  `namespace Drv { using LinuxGpioDriver = ::Wsts::SimGpio; }`. Flight code such as
   `pin.open("/dev/gpiochip0", 17, Drv::LinuxGpioDriver::GPIO_OUTPUT)` then compiles against
   the surrogate, which provides the same enumerators and an `open` that accepts them.
-- **An anchor instance.** `sseSetup` is an instance of `Sse.SimSetup`, a component with no
+- **An anchor instance.** `wstsSetup` is an instance of `Wsts.SimSetup`, a component with no
   ports and no dictionary entries. The generator attaches topology phase code to it, which
-  is how `SseGenerated::setup()` runs inside the autocoded `configComponents()` without an
+  is how `WstsGenerated::setup()` runs inside the autocoded `configComponents()` without an
   edit to the flight topology code.
 
 Project modules are added by path from the flight project (`add_fprime_subdirectory`), which
@@ -110,12 +110,12 @@ F´ allows because the flight project root is listed as a library location. Libr
 simulated topology no longer references are dropped; build options that select the flight
 toolchain or platform are not carried over. Both are listed in the report.
 
-### SSE control wiring
+### WSTS control wiring
 
-`sseControl` (`Sse.SimControl`) is given a base ID above every ID the flight topology
+`wstsControl` (`Wsts.SimControl`) is given a base ID above every ID the flight topology
 uses, so flight IDs are unchanged and the simulated dictionary is the flight dictionary
-plus the SSE entries. The topology's own pattern specifiers connect its command, event,
-telemetry and time ports. If the topology defines telemetry packets, the SSE channels are
+plus the WSTS entries. The topology's own pattern specifiers connect its command, event,
+telemetry and time ports. If the topology defines telemetry packets, the WSTS channels are
 added to the packet set's `omit` list. It is an active component with its own thread and
 uses no flight rate-group port: the simulation tick notifies it.
 
@@ -125,7 +125,7 @@ uses no flight rate-group port: the simulation tick notifies it.
 
 A general-purpose surrogate has no events or telemetry of its own, so when it replaces a
 driver that does, those entries disappear from the simulated dictionary. The report lists
-them. Where that matters, use a *mirror surrogate*: `fprime-sse scaffold <Component>`
+them. Where that matters, use a *mirror surrogate*: `fprime-wsts scaffold <Component>`
 copies the component's model under a new name, giving a surrogate with identical ports
 and dictionary entries.
 

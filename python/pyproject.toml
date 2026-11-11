@@ -3,17 +3,17 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "fprime-sse"
+name = "fprime-wsts"
 version = "0.1.0"
-description = "Software simulation environment toolkit for F Prime deployments"
+description = "Workstation Test Set (WSTS) toolkit for F Prime deployments"
 requires-python = ">=3.9"
 dependencies = ["pyyaml"]
 
 [project.scripts]
-fprime-sse = "fprime_sse.cli:main"
+fprime-wsts = "fprime_wsts.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["fprime_sse*"]
+include = ["fprime_wsts*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

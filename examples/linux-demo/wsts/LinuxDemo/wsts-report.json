@@ -1,0 +1,250 @@
+{
+  "generator": "fprime-wsts",
+  "topology": "LinuxDemo.LinuxDemo",
+  "flight_toolchain": "native",
+  "sim_toolchain": "native (Linux)",
+  "time": {
+    "mode": "real-time",
+    "tick_source": "LinuxDemo.linuxTimer"
+  },
+  "substitutions": [
+    {
+      "instance": "LinuxDemo.linuxTimer",
+      "flight_component": "Svc.LinuxTimer",
+      "surrogate": "Wsts.SimTick",
+      "seam": "S1 topology",
+      "chosen_by": "catalog",
+      "endpoint": "linuxTimer",
+      "options": "mode=block",
+      "base_id": 268566528,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [],
+        "channels": [],
+        "params": []
+      }
+    },
+    {
+      "instance": "LinuxDemo.imuBus",
+      "flight_component": "Drv.LinuxI2cDriver",
+      "surrogate": "Wsts.SimI2c",
+      "seam": "S1 topology",
+      "chosen_by": "catalog",
+      "endpoint": "imuBus",
+      "options": "",
+      "base_id": 268574720,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [],
+        "channels": [],
+        "params": []
+      }
+    },
+    {
+      "instance": "LinuxDemo.sensorUart",
+      "flight_component": "Drv.PosixUartDriver",
+      "surrogate": "Wsts.SimByteStream",
+      "seam": "S1 topology",
+      "chosen_by": "catalog",
+      "endpoint": "sensorUart",
+      "options": "",
+      "base_id": 268578816,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [
+          "BufferTooSmall",
+          "ConfigError",
+          "NoBuffers",
+          "OpenError",
+          "PortOpened",
+          "ReadError",
+          "WriteError"
+        ],
+        "channels": [
+          "BytesRecv",
+          "BytesSent"
+        ],
+        "params": []
+      }
+    },
+    {
+      "instance": "LinuxDemo.heaterPin",
+      "flight_component": "Drv.LinuxGpioDriver",
+      "surrogate": "Wsts.SimGpio",
+      "seam": "S1 topology",
+      "chosen_by": "catalog",
+      "endpoint": "heaterPin",
+      "options": "",
+      "base_id": 268582912,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [
+          "InterruptReadError",
+          "InterruptTimeError",
+          "OpenChip",
+          "OpenChipError",
+          "OpenPinError",
+          "PollingError"
+        ],
+        "channels": [],
+        "params": []
+      }
+    },
+    {
+      "instance": "LinuxDemo.switchPin",
+      "flight_component": "Drv.LinuxGpioDriver",
+      "surrogate": "Wsts.SimGpio",
+      "seam": "S1 topology",
+      "chosen_by": "catalog",
+      "endpoint": "switchPin",
+      "options": "",
+      "base_id": 268587008,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [
+          "InterruptReadError",
+          "InterruptTimeError",
+          "OpenChip",
+          "OpenChipError",
+          "OpenPinError",
+          "PollingError"
+        ],
+        "channels": [],
+        "params": []
+      }
+    }
+  ],
+  "kept_hardware_instances": [],
+  "models": [
+    {
+      "name": "imu",
+      "class": "Wsts::RegisterMapI2c",
+      "endpoint": "imuBus",
+      "kind": "i2c",
+      "address": 104
+    },
+    {
+      "name": "tempSensor",
+      "class": "Wsts::ScriptedByteStream",
+      "endpoint": "sensorUart",
+      "kind": "bytestream",
+      "address": 0
+    }
+  ],
+  "control": {
+    "enabled": true,
+    "setup_base_id": 268591104,
+    "control_base_id": 268595200
+  },
+  "bridge": "tcp:50100",
+  "dictionary": {
+    "identical_to_flight": false,
+    "flight_ids_unchanged": true,
+    "removed": {
+      "commands": [],
+      "events": [
+        "LinuxDemo.sensorUart.BufferTooSmall",
+        "LinuxDemo.sensorUart.ConfigError",
+        "LinuxDemo.sensorUart.NoBuffers",
+        "LinuxDemo.sensorUart.OpenError",
+        "LinuxDemo.sensorUart.PortOpened",
+        "LinuxDemo.sensorUart.ReadError",
+        "LinuxDemo.sensorUart.WriteError",
+        "LinuxDemo.heaterPin.InterruptReadError",
+        "LinuxDemo.heaterPin.InterruptTimeError",
+        "LinuxDemo.heaterPin.OpenChip",
+        "LinuxDemo.heaterPin.OpenChipError",
+        "LinuxDemo.heaterPin.OpenPinError",
+        "LinuxDemo.heaterPin.PollingError",
+        "LinuxDemo.switchPin.InterruptReadError",
+        "LinuxDemo.switchPin.InterruptTimeError",
+        "LinuxDemo.switchPin.OpenChip",
+        "LinuxDemo.switchPin.OpenChipError",
+        "LinuxDemo.switchPin.OpenPinError",
+        "LinuxDemo.switchPin.PollingError"
+      ],
+      "channels": [
+        "LinuxDemo.sensorUart.BytesRecv",
+        "LinuxDemo.sensorUart.BytesSent"
+      ],
+      "params": []
+    },
+    "added": {
+      "commands": [
+        "LinuxDemo.wstsControl.FAULT_CLEAR",
+        "LinuxDemo.wstsControl.FAULT_SET",
+        "LinuxDemo.wstsControl.GPIO_FORCE",
+        "LinuxDemo.wstsControl.I2C_REG_SET",
+        "LinuxDemo.wstsControl.INJECT_BYTES",
+        "LinuxDemo.wstsControl.INJECT_TEXT",
+        "LinuxDemo.wstsControl.MODEL_SET",
+        "LinuxDemo.wstsControl.RECORD_START",
+        "LinuxDemo.wstsControl.RECORD_STOP",
+        "LinuxDemo.wstsControl.SCENARIO_LOAD",
+        "LinuxDemo.wstsControl.SCENARIO_START",
+        "LinuxDemo.wstsControl.SCENARIO_STOP",
+        "LinuxDemo.wstsControl.SIM_PAUSE",
+        "LinuxDemo.wstsControl.SIM_RESUME",
+        "LinuxDemo.wstsControl.SIM_SET_RATE"
+      ],
+      "events": [
+        "LinuxDemo.wstsControl.ActionFailed",
+        "LinuxDemo.wstsControl.FaultArmed",
+        "LinuxDemo.wstsControl.FaultExpired",
+        "LinuxDemo.wstsControl.FaultTriggered",
+        "LinuxDemo.wstsControl.FaultsCleared",
+        "LinuxDemo.wstsControl.Injected",
+        "LinuxDemo.wstsControl.RecordStarted",
+        "LinuxDemo.wstsControl.RecordStopped",
+        "LinuxDemo.wstsControl.ScenarioCompleted",
+        "LinuxDemo.wstsControl.ScenarioError",
+        "LinuxDemo.wstsControl.ScenarioLoaded",
+        "LinuxDemo.wstsControl.ScenarioStarted",
+        "LinuxDemo.wstsControl.ScenarioStopped",
+        "LinuxDemo.wstsControl.SimLog",
+        "LinuxDemo.wstsControl.SimPaused",
+        "LinuxDemo.wstsControl.SimRateSet",
+        "LinuxDemo.wstsControl.SimResumed"
+      ],
+      "channels": [
+        "LinuxDemo.wstsControl.ActiveFaults",
+        "LinuxDemo.wstsControl.BusBytes",
+        "LinuxDemo.wstsControl.BusErrors",
+        "LinuxDemo.wstsControl.BusTransactions",
+        "LinuxDemo.wstsControl.FaultHits",
+        "LinuxDemo.wstsControl.Recording",
+        "LinuxDemo.wstsControl.ScenarioRunState",
+        "LinuxDemo.wstsControl.ScenarioStep",
+        "LinuxDemo.wstsControl.ScenarioSteps",
+        "LinuxDemo.wstsControl.SimRunState",
+        "LinuxDemo.wstsControl.SimTicks",
+        "LinuxDemo.wstsControl.SimTimeScale"
+      ]
+    }
+  },
+  "libraries": {
+    "kept": [],
+    "dropped": []
+  },
+  "project_modules": [
+    "Components/HeaterControl",
+    "Components/ImuManager",
+    "Components/SerialSensor"
+  ],
+  "reused_sources": {
+    "topology": [
+      "../../LinuxDemo/Top/LinuxDemoTopology.cpp"
+    ],
+    "main": [
+      "../../LinuxDemo/Main.cpp"
+    ]
+  },
+  "fidelity_notes": [
+    "Operating system: flight OSAL implementations are replaced by the Linux/POSIX ones. Task priorities are advisory and scheduling is not real-time, so timing and preemption order differ from the target.",
+    "Word size and byte order are those of the host; code that depends on the target's differs here.",
+    "Surrogates replace drivers at their port interface: driver internals (register access, interrupt handling, device files) are not exercised.",
+    "Time follows the host wall clock, scaled by the simulation rate. Runs are repeatable to tick granularity, not cycle-exact."
+  ],
+  "warnings": [],
+  "dropped_cmake_options": []
+}

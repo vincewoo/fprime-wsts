@@ -5,8 +5,8 @@ build-artifacts/
 __pycache__/
 *.egg-info/
 .pytest_cache/
-# SSE run output
-sse-logs/
-*.sse-rec.jsonl
+# WSTS run output
+wsts-logs/
+*.wsts-rec.jsonl
 # GDS test API logs
 /logs/
