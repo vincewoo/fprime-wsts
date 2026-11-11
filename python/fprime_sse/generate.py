@@ -845,7 +845,9 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         prefix = topology.module + "." if topology.module else ""
         added_instances = [SETUP_INSTANCE] + ([CONTROL_INSTANCE] if manifest.control_enabled else [])
         if manifest.control_enabled and topology.packet_sets:
-            channels = [f"{prefix}{CONTROL_INSTANCE}.{c}" for c in model.components[CONTROL_COMPONENT].channels]
+            # Named relative to the topology's module, as the topology's own packets are: a
+            # topology that shares its module's name would capture a fully qualified name
+            channels = [f"{CONTROL_INSTANCE}.{c}" for c in model.components[CONTROL_COMPONENT].channels]
             for file, line, col in sorted(topology.packet_sets, key=lambda p: (p[1], p[2]), reverse=True):
                 texts[file] = patch_packets(text_of(file), line, col, channels)
         texts[topology.file] = patch_topology(text_of(topology.file), topology, added_instances)

@@ -118,3 +118,14 @@ def test_refuses_to_overwrite_foreign_directories(tmp_path):
     (tmp_path / "precious.txt").write_text("keep me")
     with pytest.raises(SseError, match="refusing to overwrite"):
         generate(LINUX, manifest_of(LINUX, "LinuxDemo"), tmp_path)
+
+
+def test_upstream_ref_with_telemetry_packets(tmp_path):
+    """Ref defines telemetry packets and its topology shares its module's name"""
+    project = REPO / "lib" / "fprime" / "TestDeploymentsProject"
+    result = generate(project, parse_manifest({"deployment": "Ref", "keep": ["comDriver"]}), tmp_path / "out")
+    assert [s["instance"] for s in result.report["substitutions"]] == ["Ref.linuxTimer"]
+    assert result.report["dictionary"]["removed"] == {"commands": [], "events": [], "channels": [], "params": []}
+    packets = (result.output / "Ref" / "Top" / "RefPackets.fppi").read_text()
+    assert "sseControl.SimTicks" in packets.split("omit {")[1]
+    assert len(result.report["project_modules"]) == 7
