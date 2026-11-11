@@ -1,4 +1,4 @@
-# fprime-wsts
+# F' Workstation Test Set (WSTS)
 
 A Workstation Test Set (WSTS) toolkit for [F´](https://fprime.jpl.nasa.gov/): it runs
 flight software on a developer workstation against simulated hardware. It takes an
