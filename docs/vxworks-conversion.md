@@ -13,6 +13,24 @@ cd examples/vx-demo/wsts/VxDemo && fprime-util generate && fprime-util build
 
 No VxWorks toolchain is involved at any point.
 
+`examples/subtop-demo` is a second worked example, for a deployment assembled from
+subtopologies: its VxWorks UART driver is inside a subtopology of a project library, the
+driver is opened and started by phase code in that subtopology, the project overrides
+configuration of the library and of the framework, and the model has a `system.fpp`. Its
+manifest names no drivers.
+
+```bash
+fprime-wsts generate examples/subtop-demo/SubtopDemo/wsts.yaml
+```
+
+```bash
+cd examples/subtop-demo/wsts/SubtopDemo && fprime-util generate && fprime-util build
+```
+
+```bash
+fprime-wsts run examples/subtop-demo/wsts/SubtopDemo --gds --duration 30 --json
+```
+
 ## What the generator does
 
 | Problem | Handling |
@@ -25,6 +43,12 @@ No VxWorks toolchain is involved at any point.
 | No `main()`: entry points are called from a start-up script | The manifest's `main` section generates a Linux `main()` that calls them |
 | Timer that fires from interrupt context | `Wsts.SimTick` in `mode=thread`: `startTimer…()` returns at once and ticks from its own thread |
 | Topology code naming driver classes and enumerators | Compiled unchanged through the generated type aliases |
+| A driver instance inside a subtopology (of a library, the framework or the project) | Found under its qualified name (`SensorLink.uart`) and retyped in a copy of the subtopology's FPP; the overlay builds the copy in place of the original module, and the rest of the library builds as it is |
+| Phase code of such an instance (`uart.open(…, VxWorksDrv::VxWorksUartDriver::BAUD_19200, …)`, `uart.start(…)`) | Emitted into the deployment's topology module, so it compiles against the surrogate through the same aliases |
+| The flight driver's module in the subtopology module's `DEPENDS` | Removed in the copy's build file when no instance uses the driver any more |
+| Configuration replaced with `CONFIGURATION_OVERRIDES` (framework defaults, subtopology configuration, library configuration) | Applied in the analysis as the build applies them: by file name, last registration wins. Listed in the report |
+| A timer or time source that is a project component waiting for a hardware interrupt | Reported: a warning and a fidelity note say that the flight rate groups may never run, and what to do |
+| FPP tools older or newer than the framework pins; a Java runtime that is too old | Reported before the analysis, and again with the tool's error |
 
 The manifest for VxDemo:
 
@@ -51,6 +75,16 @@ In the generated `main()`, `hostname` and `port` come from `-a` and `-p`.
   `#ifdef TGT_OS_TYPE_VXWORKS`, or with `#ifndef WSTS_SIM` (defined for every simulated
   build). A component that is built around OS calls should be replaced by a surrogate. A
   POSIX-backed VxWorks API shim is planned, not built.
+- **A project component that drives the rate groups or supplies time from hardware.** If
+  it is not platform-restricted it builds on Linux and is kept, but its interrupt never
+  arrives. The generator warns; the remedy is a project surrogate
+  ([A project timer](surrogate-guide.md#a-project-timer)).
+- **Two substituted instances with the same base name** (a `uart` in each of two
+  subtopologies) need an `endpoint:` for one of them
+  ([Instance names](reference.md#instance-names)).
+- **Configuration overrides the generator cannot read**: a `CONFIGURATION_OVERRIDES` list
+  held in a CMake variable, or two configuration modules of one project that override the
+  same file for different builds. Settle these with `fpp_exclude`.
 - **Project code a component depends on that has no FPP model** (plain C++ libraries). The
   generator finds modules through the FPP dependency closure, so list such directories
   under `cmake.extra_subdirectories` in the manifest.

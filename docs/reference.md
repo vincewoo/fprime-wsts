@@ -31,11 +31,11 @@ deployment: LinuxDemo            # deployment directory (the one containing Top/
 topology: LinuxDemo.LinuxDemo    # only needed if Top/ defines more than one topology
 output: wsts/LinuxDemo            # default: wsts/<deployment> in the simulation project, else in the flight project
 
-keep: [comDriver]                # instances never substituted
+keep: [comDriver]                # instances never substituted (see "Instance names")
 substitute:                      # explicit choices; override the catalog
   - instance: radioUart          # an instance name ...
     with: Wsts.SimByteStream
-    endpoint: radio              # bus endpoint name; default is the instance name
+    endpoint: radio              # bus endpoint name; default is the instance's base name
     options: "chunk=256"         # passed to the surrogate's wstsBind()
   - component: Proj.FpgaDriver   # ... or every instance of a component
     with: Proj.SimFpga
@@ -75,6 +75,41 @@ fpp_exclude: ["*/Experimental/*"]    # FPP files to leave out of the analysis
 defines: [MY_SIM_FLAG]               # compile definitions, in addition to WSTS_SIM=1
 ```
 
+### Instance names
+
+A topology's instances include those of the subtopologies it imports, each under its
+qualified FPP name: `SubtopDemo.vxTimer` is defined in the deployment's own module,
+`SensorLink.uart` in the `SensorLink` subtopology of a library. Wherever a manifest names
+an instance (`keep`, `substitute: - instance:`, the ends of a system's `links`) it may give:
+
+- the qualified name, which always works: `SensorLink.uart`;
+- the base name, or any trailing part of the qualified name, when exactly one instance
+  ends with it: `uart`. A name that fits several instances is an error that lists them.
+
+Catalog `replaces` entries match by component, so they apply to subtopology instances
+without being asked. The report, the dictionary differences and `wstsBind` calls use
+qualified names.
+
+A bus endpoint is named after the instance's base name. When two substituted instances
+share one (a `uart` in each of two subtopologies), generation stops and asks for an
+`endpoint:` on one of them:
+
+```yaml
+substitute:
+  - {instance: GpsLink.uart, with: Wsts.SimByteStream, endpoint: gpsUart}
+```
+
+An instance defined outside the deployment's `Top` directory is retyped in a copy of its
+FPP file, and the overlay builds that copy in place of the original module. Nothing in
+the manifest asks for this. See
+[Instances inside subtopologies](design.md#instances-inside-subtopologies).
+
+There are no manifest keys for configuration overrides either: files replaced with
+`register_fprime_config(CONFIGURATION_OVERRIDES …)` are found and applied as the build
+applies them. If the analysis picks the wrong file (two configuration modules of one
+project overriding the same file, for instance), list the unwanted one under
+`fpp_exclude`.
+
 ## System manifest (`wsts-system.yaml`)
 
 For a flight system of several computers. See [systems.md](systems.md).
@@ -92,7 +127,8 @@ elements:                        # required: element name -> deployment manifest
 links:
   - name: hub                    # also the name faults are addressed by
     kind: bytestream             # default
-    a: cdh.hubDriver             # <element>.<instance>: a byte stream driver instance
+    a: cdh.hubDriver             # <element>.<instance>: a byte stream driver instance;
+                                 # qualified names work too (cdh.RadioLink.uart)
     b: payload.hubDriver
 ```
 

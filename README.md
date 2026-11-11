@@ -179,6 +179,14 @@ surrogate catalog; the manifest only says which device models sit behind the bus
 watchdog timer and has no `main()`. `fprime-wsts generate examples/vx-demo/VxDemo/wsts.yaml`
 produces a deployment that builds and runs on Linux with no VxWorks toolchain installed.
 
+`examples/subtop-demo/SubtopDemo` is a VxWorks deployment assembled from subtopologies. Its
+UART driver is not in the deployment at all: it is an instance of a subtopology in a
+project library (`lib/sensor-lib`), opened and started by that subtopology's phase code,
+and the project overrides configuration of the library and of the framework with
+`CONFIGURATION_OVERRIDES`. The generator finds the driver as `SensorLink.uart`, patches a
+copy of the subtopology and builds it in place of the original; the library is not
+touched. See [Instances inside subtopologies](docs/design.md#instances-inside-subtopologies).
+
 `examples/linux-demo-sim` keeps the simulation out of the flight project altogether. Its
 manifest names the flight project (`project: ../linux-demo`), and it holds its own
 surrogate (a mirror of the GPIO driver) and device model (the IMU). The generated
@@ -267,6 +275,12 @@ End-to-end, after building a generated deployment (shown for LinuxDemo):
 D=examples/linux-demo/wsts/LinuxDemo; pytest tests/e2e/test_linux_demo.py -p fprime_wsts.pytest_plugin --wsts-deployment $D --wsts-gds --dictionary $D/build-artifacts/Linux/LinuxDemo/dict/LinuxDemoTopologyDictionary.json
 ```
 
+For SubtopDemo, whose driver is inside a library subtopology:
+
+```bash
+D=examples/subtop-demo/wsts/SubtopDemo; pytest tests/e2e/test_subtop_demo.py -p fprime_wsts.pytest_plugin --wsts-deployment $D --wsts-gds --dictionary $D/build-artifacts/Linux/SubtopDemo/dict/SubtopDemoTopologyDictionary.json
+```
+
 For the two-computer system (the merged dictionary is written when the system starts):
 
 ```bash
@@ -277,8 +291,8 @@ D=examples/hub-demo/wsts/HubDemo; pytest tests/e2e/test_hub_demo.py -p fprime_ws
 
 Built against F´ v4.4.2. Working today: the surrogates and transform above, real-time and
 scaled simulation time, faults, scenarios, record/replay, the bridge, multi-element systems
-with byte stream links, the examples.
+with byte stream links, substituting instances defined inside subtopologies, the examples.
 Designed but not built yet: deterministic stepped time (and with it lockstep across the
 elements of a system), GPIO links between elements, a POSIX-backed VxWorks API shim,
-file-system path remapping, substituting instances defined inside subtopologies. See
+file-system path remapping. See
 [docs/design.md](docs/design.md#roadmap).

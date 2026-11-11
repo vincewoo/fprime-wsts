@@ -12,6 +12,7 @@ Start with [README.md](README.md); the design is in [docs/design.md](docs/design
 | `catalog/wsts-catalog.yaml` | Which flight components each surrogate replaces |
 | `python/fprime_wsts/` | `generate.py` (transform), `fpp.py` (model loading), `manifest.py`, `system.py` (multi-element systems), `bridge.py`, `runner.py`, `scaffold.py`, `cli.py` |
 | `examples/linux-demo/`, `examples/vx-demo/` | Flight projects. `examples/*/wsts/` is **generated**: change the generator or `wsts.yaml`, then regenerate |
+| `examples/subtop-demo/` | Flight project whose UART driver is inside a library subtopology (`lib/sensor-lib`), with `CONFIGURATION_OVERRIDES` and a `system.fpp`. `wsts/SubtopDemo/` is **generated**, including its copy of the subtopology under `SensorLib/` |
 | `examples/hub-demo/` | Flight project with two deployments (`Cdh`, `Payload`) joined by a `GenericHub`; `wsts-system.yaml` makes them one system. `wsts/HubDemo/` is **generated** |
 | `examples/linux-demo-sim/` | Standalone simulation project for `linux-demo`: manifest, project surrogate and model. Its `wsts/` is generated and not checked in |
 | `tests/e2e/` | End-to-end tests against a running simulation and GDS |
@@ -52,6 +53,10 @@ version, unset `JAVA_HOME` so the bundled JRE is used.
   checked-in ones.
 - After changing anything under `Wsts/`, rebuild the example overlays before running e2e tests.
 - FPP keywords (`state`, `reg`, `text`, …) must be escaped with `$` when used as names.
+- Instances of imported subtopologies are named by their own module (`SensorLink.uart`),
+  not the deployment's. A substituted instance outside `Top` is patched in a copy of its
+  module, which the overlay's root `CMakeLists.txt` redirects `add_fprime_subdirectory()`
+  to (`docs/design.md`, "Instances inside subtopologies").
 - Autocoded handlers take enum and string arguments by `const&`.
 - `fprime-util generate` fails if the build directory already exists: after regenerating
   an overlay, run only `fprime-util build`.
