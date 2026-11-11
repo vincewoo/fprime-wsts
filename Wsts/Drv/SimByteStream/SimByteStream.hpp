@@ -8,6 +8,7 @@
 #include <atomic>
 #include <string>
 
+#include <Drv/Ip/IpSocket.hpp>
 #include <Os/Mutex.hpp>
 #include <Os/Task.hpp>
 #include <Wsts/Core/Json.hpp>
@@ -53,9 +54,25 @@ class SimByteStream final : public SimByteStreamComponentBase {
         this->signalReady();
         return true;
     }
-    //! Stand-in for starting the driver's read thread: reception needs no thread here
+    //! Stand-ins for the set-up calls of the socket drivers (TcpClient, TcpServer, Udp)
     template <typename... Args>
-    void start(Args&&...) {}
+    Drv::SocketIpStatus configure(Args&&...) {
+        return Drv::SOCK_SUCCESS;
+    }
+    template <typename... Args>
+    Drv::SocketIpStatus configureSend(Args&&...) {
+        return Drv::SOCK_SUCCESS;
+    }
+    template <typename... Args>
+    Drv::SocketIpStatus configureRecv(Args&&...) {
+        return Drv::SOCK_SUCCESS;
+    }
+    //! Stand-in for starting the driver's read thread: reception needs no thread here. A
+    //! socket driver reports ready once its task has connected, so this does too.
+    template <typename... Args>
+    void start(Args&&...) {
+        this->signalReady();
+    }
     void stop() {}
     void quitReadThread() {}
     Os::Task::Status join() { return Os::Task::OP_OK; }

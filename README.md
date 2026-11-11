@@ -38,6 +38,9 @@ flight components ── Drv.I2c / Spi / Gpio / ByteStream / Tick ports ──�
   socket bridge, and in scenario files.
 - **A Python client and launcher** for tests and agents: `fprime-wsts run`, the `WstsBridge`
   class, and pytest fixtures.
+- **Multi-computer systems**: several deployments run as one simulated system, with the
+  UART or Ethernet links between them carried by WSTS, one GDS on a merged dictionary, and
+  faults on the links. See [docs/systems.md](docs/systems.md).
 - **A fidelity report** for every generated deployment, stating what was replaced and what
   the simulation does not reproduce.
 
@@ -86,6 +89,25 @@ surrogate (a mirror of the GPIO driver) and device model (the IMU). The generate
 deployment goes to `examples/linux-demo-sim/wsts/` and is not checked in. See
 [Where simulation code lives](docs/surrogate-guide.md#where-simulation-code-lives).
 
+`examples/hub-demo` is a flight system of two computers, `Cdh` and `Payload`, joined by an
+F´ `GenericHub` over Ethernet. Its system manifest (`wsts-system.yaml`) names the two
+deployments and the link between them:
+
+```bash
+fprime-wsts generate examples/hub-demo/wsts-system.yaml
+```
+
+```bash
+for e in cdh payload; do (cd examples/hub-demo/wsts/HubDemo/$e && fprime-util generate && fprime-util build); done
+```
+
+```bash
+fprime-wsts run examples/hub-demo/wsts/HubDemo --gds
+```
+
+Both deployments start, the hub link comes up, and one GDS commands either computer with
+the merged dictionary.
+
 ## Driving a simulation
 
 From Python (tests, scripts, agents):
@@ -127,6 +149,7 @@ A recording is itself a scenario: load it again to replay the run.
 |---|---|
 | [docs/design.md](docs/design.md) | Architecture, how the transform works, roadmap |
 | [docs/reference.md](docs/reference.md) | Manifest, catalog, actions, faults, scenario and bridge formats, CLI |
+| [docs/systems.md](docs/systems.md) | Systems of several compute elements: links, ID windows, running and controlling |
 | [docs/fidelity.md](docs/fidelity.md) | What the simulation reproduces and what it does not |
 | [docs/surrogate-guide.md](docs/surrogate-guide.md) | Writing surrogates and device models |
 | [docs/vxworks-conversion.md](docs/vxworks-conversion.md) | Converting a non-Linux deployment |
@@ -148,10 +171,18 @@ End-to-end, after building a generated deployment (shown for LinuxDemo):
 D=examples/linux-demo/wsts/LinuxDemo; pytest tests/e2e/test_linux_demo.py -p fprime_wsts.pytest_plugin --wsts-deployment $D --wsts-gds --dictionary $D/build-artifacts/Linux/LinuxDemo/dict/LinuxDemoTopologyDictionary.json
 ```
 
+For the two-computer system (the merged dictionary is written when the system starts):
+
+```bash
+D=examples/hub-demo/wsts/HubDemo; pytest tests/e2e/test_hub_demo.py -p fprime_wsts.pytest_plugin --wsts-system $D --wsts-gds --dictionary $D/wsts-logs/HubDemoDictionary.json
+```
+
 ## Status
 
 Built against F´ v4.4.2. Working today: the surrogates and transform above, real-time and
-scaled simulation time, faults, scenarios, record/replay, the bridge, the examples.
-Designed but not built yet: deterministic stepped time, a POSIX-backed VxWorks API shim,
+scaled simulation time, faults, scenarios, record/replay, the bridge, multi-element systems
+with byte stream links, the examples.
+Designed but not built yet: deterministic stepped time (and with it lockstep across the
+elements of a system), GPIO links between elements, a POSIX-backed VxWorks API shim,
 file-system path remapping, substituting instances defined inside subtopologies. See
 [docs/design.md](docs/design.md#roadmap).

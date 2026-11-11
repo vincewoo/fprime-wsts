@@ -5,7 +5,9 @@
 | Command | Purpose |
 |---|---|
 | `fprime-wsts generate <wsts.yaml> [--project DIR] [--output DIR] [--check] [--json]` | Create or refresh a simulated deployment. `--project` defaults to the manifest's `project`, else the nearest `settings.ini` above the manifest. `--check` writes nothing and exits 1 if the output is out of date |
+| `fprime-wsts generate <wsts-system.yaml> [--output DIR] [--check] [--json]` | The same for every element of a [system](systems.md), plus `wsts-system.json` |
 | `fprime-wsts run [DIR] [--gds] [--scenario F] [--scenario-mode stimulus\|responses] [--record F] [--duration S] [--bridge ADDR] [--files-dir DIR] [--json]` | Run a built simulated deployment, optionally with a headless GDS. Logs go to `DIR/wsts-logs` |
+| `fprime-wsts run [SYSTEM DIR] [--gds] [--duration S] [--json]` | Run every element of a generated system, with their links, and optionally one GDS on the ground element with the merged dictionary |
 | `fprime-wsts report [DIR] [--json]` | Print a generated deployment's fidelity report |
 | `fprime-wsts scaffold <Component> --output DIR [--project DIR] [--name NAME]` | Start a mirror surrogate for a flight component |
 
@@ -73,6 +75,31 @@ fpp_exclude: ["*/Experimental/*"]    # FPP files to leave out of the analysis
 defines: [MY_SIM_FLAG]               # compile definitions, in addition to WSTS_SIM=1
 ```
 
+## System manifest (`wsts-system.yaml`)
+
+For a flight system of several computers. See [systems.md](systems.md).
+
+```yaml
+system: HubDemo                  # required: a name for the system
+ground: cdh                      # element the GDS connects to; default: the first
+output: wsts/HubDemo             # default: wsts/<system>, relative to this file
+elements:                        # required: element name -> deployment manifest
+  cdh:
+    manifest: Cdh/wsts.yaml      # relative to this file
+    ids: [0x00000000, 0x1FFFFFFF]  # IDs routed to this element; its WSTS instances go inside
+    bridge: tcp:50100            # default: the manifest's, else tcp:50100, tcp:50101, ...
+  payload: Payload/wsts.yaml     # short form
+links:
+  - name: hub                    # also the name faults are addressed by
+    kind: bytestream             # default
+    a: cdh.hubDriver             # <element>.<instance>: a byte stream driver instance
+    b: payload.hubDriver
+```
+
+An instance at the end of a link is substituted even if no catalog entry replaces its
+component (with `Wsts.SimByteStream`, chosen by `link`). It cannot be listed under `keep`,
+and its endpoint cannot also have a `bytestream` model.
+
 ## Surrogate catalog
 
 ```yaml
@@ -89,7 +116,7 @@ Built-in surrogates (`catalog/wsts-catalog.yaml`):
 
 | Surrogate | Interface | Replaces | `wstsBind` options |
 |---|---|---|---|
-| `Wsts.SimByteStream` | `Drv.ByteStreamDriver` + `allocate`, `deallocate`, `run` | `Drv.PosixUartDriver`, `Drv.LinuxUartDriver`, `VxWorksDrv.VxWorksUartDriver` | `chunk=<bytes>` largest buffer per `recv` (default 1024) |
+| `Wsts.SimByteStream` | `Drv.ByteStreamDriver` + `allocate`, `deallocate`, `run` | `Drv.PosixUartDriver`, `Drv.LinuxUartDriver`, `VxWorksDrv.VxWorksUartDriver`; any byte stream driver at the end of a system link (`Drv.TcpClient`, `Drv.TcpServer`, `Drv.Udp`) | `chunk=<bytes>` largest buffer per `recv` (default 1024) |
 | `Wsts.SimI2c` | `Drv.I2c` | `Drv.LinuxI2cDriver` | |
 | `Wsts.SimSpi` | `Drv.Spi` | `Drv.LinuxSpiDriver` | |
 | `Wsts.SimGpio` | `Drv.Gpio` (one pin per instance) | `Drv.LinuxGpioDriver` | |
@@ -138,7 +165,7 @@ One JSON object per line. Blank lines and lines starting with `#` are ignored.
 
 - Action lines have `tick` (relative to scenario start) and the action fields above.
 - Recording lines have `rec` (`bs_tx`, `bs_rx`, `i2c`, `spi`, `gpio_out`, `gpio_in`),
-  `tick`, `endpoint`, `src` (`flight`, `model`, `inject`, `replay`) and the data. They are
+  `tick`, `endpoint`, `src` (`flight`, `model`, `link`, `inject`, `replay`) and the data. They are
   ignored in `stimulus` mode and replayed in `responses` mode.
 
 ## Bridge protocol
@@ -148,7 +175,7 @@ Newline-delimited JSON. A client sends `{"id": n, "op": …}` and receives
 
 | `op` | Purpose |
 |---|---|
-| `status` | Tick, run state, fault and scenario state, bus counters, endpoint names |
+| `status` | Tick, run state, fault and scenario state, bus counters, endpoint names, and `links` / `links_up` (link ends of a system element, and how many are connected) |
 | `subscribe` | Start receiving `{"ev": "rec", …}`, `{"ev": "action", …}` and `{"ev": "sim_event", …}` |
 | `gpio_get` (`endpoint`) | Level flight software last wrote |
 | `attach` (`endpoint`, `kind`: `i2c`\|`spi`, `addr`) | Become the device model. The sim then sends `{"ev": "i2c_req", "rid", "endpoint", "addr", "write", "rlen"}` and waits up to 2 s for `{"op": "reply", "rid", "status", "data"}` |
@@ -156,7 +183,8 @@ Newline-delimited JSON. A client sends `{"id": n, "op": …}` and receives
 Byte stream and GPIO models need no `attach`: subscribe, watch `bs_tx` / `gpio_out`
 records, and answer with `inject_bytes` / `gpio_force`.
 
-`fprime_wsts.bridge.WstsBridge` wraps all of this.
+`fprime_wsts.bridge.WstsBridge` wraps all of this. `fprime_wsts.bridge.WstsSystem` holds one
+`WstsBridge` per element of a system and addresses faults by link name.
 
 ## Environment variables read by a simulated deployment
 
@@ -166,6 +194,7 @@ records, and answer with `inject_bytes` / `gpio_force`.
 | `WSTS_SCENARIO`, `WSTS_SCENARIO_MODE` | Scenario to load and start at start-up |
 | `WSTS_RECORD` | File to record to from start-up |
 | `WSTS_DIR` | Base directory for relative scenario and recording paths |
+| `WSTS_LINK_DIR` | Directory of the link sockets of a system (`<link>.sock`). Set by `fprime-wsts run`; without it links stay down |
 
 ## `Wsts.SimControl`
 

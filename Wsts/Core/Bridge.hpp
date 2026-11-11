@@ -5,7 +5,7 @@
 // Protocol: newline-delimited flat JSON objects in both directions.
 //
 //   client -> sim   {"id": 7, "op": "<action>", ...}       any Control action, plus:
-//                     status                               -> tick, paused, counters, endpoints
+//                     status                               -> tick, paused, counters, endpoints, links
 //                     subscribe                            start streaming bus records and events
 //                     attach   endpoint kind(i2c|spi) [addr]   become the device model
 //                     reply    rid status data             answer an i2c_req / spi_req

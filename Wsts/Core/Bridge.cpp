@@ -19,6 +19,7 @@
 
 #include <Wsts/Core/Bus.hpp>
 #include <Wsts/Core/Control.hpp>
+#include <Wsts/Core/Link.hpp>
 
 namespace Wsts {
 
@@ -181,6 +182,8 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
                 names += (names.empty() ? "" : ",") + name;
             }
             response.set("endpoints", names);
+            response.setNum("links", LinkByteStream::started());
+            response.setNum("links_up", LinkByteStream::connected());
         } else if (op == "subscribe") {
             m_subscribed.store(true);
         } else if (op == "attach") {

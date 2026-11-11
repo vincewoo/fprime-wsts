@@ -12,6 +12,7 @@ Wsts.SimControl commands give an operator, and lets Python code act as a device 
 from __future__ import annotations
 
 import json
+import os
 import queue
 import socket
 import threading
@@ -287,3 +288,115 @@ class WstsBridge:
         """Become the SPI device on an endpoint"""
         self._spi[endpoint] = handler
         self.request("attach", endpoint=endpoint, kind="spi")
+
+
+class WstsSystem:
+    """Connections to every element of a running system (one simulated deployment each).
+
+        with WstsSystem("examples/hub-demo/wsts/HubDemo") as system:
+            system["payload"].inject_text("sensorUart", "$TEMP,48.0\\n")   # one element's bridge
+            system.fault_set("hub", "drop")                                  # cut the link named hub
+            system.pause()                                                   # every element
+
+    `system` is the generated system directory, its wsts-system.json, or that file's content.
+    Elements whose bridge is off are left out.
+    """
+
+    def __init__(self, system, connect_timeout: float = 10.0, request_timeout: float = 5.0):
+        if not isinstance(system, dict):
+            path = os.fspath(system)
+            if os.path.isdir(path):
+                path = os.path.join(path, "wsts-system.json")
+            with open(path) as file:
+                system = json.load(file)
+        self.description = system
+        self.name: str = system["system"]
+        self.ground: str = system["ground"]
+        self.links: Dict[str, dict] = {link["name"]: link for link in system.get("links", [])}
+        self.elements: Dict[str, WstsBridge] = {}
+        try:
+            for element in system["elements"]:
+                if element["bridge"] != "none":
+                    self.elements[element["name"]] = WstsBridge(element["bridge"], connect_timeout, request_timeout)
+        except BridgeError:
+            self.close()
+            raise
+
+    def close(self) -> None:
+        for bridge in self.elements.values():
+            bridge.close()
+
+    def __enter__(self) -> "WstsSystem":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+    def __getitem__(self, element: str) -> WstsBridge:
+        try:
+            return self.elements[element]
+        except KeyError:
+            raise BridgeError(f"no element '{element}' with a bridge in system {self.name} "
+                              f"(elements: {', '.join(self.elements)})") from None
+
+    def __iter__(self):
+        return iter(self.elements)
+
+    # ---- The whole system ----
+
+    def status(self) -> Dict[str, dict]:
+        return {name: bridge.status() for name, bridge in self.elements.items()}
+
+    def links_up(self) -> bool:
+        """Every link end of every element is connected to its peer"""
+        return all(status.get("links_up", 0) >= status.get("links", 0) for status in self.status().values())
+
+    def subscribe(self) -> None:
+        for bridge in self.elements.values():
+            bridge.subscribe()
+
+    def pause(self) -> None:
+        """Pause every element. The elements stop one after another, not at the same instant."""
+        for bridge in self.elements.values():
+            bridge.pause()
+
+    def resume(self) -> None:
+        for bridge in self.elements.values():
+            bridge.resume()
+
+    def set_rate(self, rate: float) -> None:
+        for bridge in self.elements.values():
+            bridge.set_rate(rate)
+
+    # ---- Faults, addressed by link or by element ----
+
+    def resolve(self, target: str, direction: str = "both") -> Tuple[str, str, str]:
+        """(element, endpoint, fault direction) for a link name or "<element>.<endpoint>".
+
+        A link is faulted at its `a` end, where "a_to_b" is what that element sends and
+        "b_to_a" is what it receives; "both" cuts the link in both directions."""
+        if target in self.links:
+            directions = {"both": "both", "a_to_b": "to_device", "b_to_a": "to_flight"}
+            if direction not in directions:
+                raise BridgeError(f"direction for a link is one of {', '.join(directions)}, not '{direction}'")
+            end = self.links[target]["a"]
+            return end["element"], end["endpoint"], directions[direction]
+        element, _, endpoint = target.partition(".")
+        if element not in self.elements or not endpoint:
+            raise BridgeError(f"'{target}' is neither a link ({', '.join(self.links) or 'none'}) nor "
+                              f"<element>.<endpoint> with one of the elements {', '.join(self.elements)}")
+        return element, endpoint, direction
+
+    def fault_set(self, target: str, kind: str, arg: int = 0, count: int = 0, ticks: int = 0, direction: str = "both") -> None:
+        """Arm a fault on a link (by name) or on "<element>.<endpoint>" """
+        element, endpoint, direction = self.resolve(target, direction)
+        self[element].fault_set(endpoint, kind, arg=arg, count=count, ticks=ticks, direction=direction)
+
+    def fault_clear(self, target: str = "*") -> None:
+        """Clear the faults on a link or "<element>.<endpoint>"; by default, all faults everywhere"""
+        if target == "*":
+            for bridge in self.elements.values():
+                bridge.fault_clear("*")
+            return
+        element, endpoint, _ = self.resolve(target)
+        self[element].fault_clear(endpoint)

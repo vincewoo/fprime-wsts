@@ -11,39 +11,43 @@ from . import __version__
 from .fpp import WstsError
 
 
-def _find_project(start: Path) -> Path:
-    for directory in [start, *start.parents]:
-        if (directory / "settings.ini").is_file():
-            return directory
-    raise WstsError(f"no F Prime project (settings.ini) found at or above {start}")
-
-
 def cmd_generate(args: argparse.Namespace) -> int:
     from .generate import generate
     from .manifest import load_manifest
+    from .system import find_project, generate_system, is_system_manifest, load_system
 
     manifest_path = Path(args.manifest).resolve()
-    manifest = load_manifest(manifest_path)
-    if args.project:
-        project = Path(args.project).resolve()
-    elif manifest.project is not None:
-        project = manifest.project_root()
+    output = Path(args.output) if args.output else None
+    if is_system_manifest(manifest_path):
+        system = load_system(manifest_path)
+        result = generate_system(system, output, check=args.check,
+                                 project=Path(args.project).resolve() if args.project else None)
+        reports = {name: element.report for name, element in result.elements.items()}
+        if args.json:
+            print(json.dumps({"output": str(result.output), "changed": result.changed, "system": result.description,
+                              "reports": reports}, indent=2))
+        else:
+            for name, report in reports.items():
+                print(f"element {name} ({report['topology']}):")
+                _print_report(report)
+            for link in result.description["links"]:
+                print(f"link {link['name']}: {link['a']['element']}.{link['a']['endpoint']} <-> "
+                      f"{link['b']['element']}.{link['b']['endpoint']}")
+        what, build = "Simulated system", "Build each element with: cd {0}/<element> && fprime-util generate && fprime-util build"
     else:
-        project = _find_project(manifest_path.parent)
-    result = generate(project, manifest, Path(args.output) if args.output else None, check=args.check)
-    report = result.report
-    if args.json:
-        print(json.dumps({"output": str(result.output), "changed": result.changed, "report": report}, indent=2))
-    else:
-        for sub in report["substitutions"]:
-            print(f"  {sub['instance']}: {sub['flight_component']} -> {sub['surrogate']} "
-                  f"[{sub['chosen_by']}] endpoint '{sub['endpoint']}'")
-        for warning in report["warnings"]:
-            print(f"  warning: {warning}")
-        dictionary = report["dictionary"]
-        removed = sum(len(v) for v in dictionary["removed"].values())
-        added = sum(len(v) for v in dictionary["added"].values())
-        print(f"  dictionary: {removed} flight item(s) removed, {added} WSTS item(s) added, flight IDs unchanged")
+        manifest = load_manifest(manifest_path)
+        if args.project:
+            project = Path(args.project).resolve()
+        elif manifest.project is not None:
+            project = manifest.project_root()
+        else:
+            project = find_project(manifest_path.parent)
+        result = generate(project, manifest, output, check=args.check)
+        if args.json:
+            print(json.dumps({"output": str(result.output), "changed": result.changed, "report": result.report}, indent=2))
+        else:
+            _print_report(result.report)
+        what, build = "Simulated deployment", "Build it with: cd {0} && fprime-util generate && fprime-util build"
     if args.check:
         if result.changed:
             print(f"{result.output} is out of date:", file=sys.stderr)
@@ -54,9 +58,21 @@ def cmd_generate(args: argparse.Namespace) -> int:
             print(f"{result.output} is up to date")
         return 0
     if not args.json:
-        print(f"Simulated deployment written to {result.output}")
-        print(f"Build it with: cd {result.output} && fprime-util generate && fprime-util build")
+        print(f"{what} written to {result.output}")
+        print(build.format(result.output))
     return 0
+
+
+def _print_report(report: dict) -> None:
+    for sub in report["substitutions"]:
+        print(f"  {sub['instance']}: {sub['flight_component']} -> {sub['surrogate']} "
+              f"[{sub['chosen_by']}] endpoint '{sub['endpoint']}'")
+    for warning in report["warnings"]:
+        print(f"  warning: {warning}")
+    dictionary = report["dictionary"]
+    removed = sum(len(v) for v in dictionary["removed"].values())
+    added = sum(len(v) for v in dictionary["added"].values())
+    print(f"  dictionary: {removed} flight item(s) removed, {added} WSTS item(s) added, flight IDs unchanged")
 
 
 def cmd_report(args: argparse.Namespace) -> int:
@@ -87,8 +103,8 @@ def main(argv=None) -> int:
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", required=True)
 
-    generate = commands.add_parser("generate", help="create a simulated deployment from a flight deployment")
-    generate.add_argument("manifest", help="deployment manifest (wsts.yaml)")
+    generate = commands.add_parser("generate", help="create a simulated deployment from a flight deployment, or a simulated system from several")
+    generate.add_argument("manifest", help="deployment manifest (wsts.yaml), or a system manifest naming several")
     generate.add_argument("--project", help="flight F Prime project root (default: the manifest's 'project', else found from the manifest location)")
     generate.add_argument("--output", help="output directory (default: manifest 'output', else wsts/<deployment> in the simulation project, or in the flight project)")
     generate.add_argument("--check", action="store_true", help="do not write; fail if the output is out of date")
@@ -100,8 +116,8 @@ def main(argv=None) -> int:
     report.add_argument("--json", action="store_true")
     report.set_defaults(handler=cmd_report)
 
-    run = commands.add_parser("run", help="run a built simulated deployment, optionally with the GDS")
-    run.add_argument("directory", nargs="?", default=".", help="generated simulation deployment directory")
+    run = commands.add_parser("run", help="run a built simulated deployment or system, optionally with the GDS")
+    run.add_argument("directory", nargs="?", default=".", help="generated simulation deployment directory, or generated system directory")
     run.add_argument("--gds", action="store_true", help="also start a headless fprime-gds")
     run.add_argument("--gds-port", type=int, default=50000, help="port the deployment connects to (default 50000)")
     run.add_argument("--bridge", help="bridge address override, e.g. tcp:50100")

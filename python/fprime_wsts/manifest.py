@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import yaml
 
@@ -95,6 +95,17 @@ class ModelSpec:
 
 
 @dataclass
+class LinkEnd:
+    """This deployment's end of a link to another element of a system. Not written in a
+    deployment manifest: the system manifest declares links and `generate_system` fills
+    these in."""
+    link: str  # link name, shared by both ends
+    instance: str  # the byte stream driver instance the link ends at
+    role: str  # listen or connect
+    peer: str  # the far end, "<element>.<instance>", for the report
+
+
+@dataclass
 class MainSpec:
     generate: bool = False
     declarations: str = ""
@@ -130,6 +141,11 @@ class Manifest:
     drop_libraries: List[str] = field(default_factory=list)
     fpp_exclude: List[str] = field(default_factory=list)
     defines: List[str] = field(default_factory=list)
+    # Set when the deployment is generated as one element of a system (see system.py)
+    system: Optional[str] = None
+    element: Optional[str] = None
+    links: List[LinkEnd] = field(default_factory=list)
+    id_window: Optional[Tuple[int, int]] = None  # inclusive range of IDs routed to this element
 
     @property
     def sim_root(self) -> Optional[Path]:

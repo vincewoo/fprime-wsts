@@ -115,7 +115,7 @@ struct Record {
     std::uint64_t tick = 0;
     std::string type;      //!< bs_tx, bs_rx, i2c, spi, gpio_out, gpio_in
     std::string endpoint;
-    std::string src;       //!< flight, model, inject, bridge, replay
+    std::string src;       //!< flight, model, link, inject, bridge, replay
     std::uint32_t addr = 0;
     Bytes data;            //!< bytes towards the device (or bs_rx payload)
     Bytes rdata;           //!< bytes read back (i2c, spi)

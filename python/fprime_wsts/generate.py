@@ -20,12 +20,13 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from . import fpp
 from .fpp import WstsError
-from .manifest import DEFAULT_CATALOG, TOOLKIT_ROOT, Manifest, ModelSpec, Surrogate, load_catalog
+from .manifest import DEFAULT_CATALOG, TOOLKIT_ROOT, LinkEnd, Manifest, ModelSpec, Surrogate, load_catalog
 
 SETUP_COMPONENT = "Wsts.SimSetup"
 CONTROL_COMPONENT = "Wsts.SimControl"
 SETUP_INSTANCE = "wstsSetup"
 CONTROL_INSTANCE = "wstsControl"
+LINK_SURROGATE = "Wsts.SimByteStream"
 ID_BLOCK = 0x1000
 HOST_PLATFORMS = {"linux", "posix", "sockets"}
 ATTRIBUTE_CLAUSE = re.compile(r"\b(queue\s+size|stack\s+size|priority|cpu)\s+[^\\\n{]+")
@@ -44,7 +45,14 @@ class PlannedSubstitution:
     catalog: Surrogate
     endpoint: str
     options: str
-    reason: str  # manifest, catalog, structural
+    reason: str  # manifest, catalog, structural, link
+
+
+@dataclass
+class PlannedLink:
+    end: LinkEnd
+    instance: str  # qualified instance name
+    endpoint: str
 
 
 @dataclass
@@ -55,6 +63,7 @@ class Plan:
     warnings: List[str] = field(default_factory=list)
     setup_base_id: int = 0
     control_base_id: int = 0
+    links: List[PlannedLink] = field(default_factory=list)
 
 
 def _restricted_from_host(component: fpp.Component, stop_at: List[Path]) -> Optional[str]:
@@ -112,10 +121,22 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
         if not any(matches(unknown, model.instances[name]) for name in topology.instances):
             raise WstsError(f"manifest names instance '{unknown}', which is not in topology {topology.name}")
 
+    # Links of a multi-element system end at byte stream driver instances of this topology
+    link_ends: Dict[str, LinkEnd] = {}
+    for end in manifest.links:
+        found = [name for name in topology.instances if matches(end.instance, model.instances[name])]
+        if not found:
+            raise WstsError(f"link '{end.link}' ends at instance '{end.instance}', which is not in topology {topology.name}")
+        if found[0] in link_ends:
+            raise WstsError(f"instance {found[0]} is an end of both link '{link_ends[found[0]].link}' and link '{end.link}'")
+        link_ends[found[0]] = end
+
     for name in topology.instances:
         instance = model.instances[name]
         original = model.components.get(instance.component)
         if original is None:
+            if name in link_ends:
+                raise WstsError(f"link '{link_ends[name].link}' ends at {name}, whose component was not found in the FPP model")
             continue
         chosen: Optional[Surrogate] = None
         endpoint = instance.base_name
@@ -135,6 +156,14 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
         if chosen is None and not kept and original.name in replaces:
             chosen = replaces[original.name]
             reason = "catalog"
+        if name in link_ends:
+            # The link takes the place of whatever the driver talked to, so the driver has
+            # to be simulated: a link is itself a reason to substitute
+            if kept:
+                raise WstsError(f"link '{link_ends[name].link}' ends at {name}, which the manifest lists under 'keep'")
+            if chosen is None:
+                chosen = by_surrogate.get(LINK_SURROGATE) or Surrogate(name=LINK_SURROGATE, source="link")
+                reason = "link"
         restriction = None if chosen else _restricted_from_host(original, roots)
         if chosen is None and restriction and not kept:
             # Nothing was named for a component that cannot build on the host: accept a
@@ -183,6 +212,9 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
     base = manifest.control_base_id
     if base is None:
         base = ((highest // ID_BLOCK) + 1) * ID_BLOCK
+        if manifest.id_window and manifest.control_enabled and not _in_window(base, manifest.id_window):
+            # Flight IDs fill, or lie outside, the window: fall back to the top of the window
+            base = ((manifest.id_window[1] + 1) // ID_BLOCK - 2) * ID_BLOCK
     elif base <= highest:
         for name in topology.instances:
             instance = model.instances[name]
@@ -191,6 +223,27 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
                 raise WstsError(f"control.base_id {base:#x} overlaps the ID range of {name}")
     plan.setup_base_id = base
     plan.control_base_id = base + ID_BLOCK
+    if manifest.id_window:
+        low, high = manifest.id_window
+        if manifest.control_enabled:
+            if not _in_window(base, manifest.id_window):
+                raise WstsError(
+                    f"the WSTS instances need IDs {base:#x}..{base + 2 * ID_BLOCK - 1:#x}, outside the element's "
+                    f"'ids' window {low:#x}..{high:#x}. Set control.base_id in the element's manifest to a free "
+                    "range inside the window."
+                )
+            for name in topology.instances:
+                instance = model.instances[name]
+                if base <= max(instance.base_id, instance.max_id) and instance.base_id < base + 2 * ID_BLOCK:
+                    raise WstsError(
+                        f"no room for the WSTS instances at the top of the 'ids' window {low:#x}..{high:#x}: "
+                        f"{name} is there. Set control.base_id in the element's manifest."
+                    )
+        outside = [name for name in topology.instances if not low <= model.instances[name].base_id <= high]
+        if outside:
+            plan.warnings.append(
+                f"instances with base IDs outside the element's 'ids' window {low:#x}..{high:#x}: " + ", ".join(outside)
+            )
 
     if manifest.control_enabled and topology.explicit_pattern_targets:
         plan.warnings.append(
@@ -209,7 +262,28 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
                 f"model '{spec.name}' attaches to endpoint '{spec.endpoint}', which no surrogate is bound to. "
                 f"Endpoints: {', '.join(sorted(endpoints)) or 'none'}"
             )
+    for sub in plan.substitutions:
+        end = link_ends.get(sub.instance.name)
+        if end is None:
+            continue
+        if not {"send", "recv"} <= set(sub.surrogate.ports):
+            raise WstsError(
+                f"link '{end.link}' ends at {sub.instance.name}, but its surrogate {sub.surrogate.name} is not a "
+                "byte stream driver (no send and recv ports)"
+            )
+        for spec in manifest.models:
+            if spec.kind == "bytestream" and spec.endpoint == sub.endpoint:
+                raise WstsError(
+                    f"endpoint '{sub.endpoint}' has both the model '{spec.name}' and the link '{end.link}': "
+                    "a byte stream endpoint takes one or the other"
+                )
+        plan.links.append(PlannedLink(end, sub.instance.name, sub.endpoint))
     return plan
+
+
+def _in_window(base: int, window: Tuple[int, int]) -> bool:
+    """Whether the two ID blocks of the WSTS instances starting at `base` fit the window"""
+    return window[0] <= base and base + 2 * ID_BLOCK - 1 <= window[1]
 
 
 # ----------------------------------------------------------------------
@@ -484,11 +558,15 @@ def render_setup(plan: Plan, manifest: Manifest, topology_header: str) -> str:
         "#include <Wsts/Core/Control.hpp>",
         "#include <Wsts/Core/Runtime.hpp>",
     ]
+    if plan.links:
+        lines.append("#include <Wsts/Core/Link.hpp>")
     for header in sorted({m.header for m in manifest.models}):
         lines.append(f"#include <{header}>")
     lines += [f"#include <{topology_header}>", "", "namespace {", ""]
     for spec in manifest.models:
         lines.append(f"{spec.cls} model_{_identifier(spec.name)};")
+    for link in plan.links:
+        lines.append(f"Wsts::LinkByteStream link_{_identifier(link.end.link)};")
     lines += [
         "",
         "void configure(const char* model, bool accepted, const char* key) {",
@@ -522,6 +600,16 @@ def render_setup(plan: Plan, manifest: Manifest, topology_header: str) -> str:
         if spec.kind in ATTACH:
             lines.append("    " + ATTACH[spec.kind].format(endpoint=_cpp_string(spec.endpoint), address=spec.address, var=var))
         lines.append(f"    Wsts::registerModel({name}, &{var});")
+    if plan.links:
+        lines += ["", "    // Links to the other elements of the system"]
+    for link in plan.links:
+        var = f"link_{_identifier(link.end.link)}"
+        name = _cpp_string(f"link {link.end.link}")
+        for key, value in (("endpoint", link.endpoint), ("link", link.end.link), ("role", link.end.role)):
+            lines.append(
+                f"    configure({name}, Wsts::configureModel(&{var}, {_cpp_string(key)}, {_cpp_string(value)}), {_cpp_string(key)});"
+            )
+        lines.append(f"    Wsts::Bus::get().attachByteStream({_cpp_string(link.endpoint)}, &{var});")
     lines.append("")
     if manifest.control_enabled:
         control = _cpp_instance((plan.topology.module + "." if plan.topology.module else "") + CONTROL_INSTANCE)
@@ -531,9 +619,11 @@ def render_setup(plan: Plan, manifest: Manifest, topology_header: str) -> str:
         f"    config.bridge = {_cpp_string(manifest.bridge)};",
         f"    config.internalTickHz = {manifest.tick_hz};",
         "    Wsts::Runtime::start(config);",
+        *[f"    link_{_identifier(link.end.link)}.start();" for link in plan.links],
         "}",
         "",
         "void teardown() {",
+        *[f"    link_{_identifier(link.end.link)}.stop();" for link in plan.links],
         "    Wsts::Runtime::stop();",
         "}",
         "",
@@ -634,7 +724,23 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
         for kind in added:
             added[kind] = [f"{prefix}.{n}" for n in getattr(control, kind)]
     identical = not any(removed.values()) and not any(added.values())
+    system = {}
+    if manifest.system:
+        # Only for an element of a system, so that single-deployment reports are unchanged
+        system = {
+            "system": {
+                "name": manifest.system,
+                "element": manifest.element,
+                "ids": list(manifest.id_window) if manifest.id_window else None,
+            },
+            "links": [
+                {"link": link.end.link, "instance": link.instance, "endpoint": link.endpoint,
+                 "role": link.end.role, "peer": link.end.peer}
+                for link in plan.links
+            ],
+        }
     return {
+        **system,
         "generator": "fprime-wsts",
         "topology": plan.topology.name,
         "flight_toolchain": settings.default_toolchain,
@@ -704,6 +810,13 @@ def render_report(report: dict) -> str:
         )
     if not report["substitutions"]:
         lines.append("| (none) | | | | |")
+    if report.get("system"):
+        lines += ["", f"## Links (element `{report['system']['element']}` of system `{report['system']['name']}`)", ""]
+        for link in report["links"]:
+            lines.append(f"- `{link['link']}`: `{link['instance']}` (endpoint `{link['endpoint']}`, {link['role']}s) "
+                         f"to `{link['peer']}`")
+        if not report["links"]:
+            lines.append("- none")
     lines += ["", "## Device models", ""]
     for model in report["models"]:
         address = f" address {model['address']:#x}" if model["kind"] == "i2c" else ""

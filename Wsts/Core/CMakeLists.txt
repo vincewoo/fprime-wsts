@@ -13,6 +13,7 @@ register_fprime_module(
         "${CMAKE_CURRENT_LIST_DIR}/Control.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/Bridge.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/Models.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/Link.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/Runtime.cpp"
     HEADERS
         "${CMAKE_CURRENT_LIST_DIR}/Json.hpp"
@@ -20,6 +21,7 @@ register_fprime_module(
         "${CMAKE_CURRENT_LIST_DIR}/Control.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/Bridge.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/Models.hpp"
+        "${CMAKE_CURRENT_LIST_DIR}/Link.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/Runtime.hpp"
     DEPENDS
         Threads::Threads
