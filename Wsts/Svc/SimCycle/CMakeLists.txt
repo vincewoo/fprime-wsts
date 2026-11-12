@@ -1,0 +1,10 @@
+register_fprime_library(
+    AUTOCODER_INPUTS
+        "${CMAKE_CURRENT_LIST_DIR}/SimCycle.fpp"
+    SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/SimCycle.cpp"
+    HEADERS
+        "${CMAKE_CURRENT_LIST_DIR}/SimCycle.hpp"
+    DEPENDS
+        Wsts_Core
+)

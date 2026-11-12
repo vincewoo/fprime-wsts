@@ -6,8 +6,8 @@
 |---|---|
 | `fprime-wsts generate <wsts.yaml> [--project DIR] [--output DIR] [--check] [--json]` | Create or refresh a simulated deployment. `--project` defaults to the manifest's `project`, else the nearest `settings.ini` above the manifest. `--check` writes nothing and exits 1 if the output is out of date |
 | `fprime-wsts generate <wsts-system.yaml> [--output DIR] [--check] [--json]` | The same for every element of a [system](systems.md), plus `wsts-system.json` |
-| `fprime-wsts run [DIR] [--gds] [--scenario F] [--scenario-mode stimulus\|responses] [--record F] [--duration S] [--bridge ADDR] [--files-dir DIR] [--json]` | Run a built simulated deployment, optionally with a headless GDS. Logs go to `DIR/wsts-logs` |
-| `fprime-wsts run [SYSTEM DIR] [--gds] [--duration S] [--json]` | Run every element of a generated system, with their links, and optionally one GDS on the ground element with the merged dictionary |
+| `fprime-wsts run [DIR] [--gds] [--scenario F] [--scenario-mode stimulus\|responses] [--record F] [--duration S] [--bridge ADDR] [--files-dir DIR] [--env NAME=VALUE]... [--json]` | Run a built simulated deployment, optionally with a headless GDS. Logs go to `DIR/wsts-logs`. `--env` sets an environment variable of the deployment, over the manifest's `run.env` |
+| `fprime-wsts run [SYSTEM DIR] [--gds] [--duration S] [--env [ELEMENT.]NAME=VALUE]... [--json]` | Run every element of a generated system, with their links, and optionally one GDS on the ground element with the merged dictionary. `--env NAME=VALUE` goes to every element, `--env payload.NAME=VALUE` to one |
 | `fprime-wsts report [DIR] [--json]` | Print a generated deployment's fidelity report |
 | `fprime-wsts scaffold <Component> --output DIR [--project DIR] [--name NAME]` | Start a mirror surrogate for a flight component |
 
@@ -35,7 +35,8 @@ keep: [comDriver]                # instances never substituted (see "Instance na
 substitute:                      # explicit choices; override the catalog
   - instance: radioUart          # an instance name ...
     with: Wsts.SimByteStream
-    endpoint: radio              # bus endpoint name; default is the instance's base name
+    endpoint: radio              # bus endpoint name; default is the instance's base name.
+                                 # `endpoint: none`: the surrogate does not use the bus
     options: "chunk=256"         # passed to the surrogate's wstsBind()
     ports: {runIn: schedIn, regOut: }   # flight port -> surrogate port; empty = the surrogate has none
     queue_size: 10               # for a queued or active surrogate replacing an instance without one
@@ -64,6 +65,10 @@ devices:                         # adapter instances that are the device on a bu
     endpoint: uart
     options: "chunk=256"         # passed to wstsServe()
 
+clocks:                          # rates of the simulation's own cycle sources
+  - instance: SensorSim.simClock         # an instance of Wsts.SimCycle, added by `simulators`
+    hz: 125                              # cycles per second of simulated time, up to 100000
+
 control:                         # or `control: none`
   enabled: true
   base_id: 0x10030000            # default: first 0x1000 block above all flight IDs
@@ -88,7 +93,16 @@ cmake:
   cache:                             # CMake cache variables, set before F´ reads the libraries
     SIM_COMPONENTS: [SerialSensorSim, Top]   # a list becomes a CMake list
     SIM_LEVEL: 2
-libraries: {keep: [...], drop: [...]}
+  include: [sim.cmake]               # CMake included after all modules, before the deployment
+  include_early: [options.cmake]     # CMake included before the framework and libraries are read
+libraries:
+  keep: [...]                        # flight libraries to build although nothing in the model uses them
+  drop: [...]
+  sim: [lib/sim-common]              # further libraries of the simulation (relative to the simulation project)
+run:
+  env:                               # environment of the simulated deployment when it is run
+    SIM_PROFILE: ./profiles/calm.txt # ./ or ../ : a path relative to this file
+    SIM_SEED: 42
 fpp_exclude: ["*/Experimental/*"]    # FPP files to leave out of the analysis
 defines: [MY_SIM_FLAG]               # compile definitions, in addition to WSTS_SIM=1
 ```
@@ -180,6 +194,70 @@ endpoint. The endpoint must be bound by a surrogate and be a byte stream, and ca
 have a `bytestream` model, another device or a system link. `wstsServe` options:
 `chunk=<bytes>`, the largest buffer per `recv` (default 1024).
 
+### Clocks
+
+`clocks` gives each `Wsts.SimCycle` instance its rate. The instance must be one that
+`simulators` adds, be of that component, and have its `CycleOut` connected; a
+`Wsts.SimCycle` that `clocks` does not list is an error too. `hz` may be fractional, down
+to 0.001. The generated set-up calls `wstsClock(hz)` on the instance. Behaviour (simulated
+time, pause, spacing, threading) is described under
+[A rate of its own](surrogate-guide.md#device-simulators-as-f-components).
+
+### Surrogates without a bus endpoint
+
+`endpoint: none` on a `substitute` entry, or on a catalog entry, says the surrogate talks
+to the flight components over F´ ports only. No `wstsBind` call is generated, the instance
+is not an endpoint for `models`, `devices` or system links (naming it there is an error),
+and the report says "no bus endpoint". An `endpoint: <name>` on a `substitute` entry
+overrides a catalog's `none`.
+
+### Libraries, CMake and configuration of the simulation
+
+A standalone simulation project is an F´ library (its `library.cmake` builds its
+modules). `libraries.sim` lists further libraries the simulation uses: ones vendored
+inside the simulation project, or outside it. Each must have a `library.cmake`. Each is a
+root of its own: of the FPP analysis, of module names and header paths, and in the
+overlay's `library_locations`, before the simulation project itself. A library that lies
+inside another root is still its own root, so its modules have the names they have
+wherever else the library is used (`SimCommon_Types`, not
+`lib_sim-common_SimCommon_Types`). The simulation project's own `settings.ini`, if it has
+one, is not read.
+
+`cmake.include` and `cmake.include_early` name CMake files, relative to the simulation
+project, that the overlay's root `CMakeLists.txt` includes:
+
+| Key | Where | What exists there | Use it for |
+|---|---|---|---|
+| `include_early` | After `find_package(FPrime)`, before the framework's and the libraries' modules are added | The F´ CMake API and the cache; no module targets | Variables and functions a library's `library.cmake` expects |
+| `include` | After every framework, library, flight and simulation module is added (and after the simulation's configuration overrides), before the deployment | Every module target except the deployment's | `add_library(<Alias> ALIAS <target>)`, `target_link_libraries` edges between existing modules, `target_include_directories` |
+
+A module may name an alias in `DEPENDS` although the alias is only defined in `include`:
+CMake resolves link names when it generates, after all of it has been read.
+
+**Configuration overrides.** A module of the simulation that registers
+`CONFIGURATION_OVERRIDES` replaces configuration for the simulated build only:
+
+```cmake
+# <simulation project>/config/CMakeLists.txt, added by its library.cmake
+register_fprime_config(
+    CONFIGURATION_OVERRIDES
+        "${CMAKE_CURRENT_LIST_DIR}/AcConstants.fpp"
+        "${CMAKE_CURRENT_LIST_DIR}/CommandDispatcherImplCfg.hpp"
+    INTERFACE
+)
+```
+
+F´ lets the last registration of a file name win. The overlay holds such modules back
+while the simulation's library is read and adds them after the flight project's modules,
+so the simulation's file wins over the framework's, a library's and the flight project's,
+including a file that only the flight project supplies. The analysis uses the same order.
+This is how a simulation raises `ActiveRateGroupOutputPorts`,
+`CmdDispatcherComponentCommandPorts`, `CMD_DISPATCHER_DISPATCH_TABLE_SIZE` or
+`PRMDB_NUM_DB_ENTRIES` for the instances it adds. Requirements: the call is in a
+`CMakeLists.txt` of its own directory (not in `library.cmake` itself), and each file
+replaces one that some earlier module supplies; both are checked. The report lists these
+overrides apart from flight's.
+
 ### Surrogates of another kind, or with other port names
 
 A `substitute` entry, or a catalog entry, may say how a surrogate differs in shape:
@@ -257,6 +335,10 @@ Built-in surrogates (`catalog/wsts-catalog.yaml`):
 | `Wsts.SimGpio` | `Drv.Gpio` (one pin per instance) | `Drv.LinuxGpioDriver` | |
 | `Wsts.SimTick` | `Drv.Tick` | `Svc.LinuxTimer`, `VxWorksSvc.VxWatchDogTimer` | `mode=block\|thread`, `tick_hz=<n>` |
 
+Stock components that are not surrogates, for instances the simulation adds:
+`Wsts.BusByteStreamDevice` (the device on a byte stream endpoint, see `devices`) and
+`Wsts.SimCycle` (a cycle source with its own rate, see `clocks`).
+
 ## Actions
 
 Used identically by the bridge, scenario files and (through its commands) `Wsts.SimControl`.
@@ -329,6 +411,7 @@ records, and answer with `inject_bytes` / `gpio_force`.
 | `WSTS_SCENARIO`, `WSTS_SCENARIO_MODE` | Scenario to load and start at start-up |
 | `WSTS_RECORD` | File to record to from start-up |
 | `WSTS_DIR` | Base directory for relative scenario and recording paths |
+| any in `run.env` or `--env` | Set by `fprime-wsts run` and the pytest plugin for the simulator components' phase code |
 | `WSTS_LINK_DIR` | Directory of the link sockets of a system (`<link>.sock`). Set by `fprime-wsts run`; without it links stay down |
 
 ## `Wsts.SimControl`

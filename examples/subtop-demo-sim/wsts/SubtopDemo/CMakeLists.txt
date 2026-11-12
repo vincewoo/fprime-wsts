@@ -8,7 +8,7 @@ project(SubtopDemoSim VERSION 1.0.0 LANGUAGES C CXX)
 add_compile_definitions(WSTS_SIM=1)
 # From `cmake.cache` in the manifest. Set before F Prime reads the libraries; a value given on the
 # command line (-D) takes precedence.
-set(SENSOR_SIM_COMPONENTS "SerialSensorSim;Top" CACHE STRING "Set by fprime-wsts from cmake.cache in the manifest")
+set(SENSOR_SIM_COMPONENTS "SerialSensorSim;GyroSim;SimTime;Top" CACHE STRING "Set by fprime-wsts from cmake.cache in the manifest")
 # The framework's and the libraries' modules are added below, once the redirection is set up
 set(FPRIME_INCLUDE_FRAMEWORK_CODE OFF)
 find_package(FPrime REQUIRED PATHS "${CMAKE_CURRENT_LIST_DIR}/../../../../lib/fprime/cmake")
@@ -22,11 +22,24 @@ set(WSTS_REPLACED_MODULES
 set(WSTS_REPLACEMENTS
     "${CMAKE_CURRENT_LIST_DIR}/SensorLib/SensorLink"
 )
+# Modules of the simulation that override configuration. Their library adds them while it is
+# read, which is before the flight project's modules: they are held back and added below.
+set(WSTS_DEFERRED_MODULES
+    "${CMAKE_CURRENT_LIST_DIR}/../../config"
+)
 if (COMMAND _add_fprime_subdirectory)
     message(FATAL_ERROR "add_fprime_subdirectory() is already overridden: fprime-wsts cannot redirect modules")
 endif()
 function(add_fprime_subdirectory FP_SOURCE_DIR)
     get_filename_component(WSTS_REQUESTED "${FP_SOURCE_DIR}" REALPATH)
+    if (NOT WSTS_ADDING_DEFERRED)
+        foreach (WSTS_MODULE IN LISTS WSTS_DEFERRED_MODULES)
+            get_filename_component(WSTS_MODULE "${WSTS_MODULE}" REALPATH)
+            if (WSTS_MODULE STREQUAL WSTS_REQUESTED)
+                return()
+            endif()
+        endforeach()
+    endif()
     get_filename_component(WSTS_HERE "${CMAKE_CURRENT_SOURCE_DIR}" REALPATH)
     set(WSTS_SOURCE "")
     set(WSTS_INDEX 0)
@@ -65,4 +78,13 @@ fprime_setup_included_code()
 
 set(WSTS_FLIGHT_PROJECT "${CMAKE_CURRENT_LIST_DIR}/../../../subtop-demo")
 add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/config/project")
+
+# Configuration overrides of the simulation: registered after the flight project's, so that
+# where both replace a file the simulation's is the one built
+set(WSTS_ADDING_DEFERRED ON)
+add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../config")
+
+# From `cmake.include` in the manifest: every flight, library and simulation module exists by now
+include("${CMAKE_CURRENT_LIST_DIR}/../../sim.cmake")
+
 add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/SubtopDemo")

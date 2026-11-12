@@ -65,8 +65,8 @@ def cmd_generate(args: argparse.Namespace) -> int:
 
 def _print_report(report: dict) -> None:
     for sub in report["substitutions"]:
-        print(f"  {sub['instance']}: {sub['flight_component']} -> {sub['surrogate']} "
-              f"[{sub['chosen_by']}] endpoint '{sub['endpoint']}'")
+        endpoint = f"endpoint '{sub['endpoint']}'" if sub["endpoint"] is not None else "no bus endpoint"
+        print(f"  {sub['instance']}: {sub['flight_component']} -> {sub['surrogate']} [{sub['chosen_by']}] {endpoint}")
     for warning in report["warnings"]:
         print(f"  warning: {warning}")
     dictionary = report["dictionary"]
@@ -127,6 +127,9 @@ def main(argv=None) -> int:
     run.add_argument("--duration", type=float, help="stop after this many seconds (default: run until interrupted)")
     run.add_argument("--log-dir", help="directory for logs (default: <directory>/wsts-logs)")
     run.add_argument("--files-dir", help="directory for relative scenario/recording paths (default: the log directory)")
+    run.add_argument("--env", action="append", metavar="NAME=VALUE",
+                     help="environment variable for the simulated deployment, in addition to the manifest's run.env "
+                          "(repeatable; for a system, <element>.NAME=VALUE sets it for one element)")
     run.add_argument("--json", action="store_true", help="print a JSON summary when the run ends")
     run.set_defaults(handler=cmd_run)
 

@@ -10,6 +10,13 @@ deployment: SubtopDemo
 keep:
   - comDriver
 
+# The flight time source is replaced by a component of this project that has the same
+# port and talks to nothing else: no bus endpoint.
+substitute:
+  - instance: chronoTime
+    with: SensorSim.SimTime
+    endpoint: none
+
 # Instances this project adds to the simulated topology. SensorSim.Simulator is a
 # subtopology (SensorSim/Top/SensorSim.fpp): the simulator, its buffer manager and the
 # adapter that puts it on the bus.
@@ -30,9 +37,29 @@ devices:
   - instance: SensorSim.sensorPort
     endpoint: uart
 
+# SensorSim.simClock cycles the simulation's own rate group, which steps the gyro model.
+# 125 Hz is faster than any flight rate group and not a multiple of the 10 Hz flight tick.
+clocks:
+  - instance: SensorSim.simClock
+    hz: 125
+
+# A library vendored in this project, with its own library.cmake and module names
+libraries:
+  sim:
+    - lib/sim-common
+
 cmake:
   # This project's library.cmake builds only what this list names
   cache:
-    SENSOR_SIM_COMPONENTS: [SerialSensorSim, Top]
+    SENSOR_SIM_COMPONENTS: [SerialSensorSim, GyroSim, SimTime, Top]
+  # CMake this simulation needs around the flight modules: an alias for one of them
+  include:
+    - sim.cmake
+
+# Environment of the simulated deployment. A value that starts with ./ or ../ is a path
+# relative to this file.
+run:
+  env:
+    SENSOR_SIM_PROFILE: ./profiles/calm.txt
 
 bridge: tcp:50103

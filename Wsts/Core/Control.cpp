@@ -3,6 +3,7 @@
 // \brief  WSTS simulation control core implementation
 // ======================================================================
 #include <Wsts/Core/Control.hpp>
+#include <Wsts/Core/Clock.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -88,6 +89,13 @@ void Control::reset() {
     m_paused.store(false);
     m_rate.store(1.0);
     m_hasTickSource.store(false);
+    {
+        std::lock_guard<std::mutex> lock(m_clockMutex);
+        m_clocks.clear();
+    }
+    m_tickPeriodNs.store(0);
+    m_measuredPeriodNs.store(0);
+    m_lastTickValid = false;
     Bus::get().reset();
     Bus::get().setObserver(this);
 }
@@ -119,10 +127,68 @@ void Control::onTick() {
         model->onTick(tick);
     }
     this->notifyListeners(false);
+    this->grantClocks();
 }
 
 void Control::onIdle() {
+    m_lastTickValid = false;  // the interval across a pause says nothing about the period
     this->notifyListeners(true);
+}
+
+std::uint64_t Control::tickPeriodNs() const {
+    const std::uint64_t declared = m_tickPeriodNs.load();
+    return (declared != 0) ? declared : m_measuredPeriodNs.load();
+}
+
+void Control::grantClocks() {
+    const auto now = std::chrono::steady_clock::now();
+    const double rate = std::max(0.001, m_rate.load());
+    if (m_tickPeriodNs.load() == 0 && m_lastTickValid) {
+        // No tick source declared its period: take it from the ticks themselves. Wall
+        // time between two ticks, times the time scale, is the simulated time of one.
+        const double measured = static_cast<double>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(now - m_lastTick).count()) * rate;
+        const std::uint64_t previous = m_measuredPeriodNs.load();
+        m_measuredPeriodNs.store(previous == 0 ? static_cast<std::uint64_t>(measured)
+                                               : static_cast<std::uint64_t>(0.9 * static_cast<double>(previous) + 0.1 * measured));
+    }
+    m_lastTick = now;
+    m_lastTickValid = true;
+    const std::uint64_t period = this->tickPeriodNs();
+    if (period == 0) {
+        return;
+    }
+    std::vector<CycleClock*> clocks;
+    {
+        std::lock_guard<std::mutex> lock(m_clockMutex);
+        clocks = m_clocks;
+    }
+    for (CycleClock* clock : clocks) {
+        clock->grant(period, rate, now);
+    }
+}
+
+void Control::addClock(CycleClock* clock) {
+    std::lock_guard<std::mutex> lock(m_clockMutex);
+    if (std::find(m_clocks.begin(), m_clocks.end(), clock) == m_clocks.end()) {
+        m_clocks.push_back(clock);
+    }
+}
+
+void Control::removeClock(CycleClock* clock) {
+    std::lock_guard<std::mutex> lock(m_clockMutex);
+    m_clocks.erase(std::remove(m_clocks.begin(), m_clocks.end(), clock), m_clocks.end());
+}
+
+void Control::stopClocks() {
+    std::vector<CycleClock*> clocks;
+    {
+        std::lock_guard<std::mutex> lock(m_clockMutex);
+        clocks = m_clocks;
+    }
+    for (CycleClock* clock : clocks) {
+        clock->stop();
+    }
 }
 
 void Control::notifyListeners(bool paused) {
@@ -141,6 +207,7 @@ void Control::startInternalTicker(std::uint32_t hz) {
         return;
     }
     m_tickerQuit.store(false);
+    this->setTickPeriod(1000000000ull / hz);
     m_ticker = std::thread([this, hz]() {
         while (!m_tickerQuit.load()) {
             const double rate = std::max(0.001, m_rate.load());

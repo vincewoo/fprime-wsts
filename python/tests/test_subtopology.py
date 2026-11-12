@@ -294,7 +294,7 @@ def test_default_config_convention_still_applies_without_overrides(tmp_path):
 def test_project_overrides_reach_the_analysis(default):
     report = default.report
     found = {o["file"]: (o["uses"], o["replaces"]) for o in report["config_overrides"]}
-    assert sorted(found) == ["CdhCoreConfig.fpp", "SensorLinkConfig.fpp"]
+    assert sorted(found) == ["AcConstants.fpp", "CdhCoreConfig.fpp", "SensorLinkConfig.fpp"]
     uses, replaces = found["CdhCoreConfig.fpp"]
     assert uses.endswith("subtop-demo/config/project/CdhCoreConfig.fpp") or uses == "../../config/project/CdhCoreConfig.fpp"
     assert len(replaces) == 1 and replaces[0].endswith("lib/fprime/Svc/Subtopologies/CdhCore/CdhCoreConfig/CdhCoreConfig.fpp")

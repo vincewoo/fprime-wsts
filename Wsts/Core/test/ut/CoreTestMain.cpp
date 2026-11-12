@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <unistd.h>
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <fstream>
@@ -14,6 +15,7 @@
 #include <thread>
 
 #include <Wsts/Core/Bus.hpp>
+#include <Wsts/Core/Clock.hpp>
 #include <Wsts/Core/Control.hpp>
 #include <Wsts/Core/Link.hpp>
 #include <Wsts/Core/Models.hpp>
@@ -472,6 +474,189 @@ TEST_F(CoreTest, LinkWithoutAnAddressStaysDown) {
     link.start();
     EXPECT_FALSE(link.up());
     EXPECT_EQ(Wsts::LinkByteStream::started(), 0u);
+}
+
+// ----------------------------------------------------------------------
+// Cycle clocks
+// ----------------------------------------------------------------------
+
+TEST(CycleSchedule, CountIsExactAtANonIntegerRatio) {
+    // 1000 Hz against a 64 Hz tick: 15.625 cycles per tick
+    Wsts::CycleSchedule schedule(1000 * 1000);
+    const std::uint64_t tickNs = 15625000;
+    std::uint64_t last = 0;
+    bool first = true;
+    for (std::uint64_t tick = 0; tick < 64000; tick++) {
+        std::vector<std::uint64_t> offsets;
+        schedule.advance(tickNs, offsets);
+        ASSERT_TRUE(offsets.size() == 15 || offsets.size() == 16) << "tick " << tick;
+        for (const std::uint64_t offset : offsets) {
+            ASSERT_LT(offset, tickNs);
+            const std::uint64_t at = tick * tickNs + offset;
+            if (!first) {
+                ASSERT_EQ(at - last, 1000000u) << "cycles are one millisecond apart in simulated time";
+            }
+            first = false;
+            last = at;
+        }
+    }
+    EXPECT_EQ(schedule.issued(), 1000000u) << "1000 s of simulated time at 1000 Hz";
+}
+
+TEST(CycleSchedule, SlowAndFractionalRates) {
+    // 2 Hz against 64 Hz: a cycle every 32nd tick, the first on the first tick
+    Wsts::CycleSchedule slow(2 * 1000);
+    std::vector<int> ticksWithACycle;
+    for (int tick = 0; tick < 128; tick++) {
+        std::vector<std::uint64_t> offsets;
+        slow.advance(15625000, offsets);
+        if (!offsets.empty()) {
+            EXPECT_EQ(offsets.size(), 1u);
+            EXPECT_EQ(offsets[0], 0u) << "in phase with the tick";
+            ticksWithACycle.push_back(tick);
+        }
+    }
+    EXPECT_EQ(ticksWithACycle, (std::vector<int>{0, 32, 64, 96}));
+    // 0.5 Hz, and a tick period that is not a whole number of cycles: 3 Hz against 10 Hz
+    Wsts::CycleSchedule half(500);
+    Wsts::CycleSchedule three(3000);
+    std::vector<std::uint64_t> offsets;
+    for (int tick = 0; tick < 100; tick++) {
+        half.advance(100000000, offsets);
+        three.advance(100000000, offsets);
+    }
+    EXPECT_EQ(half.issued(), 5u);
+    EXPECT_EQ(three.issued(), 30u);
+}
+
+TEST_F(CoreTest, ClockRejectsBadRates) {
+    Wsts::CycleClock clock;
+    EXPECT_FALSE(clock.configure(0.0, nullptr));
+    EXPECT_FALSE(clock.configure(-5.0, nullptr));
+    EXPECT_FALSE(clock.configure(Wsts::CycleClock::MAX_HZ + 1.0, nullptr));
+    EXPECT_TRUE(clock.configure(1000.0, nullptr));
+    EXPECT_DOUBLE_EQ(clock.hz(), 1000.0);
+}
+
+//! Tick the control core as a tick source would: `count` ticks of `periodNs` simulated
+//! time, paced by the wall clock at the current time scale
+void tickPaced(int count, std::uint64_t periodNs) {
+    auto next = std::chrono::steady_clock::now();
+    for (int i = 0; i < count; i++) {
+        Control::get().onTick();
+        next += std::chrono::nanoseconds(static_cast<std::int64_t>(static_cast<double>(periodNs) / Control::get().rate()));
+        std::this_thread::sleep_until(next);
+    }
+}
+
+TEST_F(CoreTest, ClockFollowsTicksPauseAndRate) {
+    const std::uint64_t tickNs = 15625000;  // 64 Hz
+    std::atomic<std::uint64_t> count{0};
+    Wsts::CycleClock clock;
+    ASSERT_TRUE(clock.configure(1000.0, [&count]() { count++; }));
+    Control::get().setTickPeriod(tickNs);
+    clock.start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    EXPECT_EQ(count.load(), 0u) << "no ticks, no cycles: the clock does not run by itself";
+
+    // Half a second of simulated time at twice real time: exactly 500 cycles
+    ASSERT_TRUE(run(R"({"op": "set_rate", "rate": 2})"));
+    const auto started = std::chrono::steady_clock::now();
+    tickPaced(32, tickNs);
+    ASSERT_TRUE(eventually([&]() { return clock.pending() == 0; }));
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    EXPECT_EQ(count.load(), 500u);
+    EXPECT_EQ(clock.cycles(), 500u);
+    EXPECT_EQ(clock.overruns(), 0u);
+    EXPECT_LT(elapsed, std::chrono::milliseconds(450)) << "0.5 s of simulated time took 0.25 s at rate 2";
+    ASSERT_TRUE(run(R"({"op": "set_rate", "rate": 1})"));
+
+    // Paused: what the last tick granted is held, and idle calls grant nothing
+    Control::get().onTick();
+    ASSERT_TRUE(run(R"({"op": "pause"})"));
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    const std::uint64_t atPause = count.load();
+    EXPECT_LT(atPause, 516u);
+    for (int i = 0; i < 20; i++) {
+        Control::get().onIdle();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    EXPECT_EQ(count.load(), atPause) << "no cycles while paused";
+
+    // Resumed: the held cycles come out spaced as they were, not in a burst, and one more
+    // tick grants one tick's worth
+    ASSERT_TRUE(run(R"({"op": "resume"})"));
+    std::this_thread::sleep_for(std::chrono::milliseconds(3));
+    EXPECT_LE(count.load() - atPause, 6u) << "about 1 per millisecond, not 16 at once";
+    ASSERT_TRUE(eventually([&]() { return clock.pending() == 0; }));
+    EXPECT_EQ(count.load(), 516u);
+    Control::get().onTick();
+    ASSERT_TRUE(eventually([&]() { return clock.pending() == 0; }));
+    const std::uint64_t afterOneTick = count.load() - 516u;
+    EXPECT_TRUE(afterOneTick == 15 || afterOneTick == 16);
+    EXPECT_EQ(clock.overruns(), 0u);
+    clock.stop();
+}
+
+TEST_F(CoreTest, ClockCyclesAreEvenlySpacedWithinATick) {
+    // 125 Hz against a 10 Hz tick: 12.5 cycles per tick, 8 ms apart
+    std::mutex mutex;
+    std::vector<std::chrono::steady_clock::time_point> times;
+    Wsts::CycleClock clock;
+    ASSERT_TRUE(clock.configure(125.0, [&]() {
+        std::lock_guard<std::mutex> lock(mutex);
+        times.push_back(std::chrono::steady_clock::now());
+    }));
+    Control::get().setTickPeriod(100000000);
+    clock.start();
+    const auto firstTick = std::chrono::steady_clock::now();
+    tickPaced(20, 100000000);
+    ASSERT_TRUE(eventually([&]() { return clock.pending() == 0; }));
+    clock.stop();
+    ASSERT_EQ(times.size(), 250u);
+    std::vector<double> gaps;
+    for (std::size_t i = 1; i < times.size(); i++) {
+        gaps.push_back(std::chrono::duration<double, std::milli>(times[i] - times[i - 1]).count());
+    }
+    std::sort(gaps.begin(), gaps.end());
+    const double median = gaps[gaps.size() / 2];
+    const double phase = std::chrono::duration<double, std::milli>(times[0] - firstTick).count();
+    std::printf("[ clock    ] 125 Hz on a 10 Hz tick: gaps min %.2f ms, median %.2f ms, 95%% %.2f ms, max %.2f ms; "
+                "first cycle %.2f ms after the first tick\n",
+                gaps.front(), median, gaps[gaps.size() * 95 / 100], gaps.back(), phase);
+    EXPECT_NEAR(median, 8.0, 1.0);
+    EXPECT_LT(gaps[gaps.size() * 95 / 100], 16.0) << "no bursts at the tick boundaries";
+    EXPECT_LT(phase, 20.0) << "cycle 0 is issued at the first tick";
+}
+
+TEST_F(CoreTest, ClockMeasuresTheTickWhenNoSourceDeclaresIt) {
+    // A project tick surrogate that only calls onTick(): the period is taken from the ticks
+    std::atomic<std::uint64_t> count{0};
+    Wsts::CycleClock clock;
+    ASSERT_TRUE(clock.configure(200.0, [&count]() { count++; }));
+    clock.start();
+    EXPECT_EQ(Control::get().tickPeriodNs(), 0u);
+    tickPaced(26, 20000000);  // 50 Hz for about half a second
+    ASSERT_TRUE(eventually([&]() { return clock.pending() == 0; }));
+    EXPECT_NEAR(static_cast<double>(Control::get().tickPeriodNs()), 20000000.0, 2000000.0);
+    EXPECT_NEAR(static_cast<double>(count.load()), 100.0, 12.0) << "4 cycles per tick from the second tick on";
+    clock.stop();
+}
+
+TEST_F(CoreTest, SlowClockCallbackDropsCyclesInsteadOfPilingUp) {
+    std::atomic<std::uint64_t> count{0};
+    Wsts::CycleClock clock;
+    ASSERT_TRUE(clock.configure(1000.0, [&count]() {
+        count++;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }));
+    Control::get().setTickPeriod(15625000);
+    clock.start();
+    tickPaced(16, 15625000);
+    EXPECT_GT(clock.overruns(), 100u);
+    EXPECT_LE(clock.pending(), 64u);
+    clock.stop();
+    EXPECT_LT(count.load(), 40u);
 }
 
 int main(int argc, char** argv) {

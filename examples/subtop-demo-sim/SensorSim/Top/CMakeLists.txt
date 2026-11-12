@@ -10,4 +10,7 @@ register_fprime_module(
         Wsts_Drv_BusByteStreamDevice
         Svc_BufferManager
         Svc_PrmDb
+        SensorSim_GyroSim
+        Svc_PassiveRateGroup
+        Wsts_Svc_SimCycle
 )

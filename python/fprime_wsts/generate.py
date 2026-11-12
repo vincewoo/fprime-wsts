@@ -54,6 +54,8 @@ class PlannedSubstitution:
     # Instance attributes to write (queue size, ...): the surrogate is queued or active
     # and the flight definition does not have them
     attributes: Dict[str, str] = field(default_factory=dict)
+    # False for a surrogate that does not use the bus (`endpoint: none`): no endpoint, no wstsBind()
+    bind: bool = True
 
 
 @dataclass
@@ -233,6 +235,8 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
         reason = ""
         entry_ports: Optional[Dict[str, Optional[str]]] = None
         entry_attributes: Dict[str, str] = {}
+        entry_no_endpoint = False
+        entry_endpoint = False
         kept = name in keep
 
         for entry in manifest.substitutions:
@@ -244,6 +248,8 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
                 options = entry.options
                 entry_ports = entry.ports
                 entry_attributes = entry.attributes
+                entry_no_endpoint = entry.no_endpoint
+                entry_endpoint = bool(entry.endpoint)
                 reason = "manifest"
                 break
         if chosen is None and not kept and original.name in replaces:
@@ -311,8 +317,16 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
                     f"{name}: {chosen.name} is a {surrogate.kind} component and the flight instance has no queue; "
                     f"queue size {DEFAULT_QUEUE_SIZE} is used. Set 'queue_size' in the 'substitute' entry or the catalog."
                 )
+        # A surrogate that talks to flight components over F Prime ports only has no endpoint.
+        # An endpoint named for the instance in the manifest overrides a catalog's `endpoint: none`.
+        bind = not (entry_no_endpoint or (not chosen.bind and not entry_endpoint))
+        if not bind and name in link_ends:
+            raise WstsError(
+                f"link '{link_ends[name].link}' ends at {name}, which is substituted with 'endpoint: none': "
+                f"{chosen.name} does not use the bus, so there is no endpoint for a link to end at"
+            )
         plan.substitutions.append(PlannedSubstitution(
-            instance, original, surrogate, chosen, endpoint, options, reason, port_map, attributes))
+            instance, original, surrogate, chosen, endpoint if bind else "", options, reason, port_map, attributes, bind))
 
     # Base IDs for the WSTS instances: above everything the flight topology uses
     highest = 0
@@ -367,7 +381,19 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
             + f"): add {CONTROL_INSTANCE} to them or its commands/events/telemetry will not be connected"
         )
     endpoints: Dict[str, str] = {}
+    # What an endpoint would have been called, for surrogates that have none
+    unbound = {sub.instance.base_name: sub for sub in plan.substitutions if not sub.bind}
+
+    def no_endpoint_hint(endpoint: str) -> str:
+        sub = unbound.get(endpoint)
+        if sub is None:
+            return ""
+        return (f" {sub.instance.name} is substituted with 'endpoint: none': {sub.surrogate.name} does not use the "
+                "bus, so nothing can be attached there.")
+
     for sub in plan.substitutions:
+        if not sub.bind:
+            continue
         if sub.endpoint in endpoints:
             raise WstsError(
                 f"endpoint '{sub.endpoint}' is used by both {endpoints[sub.endpoint]} and {sub.instance.name}. "
@@ -379,8 +405,8 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
     for spec in manifest.models:
         if spec.kind != "none" and spec.endpoint not in endpoints:
             raise WstsError(
-                f"model '{spec.name}' attaches to endpoint '{spec.endpoint}', which no surrogate is bound to. "
-                f"Endpoints: {', '.join(sorted(endpoints)) or 'none'}"
+                f"model '{spec.name}' attaches to endpoint '{spec.endpoint}', which no surrogate is bound to."
+                f"{no_endpoint_hint(spec.endpoint)} Endpoints: {', '.join(sorted(endpoints)) or 'none'}"
             )
     for sub in plan.substitutions:
         end = link_ends.get(sub.instance.name)
@@ -413,11 +439,24 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
     sims.plan_connections(plan.sim, model, manifest, topology, component_of, renamed)
     sims.check_parameters(plan.sim, model, topology)
     sims.plan_health(plan.sim, model, topology)
+    for device in manifest.devices:
+        if device.endpoint not in endpoints and device.endpoint in unbound:
+            raise WstsError(f"devices: {device.instance}: there is no endpoint '{device.endpoint}'."
+                            f"{no_endpoint_hint(device.endpoint)}")
     sims.plan_devices(
         plan.sim, model, manifest, topology,
-        {sub.endpoint: (sub.instance.name, {"send", "recv"} <= set(sub.surrogate.ports)) for sub in plan.substitutions},
+        {sub.endpoint: (sub.instance.name, {"send", "recv"} <= set(sub.surrogate.ports))
+         for sub in plan.substitutions if sub.bind},
         {link.endpoint: link.end.link for link in plan.links},
     )
+    sims.plan_clocks(plan.sim, model, manifest, topology)
+    for sub in plan.substitutions:
+        if not sub.bind:
+            plan.fidelity_notes.append(
+                f"{sub.instance.name} is replaced by {sub.surrogate.name}, which has no bus endpoint: it talks to "
+                "the flight components over their ports directly. Fault injection, recording, replay and the bridge "
+                "do not reach that link."
+            )
     for device in plan.sim.devices:
         for link in plan.links:
             if link.instance == device.instance:
@@ -824,6 +863,23 @@ def render_replaced_cmake(module: ReplacedModule, original_reference: str, dropp
     ])
 
 
+DEFERRED_SETS = """
+# Modules of the simulation that override configuration. Their library adds them while it is
+# read, which is before the flight project's modules: they are held back and added below.
+set(WSTS_DEFERRED_MODULES
+{modules}
+)"""
+
+DEFERRED_CHECK = """
+    if (NOT WSTS_ADDING_DEFERRED)
+        foreach (WSTS_MODULE IN LISTS WSTS_DEFERRED_MODULES)
+            get_filename_component(WSTS_MODULE "${WSTS_MODULE}" REALPATH)
+            if (WSTS_MODULE STREQUAL WSTS_REQUESTED)
+                return()
+            endif()
+        endforeach()
+    endif()"""
+
 REDIRECT_TEMPLATE = """
 # Modules whose FPP is patched: the copy in this project is built in place of the original.
 # The framework and the libraries add their own modules, so the redirection has to be in
@@ -833,12 +889,12 @@ set(WSTS_REPLACED_MODULES
 )
 set(WSTS_REPLACEMENTS
 {copies}
-)
+){deferred_sets}
 if (COMMAND _add_fprime_subdirectory)
     message(FATAL_ERROR "add_fprime_subdirectory() is already overridden: fprime-wsts cannot redirect modules")
 endif()
 function(add_fprime_subdirectory FP_SOURCE_DIR)
-    get_filename_component(WSTS_REQUESTED "${{FP_SOURCE_DIR}}" REALPATH)
+    get_filename_component(WSTS_REQUESTED "${{FP_SOURCE_DIR}}" REALPATH){deferred_check}
     get_filename_component(WSTS_HERE "${{CMAKE_CURRENT_SOURCE_DIR}}" REALPATH)
     set(WSTS_SOURCE "")
     set(WSTS_INDEX 0)
@@ -1025,6 +1081,9 @@ def render_setup(plan: Plan, manifest: Manifest, topology_header: str) -> str:
         "    // Surrogates: one bus endpoint each",
     ]
     for sub in plan.substitutions:
+        if not sub.bind:
+            lines.append(f"    // {_cpp_instance(sub.instance.name)}: {sub.surrogate.name} does not use the bus")
+            continue
         lines.append(
             f"    {_cpp_instance(sub.instance.name)}.wstsBind({_cpp_string(sub.endpoint)}, {_cpp_string(sub.options)});"
         )
@@ -1034,6 +1093,10 @@ def render_setup(plan: Plan, manifest: Manifest, topology_header: str) -> str:
         lines.append(
             f"    {_cpp_instance(device.instance)}.wstsServe({_cpp_string(device.endpoint)}, {_cpp_string(device.spec.options)});"
         )
+    if plan.sim.clocks:
+        lines += ["", "    // Cycle sources of the simulation: they follow the simulation's ticks from the first one on"]
+    for clock in plan.sim.clocks:
+        lines.append(f"    {_cpp_instance(clock.instance)}.wstsClock({clock.hz!r}, {_cpp_string(clock.spec.options)});")
     if manifest.models:
         lines += ["", "    // Device models"]
     for spec in manifest.models:
@@ -1160,7 +1223,7 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
             "surrogate": sub.surrogate.name,
             "seam": "S1 topology",
             "chosen_by": sub.reason,
-            "endpoint": sub.endpoint,
+            "endpoint": sub.endpoint if sub.bind else None,
             "options": sub.options,
             "base_id": sub.instance.base_id,
             "dictionary_items_removed": lost,
@@ -1205,6 +1268,8 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
             "connections": [{"connection": c.fpp(), "port_type": c.port_type, "port_number_chosen": c.assigned}
                             for c in sim.connections],
             "scheduling": scheduling,
+            **({"clocks": [{"instance": c.instance, "hz": c.hz, "drives": c.drives} for c in sim.clocks]}
+               if sim.clocks else {}),
             "health": {
                 "flight_targets_listed": sim.health_targets if sim.health_pattern else None,
                 "not_pinged": sim.unpinged,
@@ -1297,8 +1362,9 @@ def render_report(report: dict) -> str:
         "|---|---|---|---|---|",
     ]
     for sub in report["substitutions"]:
+        endpoint = f"`{sub['endpoint']}`" if sub["endpoint"] is not None else "no bus endpoint"
         lines.append(
-            f"| `{sub['instance']}` | `{sub['flight_component']}` | `{sub['surrogate']}` | {sub['chosen_by']} | `{sub['endpoint']}` |"
+            f"| `{sub['instance']}` | `{sub['flight_component']}` | `{sub['surrogate']}` | {sub['chosen_by']} | {endpoint} |"
         )
     if not report["substitutions"]:
         lines.append("| (none) | | | | |")
@@ -1326,6 +1392,11 @@ def render_report(report: dict) -> str:
         lines += [f"- `{s['instance']}.{s['port']}` is driven by `{s['driven_by']}`" for s in sim["scheduling"]]
         if not sim["scheduling"]:
             lines.append("- no simulator is connected to a flight rate group")
+        if sim.get("clocks"):
+            lines += ["", "**Clocks** (cycle sources with a rate of their own, in simulated time; they stop while the "
+                      "simulation is paused):", ""]
+            lines += [f"- `{c['instance']}` at {c['hz']:g} Hz drives " + ", ".join(f"`{d}`" for d in c["drives"])
+                      for c in sim["clocks"]]
         lines += ["", "**Connections added** (flight connections keep their port numbers):", ""]
         lines += [f"- `{c['connection']}`" + (" (port number chosen by the generator)" if c["port_number_chosen"] else "")
                   for c in sim["connections"]]
@@ -1381,6 +1452,23 @@ def render_report(report: dict) -> str:
         for override in report["config_overrides"]:
             lines.append(f"- `{override['file']}`: `{override['uses']}` replaces "
                          + ", ".join(f"`{r}`" for r in override["replaces"]))
+    if report.get("simulation_config_overrides"):
+        lines += ["", "## Configuration overrides of the simulation", "",
+                  "Configuration the simulated build replaces and flight does not. These modules are registered after "
+                  "the flight project's, so they win where flight overrides the same file.", ""]
+        for override in report["simulation_config_overrides"]:
+            lines.append(f"- `{override['file']}`: `{override['uses']}` replaces "
+                         + ", ".join(f"`{r}`" for r in override["replaces"]))
+    if report.get("simulation_libraries") or report.get("cmake_includes") or report.get("run"):
+        lines += ["", "## Simulation build and run inputs", ""]
+        for library in report.get("simulation_libraries", []):
+            lines.append(f"- Library of the simulation: `{library}`")
+        for when, label in (("before_libraries", "before the libraries are read"), ("after_modules", "after all modules are added")):
+            for file in report.get("cmake_includes", {}).get(when, []):
+                lines.append(f"- CMake included {label}: `{file}`")
+        for name, value in report.get("run", {}).get("env", {}).items():
+            lines.append(f"- Environment: `{name}={value}`"
+                         + (" (a path relative to this directory)" if name in report["run"]["env_paths"] else ""))
     if report["warnings"]:
         lines += ["", "## Warnings", ""]
         lines += [f"- {warning}" for warning in report["warnings"]]
@@ -1450,7 +1538,31 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
     if sim_root is not None and not sim_root.is_dir():
         raise WstsError(f"simulation project {sim_root} does not exist")
     sim_library = sim_root if sim_root is not None and (sim_root / "library.cmake").is_file() else None
-    sim_roots = [sim_root] if sim_root is not None else []
+    # Further libraries the simulation uses (`libraries.sim`): vendored in the simulation
+    # project or outside it. Each is a root of its own, so its modules keep the names they
+    # have wherever else the library is used.
+    sim_libraries: List[Path] = []
+    for entry in manifest.sim_libraries:
+        library = manifest.resolve_sim(entry, project_root)
+        if not library.is_dir() or not ((library / "library.cmake").is_file() or (library / f"{library.name}.cmake").is_file()):
+            raise WstsError(
+                f"libraries.sim names '{entry}' ({library}), which is not an F Prime library: there is no "
+                "library.cmake in it. Paths are relative to the simulation project."
+            )
+        if library in settings.library_locations or library == project_root:
+            raise WstsError(f"libraries.sim names '{entry}', which the flight project already uses as a library or is")
+        if library not in sim_libraries:
+            sim_libraries.append(library)
+    sim_roots = [*sim_libraries, *([sim_root] if sim_root is not None else [])]
+    includes = {
+        key: [manifest.resolve_sim(entry, project_root) for entry in entries]
+        for key, entries in (("early", manifest.cmake_include_early), ("late", manifest.cmake_include))
+    }
+    for key, files in includes.items():
+        for file in files:
+            if not file.is_file():
+                raise WstsError(f"cmake.{'include_early' if key == 'early' else 'include'} names {file}, which does "
+                                "not exist. Paths are relative to the simulation project.")
 
     # ---- Catalogs ----
     catalog: List[Surrogate] = []
@@ -1468,9 +1580,10 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         toolkit_fpp_root = TOOLKIT_ROOT / "Wsts"
         roots = [settings.framework_path, *settings.library_locations, project_root, toolkit_fpp_root, *sim_roots]
         # Build roots in the order F Prime registers configuration: the last override wins
-        config_overrides, override_warnings = fpp.find_config_overrides(
-            [settings.framework_path, *settings.library_locations, toolkit_fpp_root, project_root, *sim_roots])
-        early_warnings += override_warnings
+        # The simulation's come last: the overlay registers them after the flight project's
+        config_roots = [settings.framework_path, *settings.library_locations, toolkit_fpp_root, project_root, *sim_roots]
+        config_overrides, override_warnings = fpp.find_config_overrides(config_roots)
+        header_overrides, header_warnings = fpp.find_config_overrides(config_roots, (".hpp", ".h"))
 
         def owner(path: Path) -> Optional[Path]:
             """A file belongs to the deepest root that contains it: the framework is often
@@ -1485,6 +1598,31 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
             top_fpp = top_fpp or sorted(top_dir.glob("*.fpp"))
         if not top_fpp:
             raise WstsError(f"no topology FPP files found in {top_dir}")
+        def in_simulation(path: Path) -> bool:
+            # A file belongs to the deepest root that contains it
+            return owner(path) in sim_roots
+
+        for override in config_overrides + header_overrides:
+            if in_simulation(override.winner) and not override.replaced:
+                raise WstsError(
+                    f"{override.winner} is listed under CONFIGURATION_OVERRIDES, but no configuration module of the "
+                    f"framework, a library or the flight project supplies a file named {override.name}: F Prime "
+                    "rejects an override of nothing. If the file is new configuration of the simulation, register it "
+                    "under AUTOCODER_INPUTS or HEADERS instead; if the name is misspelt, it must match the file it "
+                    "replaces exactly."
+                )
+        early_warnings += [w for w in override_warnings + header_warnings if w not in early_warnings]
+        # The simulation's modules that override configuration are held back until the flight
+        # project's modules have been added (F Prime: the last registration wins)
+        deferred_modules, loose_overrides = fpp.find_override_modules(sim_roots)
+        if loose_overrides:
+            raise WstsError(
+                f"{loose_overrides[0]} registers CONFIGURATION_OVERRIDES directly. Put the register_fprime_config() "
+                "call in a CMakeLists.txt of its own directory and add that directory with add_fprime_subdirectory(): "
+                "fprime-wsts has to register the simulation's overrides after the flight project's, and can only "
+                "hold back a module directory."
+            )
+
         found_files = fpp.find_fpp_files(roots, manifest.fpp_exclude)
         # Only overrides that the analysis can see count: fpp_exclude may have removed them
         config_overrides = [o for o in config_overrides if o.winner in found_files and any(r in found_files for r in o.replaced)]
@@ -1530,11 +1668,11 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         plan.warnings[:0] = early_warnings
         capacity: Dict[str, dict] = {}
         if plan.sim.added:
-            config_roots = [settings.framework_path, *settings.library_locations, toolkit_fpp_root, project_root, *sim_roots]
             tables = {}
             for key, header, constant in (("command_table", "CommandDispatcherImplCfg.hpp", "CMD_DISPATCHER_DISPATCH_TABLE_SIZE"),
                                           ("parameter_table", "PrmDbImplCfg.hpp", "PRMDB_NUM_DB_ENTRIES")):
-                value = fpp.config_constant(config_roots, settings.framework_path, header, constant)
+                # The file the build uses: the simulation's override if there is one
+                value = fpp.config_constant(config_roots, settings.framework_path, header, constant, header_overrides)
                 tables[key] = (value[0], str(value[1])) if value else None
             retyped = {sub.instance.name: sub.surrogate.name for sub in plan.substitutions}
             components = [retyped.get(name, model.instances[name].component) for name in topology.instances]
@@ -1682,6 +1820,8 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         else:
             libraries["dropped"].append(str(library))
     library_paths.append(project_root)
+    # Before the simulation project itself, which may build on them
+    library_paths += [library for library in sim_libraries if library not in library_paths]
     if sim_root is not None:
         sim_files = sorted({f for f in closure if owner(f) == sim_root and output not in f.parents and final_output not in f.parents})
         if sim_files and sim_library is None:
@@ -1749,7 +1889,7 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
 
     def header_of(component: fpp.Component) -> str:
         base = component.file.with_suffix(".hpp")
-        for root in sorted([TOOLKIT_ROOT, *settings.library_locations, project_root, settings.framework_path, *sim_roots], key=lambda r: -len(str(r))):
+        for root in sorted([TOOLKIT_ROOT, *settings.library_locations, project_root, settings.framework_path, *sim_roots], key=lambda r: -len(r.parts)):
             if root in base.parents:
                 return base.relative_to(root).as_posix()
         return base.name
@@ -1822,12 +1962,40 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         final_dir = final_output / module.relative
         (output / module.relative / "CMakeLists.txt").write_text(
             render_replaced_cmake(module, _rel(module.original, final_dir), substituted_modules))
+    def cmake_file(path: Path) -> str:
+        return '"${CMAKE_CURRENT_LIST_DIR}/' + rel(path) + '"'
+
     redirect: List[str] = []
-    if replaced:
-        redirect = REDIRECT_TEMPLATE.format(
+    if includes["early"]:
+        redirect += ["", "# From `cmake.include_early` in the manifest: before any framework or library module exists",
+                     *[f"include({cmake_file(file)})" for file in includes["early"]]]
+    if replaced or deferred_modules:
+        redirect += REDIRECT_TEMPLATE.format(
             originals="\n".join(f'    "${{CMAKE_CURRENT_LIST_DIR}}/{rel(m.original)}"' for m in replaced.values()),
             copies="\n".join(f'    "${{CMAKE_CURRENT_LIST_DIR}}/{m.relative}"' for m in replaced.values()),
+            deferred_sets=DEFERRED_SETS.format(
+                modules="\n".join(f"    {cmake_file(d)}" for d in deferred_modules)) if deferred_modules else "",
+            deferred_check=DEFERRED_CHECK if deferred_modules else "",
         ).rstrip("\n").split("\n")
+    elif includes["early"]:
+        redirect.append("fprime_setup_included_code()")
+    own_setup = bool(replaced or deferred_modules or includes["early"])
+    after_modules: List[str] = []
+    if deferred_modules:
+        after_modules += [
+            "",
+            "# Configuration overrides of the simulation: registered after the flight project's, so that",
+            "# where both replace a file the simulation's is the one built",
+            "set(WSTS_ADDING_DEFERRED ON)",
+            *[f"add_fprime_subdirectory({cmake_file(d)})" for d in deferred_modules],
+        ]
+    if includes["late"]:
+        after_modules += [
+            "",
+            "# From `cmake.include` in the manifest: every flight, library and simulation module exists by now",
+            *[f"include({cmake_file(file)})" for file in includes["late"]],
+            "",
+        ]
 
     defines = ["WSTS_SIM=1", *manifest.defines]
     root_cmake = [
@@ -1844,7 +2012,7 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
            *[f'set({name} "{";".join(values)}" CACHE STRING "Set by fprime-wsts from cmake.cache in the manifest")'
              for name, values in manifest.cmake_cache.items()]] if manifest.cmake_cache else []),
         *(["# The framework's and the libraries' modules are added below, once the redirection is set up",
-           "set(FPRIME_INCLUDE_FRAMEWORK_CODE OFF)"] if replaced else []),
+           "set(FPRIME_INCLUDE_FRAMEWORK_CODE OFF)"] if own_setup else []),
         f'find_package(FPrime REQUIRED PATHS "${{CMAKE_CURRENT_LIST_DIR}}/{rel(settings.framework_path)}/cmake")',
         *redirect,
         "",
@@ -1855,6 +2023,7 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
             else f'add_fprime_subdirectory("${{CMAKE_CURRENT_LIST_DIR}}/{rel(d)}")'
             for d in module_dirs
         ],
+        *after_modules,
         f'add_fprime_subdirectory("${{CMAKE_CURRENT_LIST_DIR}}/{deployment}")',
         "",
     ]
@@ -1909,10 +2078,33 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
             key: ({**value, "source": rel(Path(value["source"]))} if value.get("source") else value)
             for key, value in capacity.items()
         }
-    if config_overrides:
+    flight_overrides = [o for o in config_overrides if not in_simulation(o.winner)]
+    simulation_overrides = [o for o in config_overrides + header_overrides if in_simulation(o.winner)]
+    if flight_overrides:
         report["config_overrides"] = [
-            {"file": o.name, "uses": rel(o.winner), "replaces": [rel(r) for r in o.replaced]} for o in config_overrides
+            {"file": o.name, "uses": rel(o.winner), "replaces": [rel(r) for r in o.replaced]} for o in flight_overrides
         ]
+    # The keys below appear only when used, so that other reports are unchanged
+    if simulation_overrides:
+        report["simulation_config_overrides"] = [
+            {"file": o.name, "uses": rel(o.winner), "replaces": [rel(r) for r in o.replaced]} for o in simulation_overrides
+        ]
+    if sim_libraries:
+        report["simulation_libraries"] = [rel(library) for library in sim_libraries]
+    if includes["early"] or includes["late"]:
+        report["cmake_includes"] = {
+            "before_libraries": [rel(f) for f in includes["early"]], "after_modules": [rel(f) for f in includes["late"]]}
+    if manifest.run_env:
+        # A value that starts with ./ or ../ is a file of the simulation project: kept
+        # relative to this directory, and made absolute when the deployment is started
+        env, paths = {}, []
+        for name, value in manifest.run_env.items():
+            if value.startswith(("./", "../")):
+                env[name] = rel(manifest.resolve_sim(value, project_root))
+                paths.append(name)
+            else:
+                env[name] = value
+        report["run"] = {"env": env, "env_paths": paths}
     report["reused_sources"] = {
         k: [rel(Path(p)) if os.path.isabs(p) else p for p in v] for k, v in reused.items()
     }

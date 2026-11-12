@@ -21,11 +21,15 @@ namespace WstsGenerated {
 
 void setup() {
     // Surrogates: one bus endpoint each
+    // ::SubtopDemo::chronoTime: SensorSim.SimTime does not use the bus
     ::SubtopDemo::vxTimer.wstsBind("vxTimer", "mode=thread tick_hz=60");
     ::SensorLink::uart.wstsBind("uart", "");
 
     // Simulator components: each adapter is the device on its endpoint
     ::SensorSim::sensorPort.wstsServe("uart", "");
+
+    // Cycle sources of the simulation: they follow the simulation's ticks from the first one on
+    ::SensorSim::simClock.wstsClock(125.0, "");
 
     ::SubtopDemo::wstsControl.wstsBind("", "");
     Wsts::RuntimeConfig config;

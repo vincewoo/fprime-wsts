@@ -10,3 +10,6 @@ set(SENSOR_SIM_COMPONENTS "" CACHE STRING "Simulator modules of this library to 
 foreach (SENSOR_SIM_COMPONENT IN LISTS SENSOR_SIM_COMPONENTS)
     add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/SensorSim/${SENSOR_SIM_COMPONENT}")
 endforeach ()
+
+# Configuration overrides for the simulated build
+add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/config")

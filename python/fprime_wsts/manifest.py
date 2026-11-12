@@ -43,6 +43,9 @@ class Surrogate:
     # queue size, stack size, priority, cpu: for a queued or active surrogate that replaces
     # an instance which has none
     attributes: Dict[str, str] = field(default_factory=dict)
+    # False for a surrogate that talks to flight components over F Prime ports only: it
+    # has no bus endpoint and no wstsBind()
+    bind: bool = True
 
     @property
     def cpp_name(self) -> str:
@@ -65,6 +68,21 @@ def _port_map(value, what: str) -> Dict[str, Optional[str]]:
     if not isinstance(value, dict):
         raise WstsError(f"{what}: 'ports' must map flight port names to surrogate port names")
     return {str(k): (str(v) if v not in (None, "", False) else None) for k, v in value.items()}
+
+
+NO_ENDPOINT = "none"
+
+
+def _no_endpoint(value, what: str, catalog: bool = False) -> bool:
+    """`endpoint: none` says a surrogate does not use the bus"""
+    if value is None:
+        return False
+    if value is False or str(value).strip().lower() == NO_ENDPOINT:
+        return True
+    if catalog and value not in ("", None):
+        raise WstsError(f"{what}: in a catalog, 'endpoint' can only be 'none' (the surrogate does not use the bus); "
+                        "endpoint names are given per instance in the manifest")
+    return False
 
 
 def _attributes(entry: dict, what: str) -> Dict[str, str]:
@@ -98,6 +116,7 @@ def load_catalog(path: Path) -> List[Surrogate]:
                 ports_for={str(k): _port_map(v, f"{path}: {entry['surrogate']}")
                            for k, v in (entry.get("ports_for") or {}).items()},
                 attributes=_attributes(entry, str(path)),
+                bind=not _no_endpoint(entry.get("endpoint", ""), f"{path}: {entry['surrogate']}", catalog=True),
             )
         )
     return surrogates
@@ -117,6 +136,15 @@ class Substitution:
     options: Optional[str] = None
     ports: Optional[Dict[str, Optional[str]]] = None
     attributes: Dict[str, str] = field(default_factory=dict)
+    no_endpoint: bool = False  # `endpoint: none`
+
+
+@dataclass
+class ClockSpec:
+    """A Wsts.SimCycle instance and the rate it cycles at"""
+    instance: str
+    hz: float
+    options: str = ""
 
 
 @dataclass
@@ -207,6 +235,13 @@ class Manifest:
     cmake_cache: Dict[str, List[str]] = field(default_factory=dict)  # name -> values (one, or a CMake list)
     simulators: SimulatorsSpec = field(default_factory=SimulatorsSpec)
     devices: List[DeviceSpec] = field(default_factory=list)
+    clocks: List[ClockSpec] = field(default_factory=list)
+    # Further F Prime libraries the simulation uses, relative to the simulation project
+    sim_libraries: List[str] = field(default_factory=list)
+    # CMake files included in the overlay: after every module is added, or before the libraries are read
+    cmake_include: List[str] = field(default_factory=list)
+    cmake_include_early: List[str] = field(default_factory=list)
+    run_env: Dict[str, str] = field(default_factory=dict)  # environment of the simulated deployment
     keep_libraries: List[str] = field(default_factory=list)
     drop_libraries: List[str] = field(default_factory=list)
     fpp_exclude: List[str] = field(default_factory=list)
@@ -245,11 +280,17 @@ class Manifest:
 KNOWN_KEYS = {
     "project", "deployment", "topology", "output", "substitute", "keep", "models", "control", "bridge", "tick_hz",
     "catalogs", "sources", "main", "cmake", "libraries", "fpp_exclude", "defines", "simulators", "devices",
+    "clocks", "run",
 }
+CLOCK_KEYS = {"instance", "hz", "options"}
+LIBRARY_KEYS = {"keep", "drop", "sim"}
+RUN_KEYS = {"env"}
+MAX_CLOCK_HZ = 100000.0  # Wsts::CycleClock::MAX_HZ
+ENV_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
 SUBSTITUTE_KEYS = {"instance", "component", "with", "endpoint", "options", "ports", *ATTRIBUTE_KEYS}
 SIMULATOR_KEYS = {"instances", "topologies", "connections", "headers"}
 DEVICE_KEYS = {"instance", "endpoint", "options"}
-CMAKE_KEYS = {"extra_subdirectories", "exclude_subdirectories", "depends", "cache"}
+CMAKE_KEYS = {"extra_subdirectories", "exclude_subdirectories", "depends", "cache", "include", "include_early"}
 CONNECTION_END = r"([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+)\s*(?:\[\s*(\d+)\s*\])?"
 CACHE_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
 
@@ -308,10 +349,11 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
                 surrogate=entry["with"],
                 instance=entry.get("instance"),
                 component=entry.get("component"),
-                endpoint=entry.get("endpoint"),
+                endpoint=None if _no_endpoint(entry.get("endpoint"), where) else entry.get("endpoint"),
                 options=entry.get("options"),
                 ports=_port_map(entry["ports"], f"{where}: substitute") if "ports" in entry else None,
                 attributes=_attributes(entry, where),
+                no_endpoint=_no_endpoint(entry.get("endpoint"), where),
             )
         )
 
@@ -381,6 +423,32 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
     if manifest.main.generate and not manifest.main.start:
         raise WstsError(f"{where}: main.generate needs main.start (the C++ expression that starts the deployment)")
 
+    for entry in data.get("clocks") or []:
+        if not isinstance(entry, dict) or "instance" not in entry or "hz" not in entry:
+            raise WstsError(f"{where}: each 'clocks' entry needs 'instance' and 'hz'")
+        unknown = set(entry) - CLOCK_KEYS
+        if unknown:
+            raise WstsError(f"{where}: clock {entry['instance']}: unknown key(s): {', '.join(sorted(unknown))}")
+        try:
+            hz = float(entry["hz"])
+        except (TypeError, ValueError):
+            raise WstsError(f"{where}: clock {entry['instance']}: hz '{entry['hz']}' is not a number") from None
+        if not 0.0 < hz <= MAX_CLOCK_HZ or round(hz * 1000) < 1:
+            raise WstsError(
+                f"{where}: clock {entry['instance']}: hz must be above 0 and at most {MAX_CLOCK_HZ:g} "
+                f"(it is {entry['hz']}). The rate is in cycles per second of simulated time."
+            )
+        manifest.clocks.append(ClockSpec(str(entry["instance"]).replace("$", ""), hz, str(entry.get("options", ""))))
+
+    run = data.get("run") or {}
+    unknown = set(run) - RUN_KEYS if isinstance(run, dict) else {"(not a mapping)"}
+    if unknown:
+        raise WstsError(f"{where}: run: unknown key(s): {', '.join(sorted(unknown))}")
+    for name, value in (run.get("env") or {}).items():
+        if not re.fullmatch(ENV_NAME, str(name)):
+            raise WstsError(f"{where}: run.env: '{name}' is not an environment variable name")
+        manifest.run_env[str(name)] = "" if value is None else str(value)
+
     cmake = data.get("cmake") or {}
     unknown = set(cmake) - CMAKE_KEYS
     if unknown:
@@ -401,7 +469,13 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
     manifest.extra_subdirectories = [str(d) for d in cmake.get("extra_subdirectories", [])]
     manifest.exclude_subdirectories = [str(d) for d in cmake.get("exclude_subdirectories", [])]
     manifest.extra_depends = [str(d) for d in cmake.get("depends", [])]
+    manifest.cmake_include = [str(f) for f in cmake.get("include") or []]
+    manifest.cmake_include_early = [str(f) for f in cmake.get("include_early") or []]
     libraries = data.get("libraries") or {}
+    unknown = set(libraries) - LIBRARY_KEYS
+    if unknown:
+        raise WstsError(f"{where}: libraries: unknown key(s): {', '.join(sorted(unknown))}")
+    manifest.sim_libraries = [str(d) for d in libraries.get("sim") or []]
     manifest.keep_libraries = [str(d) for d in libraries.get("keep", [])]
     manifest.drop_libraries = [str(d) for d in libraries.get("drop", [])]
     return manifest

@@ -103,6 +103,68 @@
           "channels": [],
           "params": []
         }
+      },
+      {
+        "instance": "SensorSim.simClock",
+        "component": "Wsts.SimCycle",
+        "kind": "passive",
+        "base_id": 1879064576,
+        "last_id": null,
+        "from": "SensorSim.Simulator",
+        "defined_in": "SensorSim.fpp",
+        "pinged": null,
+        "dictionary_items": {
+          "commands": [],
+          "events": [],
+          "channels": [],
+          "params": []
+        }
+      },
+      {
+        "instance": "SensorSim.fastGroup",
+        "component": "Svc.PassiveRateGroup",
+        "kind": "passive",
+        "base_id": 1879068672,
+        "last_id": 1879068676,
+        "from": "SensorSim.Simulator",
+        "defined_in": "SensorSim.fpp",
+        "pinged": null,
+        "dictionary_items": {
+          "commands": [
+            "SensorSim.fastGroup.CLEAR_STATISTICS"
+          ],
+          "events": [],
+          "channels": [
+            "SensorSim.fastGroup.CycleCount",
+            "SensorSim.fastGroup.CycleTime",
+            "SensorSim.fastGroup.MaxCycleTime",
+            "SensorSim.fastGroup.PortCycleTime",
+            "SensorSim.fastGroup.PortCycleTimeHWM"
+          ],
+          "params": []
+        }
+      },
+      {
+        "instance": "SensorSim.gyroSim",
+        "component": "SensorSim.GyroSim",
+        "kind": "passive",
+        "base_id": 1879072768,
+        "last_id": 1879072770,
+        "from": "SensorSim.Simulator",
+        "defined_in": "SensorSim.fpp",
+        "pinged": null,
+        "dictionary_items": {
+          "commands": [],
+          "events": [
+            "SensorSim.gyroSim.ProfileLoaded"
+          ],
+          "channels": [
+            "SensorSim.gyroSim.ModelTime",
+            "SensorSim.gyroSim.Profile",
+            "SensorSim.gyroSim.Steps"
+          ],
+          "params": []
+        }
       }
     ],
     "devices": [
@@ -137,6 +199,15 @@
         "driven_by": "SubtopDemo.rateGroup1Hz.RateGroupMemberOut[6]"
       }
     ],
+    "clocks": [
+      {
+        "instance": "SensorSim.simClock",
+        "hz": 125.0,
+        "drives": [
+          "SensorSim.fastGroup.CycleIn"
+        ]
+      }
+    ],
     "health": {
       "flight_targets_listed": [
         "CdhCore.cmdDisp",
@@ -156,7 +227,8 @@
         "SensorSim.sensorSim.TEMPERATURE",
         "SensorSim.prmDb.PRM_COMMIT_STAGED",
         "SensorSim.prmDb.PRM_LOAD_FILE",
-        "SensorSim.prmDb.PRM_SAVE_FILE"
+        "SensorSim.prmDb.PRM_SAVE_FILE",
+        "SensorSim.fastGroup.CLEAR_STATISTICS"
       ],
       "events": [
         "SensorSim.sensorSim.QueryReceived",
@@ -175,7 +247,8 @@
         "SensorSim.prmDb.PrmFileWriteError",
         "SensorSim.prmDb.PrmIdAdded",
         "SensorSim.prmDb.PrmIdNotFound",
-        "SensorSim.prmDb.PrmIdUpdated"
+        "SensorSim.prmDb.PrmIdUpdated",
+        "SensorSim.gyroSim.ProfileLoaded"
       ],
       "channels": [
         "SensorSim.sensorSim.QueriesReceived",
@@ -184,7 +257,15 @@
         "SensorSim.txBuffers.EmptyBuffs",
         "SensorSim.txBuffers.HiBuffs",
         "SensorSim.txBuffers.NoBuffs",
-        "SensorSim.txBuffers.TotalBuffs"
+        "SensorSim.txBuffers.TotalBuffs",
+        "SensorSim.fastGroup.CycleCount",
+        "SensorSim.fastGroup.CycleTime",
+        "SensorSim.fastGroup.MaxCycleTime",
+        "SensorSim.fastGroup.PortCycleTime",
+        "SensorSim.fastGroup.PortCycleTimeHWM",
+        "SensorSim.gyroSim.ModelTime",
+        "SensorSim.gyroSim.Profile",
+        "SensorSim.gyroSim.Steps"
       ],
       "params": [
         "SensorSim.sensorSim.TEMPERATURE"
@@ -200,6 +281,22 @@
     "tick_source": "SubtopDemo.vxTimer"
   },
   "substitutions": [
+    {
+      "instance": "SubtopDemo.chronoTime",
+      "flight_component": "Svc.ChronoTime",
+      "surrogate": "SensorSim.SimTime",
+      "seam": "S1 topology",
+      "chosen_by": "manifest",
+      "endpoint": null,
+      "options": "",
+      "base_id": 536936448,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [],
+        "channels": [],
+        "params": []
+      }
+    },
     {
       "instance": "SubtopDemo.vxTimer",
       "flight_component": "VxWorksSvc.VxWatchDogTimer",
@@ -248,8 +345,8 @@
   "models": [],
   "control": {
     "enabled": true,
-    "setup_base_id": 1879064576,
-    "control_base_id": 1879068672
+    "setup_base_id": 1879076864,
+    "control_base_id": 1879080960
   },
   "bridge": "tcp:50103",
   "dictionary": {
@@ -331,7 +428,8 @@
         "SensorSim.sensorSim.TEMPERATURE",
         "SensorSim.prmDb.PRM_COMMIT_STAGED",
         "SensorSim.prmDb.PRM_LOAD_FILE",
-        "SensorSim.prmDb.PRM_SAVE_FILE"
+        "SensorSim.prmDb.PRM_SAVE_FILE",
+        "SensorSim.fastGroup.CLEAR_STATISTICS"
       ],
       "events": [
         "SensorSim.sensorSim.QueryReceived",
@@ -350,7 +448,8 @@
         "SensorSim.prmDb.PrmFileWriteError",
         "SensorSim.prmDb.PrmIdAdded",
         "SensorSim.prmDb.PrmIdNotFound",
-        "SensorSim.prmDb.PrmIdUpdated"
+        "SensorSim.prmDb.PrmIdUpdated",
+        "SensorSim.gyroSim.ProfileLoaded"
       ],
       "channels": [
         "SensorSim.sensorSim.QueriesReceived",
@@ -359,7 +458,15 @@
         "SensorSim.txBuffers.EmptyBuffs",
         "SensorSim.txBuffers.HiBuffs",
         "SensorSim.txBuffers.NoBuffs",
-        "SensorSim.txBuffers.TotalBuffs"
+        "SensorSim.txBuffers.TotalBuffs",
+        "SensorSim.fastGroup.CycleCount",
+        "SensorSim.fastGroup.CycleTime",
+        "SensorSim.fastGroup.MaxCycleTime",
+        "SensorSim.fastGroup.PortCycleTime",
+        "SensorSim.fastGroup.PortCycleTimeHWM",
+        "SensorSim.gyroSim.ModelTime",
+        "SensorSim.gyroSim.Profile",
+        "SensorSim.gyroSim.Steps"
       ],
       "params": [
         "SensorSim.sensorSim.TEMPERATURE"
@@ -386,6 +493,7 @@
     ]
   },
   "fidelity_notes": [
+    "SubtopDemo.chronoTime is replaced by SensorSim.SimTime, which has no bus endpoint: it talks to the flight components over their ports directly. Fault injection, recording, replay and the bridge do not reach that link.",
     "Simulator components (see 'Simulator components') are part of the simulated deployment only: their commands, events, telemetry and parameters are in its dictionary and not in the flight one, and they use command dispatcher, telemetry and rate group capacity that flight does not.",
     "Operating system: flight OSAL implementations are replaced by the Linux/POSIX ones. Task priorities are advisory and scheduling is not real-time, so timing and preemption order differ from the target.",
     "Word size and byte order are those of the host; code that depends on the target's differs here.",
@@ -410,14 +518,14 @@
   ],
   "capacity": {
     "command_ports": {
-      "used": 9,
+      "used": 10,
       "size": 30,
       "constant": "CmdDispatcherComponentCommandPorts"
     },
     "command_table": {
-      "used": 39,
-      "size": 150,
-      "source": "../../../../lib/fprime/default/config/CommandDispatcherImplCfg.hpp"
+      "used": 40,
+      "size": 80,
+      "source": "../../config/CommandDispatcherImplCfg.hpp"
     },
     "parameter_table": {
       "used": 1,
@@ -440,5 +548,40 @@
         "../../../subtop-demo/lib/sensor-lib/SensorLib/SensorLink/SensorLinkConfig/SensorLinkConfig.fpp"
       ]
     }
-  ]
+  ],
+  "simulation_config_overrides": [
+    {
+      "file": "AcConstants.fpp",
+      "uses": "../../config/AcConstants.fpp",
+      "replaces": [
+        "../../../subtop-demo/config/project/AcConstants.fpp",
+        "../../../../lib/fprime/default/config/AcConstants.fpp"
+      ]
+    },
+    {
+      "file": "CommandDispatcherImplCfg.hpp",
+      "uses": "../../config/CommandDispatcherImplCfg.hpp",
+      "replaces": [
+        "../../../subtop-demo/config/project/CommandDispatcherImplCfg.hpp",
+        "../../../../lib/fprime/default/config/CommandDispatcherImplCfg.hpp"
+      ]
+    }
+  ],
+  "simulation_libraries": [
+    "../../lib/sim-common"
+  ],
+  "cmake_includes": {
+    "before_libraries": [],
+    "after_modules": [
+      "../../sim.cmake"
+    ]
+  },
+  "run": {
+    "env": {
+      "SENSOR_SIM_PROFILE": "../../profiles/calm.txt"
+    },
+    "env_paths": [
+      "SENSOR_SIM_PROFILE"
+    ]
+  }
 }

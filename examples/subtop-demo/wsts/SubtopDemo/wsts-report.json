@@ -183,6 +183,13 @@
   ],
   "config_overrides": [
     {
+      "file": "AcConstants.fpp",
+      "uses": "../../config/project/AcConstants.fpp",
+      "replaces": [
+        "../../../../lib/fprime/default/config/AcConstants.fpp"
+      ]
+    },
+    {
       "file": "CdhCoreConfig.fpp",
       "uses": "../../config/project/CdhCoreConfig.fpp",
       "replaces": [

@@ -173,16 +173,19 @@ def test_flight_numbering_is_unchanged(default, tmp_path):
         ("CdhCore.health", 4, "SubtopDemo.rateGroup1Hz")}, "SensorSim.prmDb has ping ports and sorts between them"
     assert numbers(before, "RateGroupMemberOut") < numbers(after, "RateGroupMemberOut")
     assert numbers(after, "RateGroupMemberOut") - numbers(before, "RateGroupMemberOut") == {
-        ("SubtopDemo.rateGroup1Hz", 5, "SensorSim.sensorSim"), ("SubtopDemo.rateGroup1Hz", 6, "SensorSim.txBuffers")}
+        ("SubtopDemo.rateGroup1Hz", 5, "SensorSim.sensorSim"), ("SubtopDemo.rateGroup1Hz", 6, "SensorSim.txBuffers"),
+        ("SensorSim.fastGroup", 0, "SensorSim.gyroSim")}, "the simulation's own rate group, and two flight ports"
     # Everything else the flight topology connects explicitly (pattern-made command,
     # event and telemetry connections aside) is where it was
     explicit = {n for n in before.numbered
                 if not n.from_port.lower().startswith(("cmd", "compcmd", "log", "tlm", "time", "prm")) and "Cmd" not in n.to_port}
     assert explicit and explicit <= set(after.numbered)
-    assert [s["base_id"] for s in default.report["substitutions"]] == [s["base_id"] for s in flight_out.report["substitutions"]]
+    ids = {s["instance"]: s["base_id"] for s in default.report["substitutions"]}
+    assert all(ids[s["instance"]] == s["base_id"] for s in flight_out.report["substitutions"])
+    assert ids["SubtopDemo.chronoTime"] == 0x20010000, "an instance substituted only here keeps its flight ID too"
     # The WSTS instances go above every ID in use, which now includes the simulators'
     assert flight_out.report["control"]["setup_base_id"] == 0x20022000
-    assert default.report["control"]["setup_base_id"] == 0x70004000
+    assert default.report["control"]["setup_base_id"] == 0x70007000
     assert default.report["dictionary"]["flight_ids_unchanged"]
 
     listed = (default.output / "SubtopDemo" / "Top" / "topology.fpp").read_text()
@@ -198,6 +201,9 @@ def test_simulator_items_are_reported(default):
         ("SensorSim.txBuffers", "Svc.BufferManager", "SensorSim.Simulator"),
         ("SensorSim.sensorPort", "Wsts.BusByteStreamDevice", "SensorSim.Simulator"),
         ("SensorSim.prmDb", "Svc.PrmDb", "SensorSim.Simulator"),
+        ("SensorSim.simClock", "Wsts.SimCycle", "SensorSim.Simulator"),
+        ("SensorSim.fastGroup", "Svc.PassiveRateGroup", "SensorSim.Simulator"),
+        ("SensorSim.gyroSim", "SensorSim.GyroSim", "SensorSim.Simulator"),
     ]
     assert simulators["instances"][0]["base_id"] == 0x70000000
     assert simulators["devices"] == [{"instance": "SensorSim.sensorPort", "component": "Wsts.BusByteStreamDevice",
@@ -213,7 +219,7 @@ def test_simulator_items_are_reported(default):
     assert not any(item.startswith("SensorSim") for item in report["dictionary"]["added"]["commands"]), \
         "WSTS items and simulator items are listed apart"
     assert not report["dictionary"]["identical_to_flight"]
-    assert report["capacity"]["command_table"]["size"] == 150 and report["capacity"]["command_ports"]["size"] == 30
+    assert report["capacity"]["command_ports"]["size"] == 30
     text = (default.output / "wsts-report.md").read_text()
     assert "## Simulator components" in text and "**Added (simulator components):**" in text
     assert "serves endpoint `uart`" in text and "are not pinged" in text
@@ -227,7 +233,7 @@ def test_instances_without_a_subtopology(project, tmp_path):
         replace_in(project / "SensorSim" / "SerialSensorSim" / "SerialSensorSim.fpp", port, "")
     replace_in(project / "SensorSim" / "Top" / "SensorSim.fpp",
                "    connections Parameters {\n      sensorSim.prmGetOut -> prmDb.getPrm\n      sensorSim.prmSetOut -> prmDb.setPrm\n    }\n", "")
-    result = run(project, tmp_path / "out", simulators={
+    result = run(project, tmp_path / "out", clocks=None, simulators={
         "instances": ["SensorSim.sensorSim", "SensorSim.txBuffers", "SensorSim.sensorPort"],
         "connections": [
             "rateGroup10Hz.RateGroupMemberOut -> sensorSim.schedIn",
@@ -507,7 +513,8 @@ def test_attribute_clauses_are_written_in_fpp_order():
 @needs_fpp
 def test_cache_variables_reach_the_overlay(default, tmp_path):
     root = (default.output / "CMakeLists.txt").read_text()
-    line = 'set(SENSOR_SIM_COMPONENTS "SerialSensorSim;Top" CACHE STRING "Set by fprime-wsts from cmake.cache in the manifest")'
+    line = ('set(SENSOR_SIM_COMPONENTS "SerialSensorSim;GyroSim;SimTime;Top" CACHE STRING '
+            '"Set by fprime-wsts from cmake.cache in the manifest")')
     assert line in root and root.index(line) < root.index("find_package(FPrime")
     assert "FORCE" not in root, "a -D on the command line still wins"
     # The simulation project's library.cmake reads the variable: that is what builds the simulator

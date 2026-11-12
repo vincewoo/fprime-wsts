@@ -191,10 +191,13 @@ copy of the subtopology and builds it in place of the original; the library is n
 touched. See [Instances inside subtopologies](docs/design.md#instances-inside-subtopologies).
 
 `examples/subtop-demo-sim` is a simulation project for that deployment in which the
-device simulator is itself an F´ component: a queued `SerialSensorSim` with its own
+device simulators are themselves F´ components: a queued `SerialSensorSim` with its own
 command, parameter, event and telemetry, scheduled by a flight rate group and reached
-through the `Wsts.BusByteStreamDevice` adapter on the UART's bus endpoint. The flight
-project is not touched. See
+through the `Wsts.BusByteStreamDevice` adapter on the UART's bus endpoint. A second
+simulator is stepped at 125 Hz by a rate group of the simulation behind a `Wsts.SimCycle`
+clock, although the flight tick is 10 Hz. The project also vendors a library of its own,
+overrides configuration that the flight project overrides too, and replaces the flight
+time source with a component that uses no bus endpoint. The flight project is not touched. See
 [Device simulators as F´ components](docs/surrogate-guide.md#device-simulators-as-f-components).
 
 `examples/linux-demo-sim` keeps the simulation out of the flight project altogether. Its

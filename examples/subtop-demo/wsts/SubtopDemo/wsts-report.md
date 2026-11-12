@@ -96,5 +96,6 @@ These hold substituted instances outside the deployment's Top directory. The sim
 
 FPP configuration replaced through `CONFIGURATION_OVERRIDES`, as the build does.
 
+- `AcConstants.fpp`: `../../config/project/AcConstants.fpp` replaces `../../../../lib/fprime/default/config/AcConstants.fpp`
 - `CdhCoreConfig.fpp`: `../../config/project/CdhCoreConfig.fpp` replaces `../../../../lib/fprime/Svc/Subtopologies/CdhCore/CdhCoreConfig/CdhCoreConfig.fpp`
 - `SensorLinkConfig.fpp`: `../../config/project/SensorLinkConfig.fpp` replaces `../../lib/sensor-lib/SensorLib/SensorLink/SensorLinkConfig/SensorLinkConfig.fpp`

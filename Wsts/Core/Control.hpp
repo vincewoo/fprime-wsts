@@ -24,6 +24,7 @@
 #define WSTS_CORE_CONTROL_HPP
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <fstream>
@@ -37,6 +38,8 @@
 #include <Wsts/Core/Bus.hpp>
 
 namespace Wsts {
+
+class CycleClock;
 
 //! Base class for device models that take parameters or need a tick
 class Model {
@@ -125,6 +128,19 @@ class Control : public BusObserver {
     void startInternalTicker(std::uint32_t hz);
     void stopInternalTicker();
 
+    //! Simulated time one tick covers, in nanoseconds. A tick source that knows its period
+    //! says so (Wsts.SimTick and the internal ticker do); otherwise the core measures the
+    //! interval between ticks. Cycle clocks are fed from this.
+    void setTickPeriod(std::uint64_t nanoseconds) { m_tickPeriodNs.store(nanoseconds); }
+    //! The declared period, else the measured one, else 0 while it is not known yet
+    std::uint64_t tickPeriodNs() const;
+    //! Cycle sources with a rate of their own (see Clock.hpp). They are granted their
+    //! cycles on each tick, so they stop while paused.
+    void addClock(CycleClock* clock);
+    void removeClock(CycleClock* clock);
+    //! Stop every registered clock (runtime shutdown)
+    void stopClocks();
+
     // ---- Actions ----
 
     //! Execute one action. Returns false and fills `error` on failure.
@@ -177,6 +193,7 @@ class Control : public BusObserver {
     void scenarioStop(bool completed);
     void scenarioRun();
     void notifyListeners(bool paused);
+    void grantClocks();
 
     std::atomic<std::uint64_t> m_tick{0};
     std::atomic<bool> m_paused{false};
@@ -204,6 +221,13 @@ class Control : public BusObserver {
     std::atomic<std::uint32_t> m_scenarioNext{0};
     std::atomic<std::uint32_t> m_scenarioSize{0};
     std::string m_scenarioPath;
+
+    std::atomic<std::uint64_t> m_tickPeriodNs{0};   //!< declared by the tick source
+    std::atomic<std::uint64_t> m_measuredPeriodNs{0};
+    std::chrono::steady_clock::time_point m_lastTick;
+    bool m_lastTickValid = false;  //!< tick thread only
+    std::mutex m_clockMutex;
+    std::vector<CycleClock*> m_clocks;
 
     std::thread m_ticker;
     std::atomic<bool> m_tickerQuit{false};

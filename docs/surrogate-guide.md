@@ -261,11 +261,93 @@ driver's `send` call, on the thread of the flight component that sent it.
 
 **Scheduling and pause.** A simulator connected to a flight rate group runs at that
 group's rate and stops with it when the simulation is paused, since the same tick drives
-both. A simulator that needs a rate of its own (higher than any flight rate group) is not
-catered for yet: the tick surrogate's cycle output is already connected to the flight rate
-group driver, and an output port drives one input. Schedule such a simulator from the
-fastest flight rate group and let it step several times per call.
-While paused, `inject_bytes` from the bridge still reaches flight software.
+both. While paused, `inject_bytes` from the bridge still reaches flight software.
+
+**A rate of its own.** A simulator that has to run faster than any flight rate group, at
+a rate that is not a multiple of the flight tick, or simply at a rate flight has no free
+ports for, gets a clock from the simulation: an instance of `Wsts.SimCycle`. Its
+`CycleOut` (`Svc.Cycle`) drives a `Svc.RateGroupDriver`, `Svc.PassiveRateGroup` or
+`Svc.ActiveRateGroup` that the simulation defines, and the manifest gives its rate:
+
+```fpp
+instance simClock: Wsts.SimCycle base id 0x70004000
+instance fastGroup: Svc.PassiveRateGroup base id 0x70005000 { ... }   # configure() in phase code
+
+topology Simulator {
+  instance simClock
+  instance fastGroup
+  instance gyroSim
+  connections FastRateGroup {
+    simClock.CycleOut -> fastGroup.CycleIn
+    fastGroup.RateGroupMemberOut[0] -> gyroSim.schedIn
+  }
+}
+```
+
+```yaml
+clocks:
+  - {instance: SensorSim.simClock, hz: 125}
+```
+
+One clock with a rate group driver behind it serves several rates (dividers of the clock's
+rate); several clocks may run side by side. What a clock guarantees:
+
+- **It follows simulation time, not the wall clock.** On every simulation tick the
+  control core tells each clock how much simulated time the tick covers, and the clock
+  issues the cycles that fall in it. So `pause` stops it with the flight rate groups,
+  `resume` restarts it, and `set_rate` scales it exactly as it scales flight. This works
+  with any tick source: `Wsts.SimTick` in either mode, the built-in ticker, or a project
+  surrogate that calls `Control::onTick()`.
+- **The count does not drift.** Cycle *j* is at *j*/rate seconds of simulated time after
+  the clock's first tick, computed in integers. At 1000 Hz on a 64 Hz tick each tick
+  carries 15 or 16 cycles and 64 ticks carry exactly 1000.
+- **Spacing and phase.** Within a tick the cycles are issued at their own instants, not
+  in a burst: 8 ms apart for 125 Hz on a 10 Hz tick, whatever the tick rate. Cycle 0
+  coincides with the first tick after start-up, so a clock whose rate divides the tick
+  rate stays in phase with it. Measured on a development host: gaps of 8.00 ms median,
+  95% within 0.1 ms of that, with an occasional gap off by a few milliseconds when the
+  host schedules late; the first cycle about 0.2 ms after its tick. The host is not a
+  real-time system, and neither is this.
+- **Its own thread.** `CycleOut` is called on a thread belonging to the clock, not on the
+  tick thread: a passive rate group and its members run there. A slow handler delays
+  that clock only, never the flight cycle. If the handlers cannot keep up, cycles beyond
+  a few ticks' worth are dropped, a message is printed once, and the count is no longer
+  exact. After a pause the cycles that were already granted come out with their spacing
+  kept, not at once.
+- **`tick` still means the flight tick** everywhere: scenarios, recordings, fault
+  durations and `SimTicks`.
+
+A tick source should say how much simulated time one tick is
+(`Control::setTickPeriod()`, which `Wsts.SimTick` and the built-in ticker do). If none
+does, the core measures the interval between ticks, and the long-run count is then as
+good as that measurement. A clock is one simulated deployment's: the elements of a system
+each have their own.
+
+**Run-time inputs.** A simulator often needs something the flight `main()` has no option
+for: a data file, a seed. Take it from the environment in the instance's phase code, with
+a fallback, so that nothing in flight changes:
+
+```fpp
+instance starSim: Sim.StarSim base id 0x70010000 {
+  phase Fpp.ToCpp.Phases.configComponents """
+  // Unset: the simulator uses its built-in catalogue
+  Sim::starSim.configure(std::getenv("SIM_STAR_CATALOGUE"));
+  """
+}
+```
+
+```yaml
+run:
+  env:
+    SIM_STAR_CATALOGUE: ./data/stars.bin     # ./ or ../ : a path relative to the manifest
+    SIM_SEED: 42
+```
+
+`fprime-wsts run` and the pytest plugin set these for the deployment; `--env NAME=VALUE`
+on the command line (`--wsts-env` in pytest) adds to them or replaces them for one run.
+For files that belong to a run rather than to the project, `WSTS_DIR` is already set to
+the run's files directory (`--files-dir`, by default the log directory). Include
+`<cstdlib>` through one of the `simulators.headers`.
 
 **Parameters and health.** If the flight topology has a parameter database, the
 simulator's parameters are loaded from it. If it has none, add a `Svc.PrmDb` to the
@@ -298,6 +380,11 @@ A surrogate is a normal F´ component with three conventions.
    ```cpp
    template <typename... Args> bool open(Args&&...) { return true; }
    ```
+
+   A stand-in may only be empty when the real method has nothing to do in simulation.
+   If flight teardown calls `camera.stopCapture()` to end a thread before the components
+   are deinitialised, and your replacement runs such a thread, its `stopCapture()` must
+   stop it: the flight topology code is the only place that call is made.
 
    Flight code can also use `#ifdef WSTS_SIM`, which is defined in every simulated build.
 
@@ -337,6 +424,22 @@ surrogates:
 A surrogate may declare its own commands, events and telemetry. They appear in the
 simulated dictionary under the replaced instance's base ID, and the report lists the
 difference from flight.
+
+### A surrogate that does not use the bus
+
+A replacement that talks to the flight components directly over F´ ports (a simulator
+that takes a driver's place, a mirror of a camera component, a time source) has no bus
+endpoint, and needs no `wstsBind`. Say so where it is substituted, or in the catalog entry:
+
+```yaml
+substitute:
+  - {instance: chronoTime, with: SensorSim.SimTime, endpoint: none}
+```
+
+No bind call is generated and there is no endpoint of that name: a model, a device or a
+system link there is an error. The report marks the substitution "no bus endpoint", and
+notes that faults, recording, replay and the bridge do not reach that link. If you want
+those, put the stock surrogate in the driver's place and the simulator behind the bus.
 
 ### A surrogate that is not shaped like the driver
 
@@ -403,8 +506,22 @@ module Fc {
     output port tickOut: Svc.Cycle
     @ Time for the rest of the topology, if the flight component supplies it
     sync input port timeGetPort: Fw.Time
+    @ Ping ports, if the flight component has them: same names, answered at once
+    sync input port PingIn: Svc.Ping
+    output port PingOut: Svc.Ping
   }
 }
+```
+
+Keep the flight component's `Svc.Ping` ports if the health component pings it. The
+flight ping table has an entry for the instance, and ping ports are numbered over the
+instances that have them: without them every later instance's number would shift away
+from its table entry. The generator does not let that happen: a surrogate that lacks a
+connected port of the flight component is refused, with the ports named. Answering is one
+line:
+
+```cpp
+void SimTimeUnit::PingIn_handler(FwIndexType, U32 key) { this->PingOut_out(0, key); }
 ```
 
 ```cpp
@@ -417,6 +534,8 @@ void SimTimeUnit::wstsBind(const char* endpoint, const char* options) { /* read 
 
 // What flight code calls to enable the interrupt
 void SimTimeUnit::enable() {
+    // How much simulated time a tick is: cycle sources of the simulation are fed from it
+    Wsts::Control::get().setTickPeriod(periodNanoseconds);
     m_thread = std::thread([this]() {
         Wsts::Control& control = Wsts::Control::get();
         while (!m_quit) {
@@ -425,7 +544,7 @@ void SimTimeUnit::enable() {
                 control.onIdle();      // bridge and scenario listeners keep running
                 continue;
             }
-            control.onTick();          // simulation time first: models, scenarios, faults
+            control.onTick();          // simulation time first: models, scenarios, faults, clocks
             Os::RawTime start;
             (void)start.now();
             this->tickOut_out(0, start);  // then one flight cycle

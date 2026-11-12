@@ -48,6 +48,7 @@ fprime-wsts run examples/subtop-demo/wsts/SubtopDemo --gds --duration 30 --json
 | The flight driver's module in the subtopology module's `DEPENDS` | Removed in the copy's build file when no instance uses the driver any more |
 | Configuration replaced with `CONFIGURATION_OVERRIDES` (framework defaults, subtopology configuration, library configuration) | Applied in the analysis as the build applies them: by file name, last registration wins. Listed in the report |
 | A timer or time source that is a project component waiting for a hardware interrupt | Reported: a warning and a fidelity note say that the flight rate groups may never run, and what to do |
+| Simulators the project already has as F´ components, in their own library | Added to the topology from the manifest (`simulators`, `devices`), with clocks of their own (`clocks`), their libraries (`libraries.sim`), CMake around the flight modules (`cmake.include`) and configuration overrides that win over flight's |
 | FPP tools older or newer than the framework pins; a Java runtime that is too old | Reported before the analysis, and again with the tool's error |
 
 The manifest for VxDemo:
@@ -85,6 +86,15 @@ In the generated `main()`, `hostname` and `port` come from `-a` and `-p`.
 - **Configuration overrides the generator cannot read**: a `CONFIGURATION_OVERRIDES` list
   held in a CMake variable, or two configuration modules of one project that override the
   same file for different builds. Settle these with `fpp_exclude`.
+- **A simulator that must see a flight output port that is already connected.** An output
+  port drives one input; there is no tap. Feed the simulator from another port, or
+  substitute the receiving component.
+- **I2C, SPI and GPIO simulators written as components.** Only the byte stream adapter
+  exists; use a C++ model on those endpoints.
+- **Simulator rates across the elements of a system.** Each element has its own tick and
+  its own clocks; nothing aligns them between processes.
+- **A project tick surrogate that does not declare its period** makes the simulation's
+  clocks follow a measured tick interval. Call `Control::setTickPeriod()` in it.
 - **Project code a component depends on that has no FPP model** (plain C++ libraries). The
   generator finds modules through the FPP dependency closure, so list such directories
   under `cmake.extra_subdirectories` in the manifest.
