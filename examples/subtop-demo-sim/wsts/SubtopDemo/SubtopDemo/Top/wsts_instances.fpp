@@ -3,7 +3,7 @@
 module SubtopDemo {
 
   @ Anchor for generated simulation set-up code
-  instance wstsSetup: Wsts.SimSetup base id 0x70004000 {
+  instance wstsSetup: Wsts.SimSetup base id 0x70007000 {
     phase Fpp.ToCpp.Phases.configComponents """
     WstsGenerated::setup();
     """
@@ -13,7 +13,7 @@ module SubtopDemo {
   }
 
   @ WSTS commands, events and telemetry
-  instance wstsControl: Wsts.SimControl base id 0x70005000 \
+  instance wstsControl: Wsts.SimControl base id 0x70008000 \
     queue size 30 \
     stack size 64 * 1024 \
     priority 20

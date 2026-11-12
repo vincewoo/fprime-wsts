@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from .bridge import WstsBridge, WstsSystem
-from .runner import Simulation, SystemSimulation
+from .runner import Simulation, SystemSimulation, parse_env
 
 
 def pytest_addoption(parser):
@@ -22,6 +22,8 @@ def pytest_addoption(parser):
     group.addoption("--wsts-gds", action="store_true", help="also start a headless fprime-gds")
     group.addoption("--wsts-bridge", help="bridge address (default: taken from the deployment, else tcp:50100)")
     group.addoption("--wsts-system", help="generated system directory to start for the session (several elements)")
+    group.addoption("--wsts-env", action="append", metavar="NAME=VALUE",
+                    help="environment variable for the simulated deployment (repeatable), as for `fprime-wsts run --env`")
 
 
 @pytest.fixture(scope="session")
@@ -32,7 +34,8 @@ def wsts_simulation(request):
         yield None
         return
     simulation = Simulation(Path(directory), gds=request.config.getoption("--wsts-gds"),
-                            bridge=request.config.getoption("--wsts-bridge"))
+                            bridge=request.config.getoption("--wsts-bridge"),
+                            env=parse_env(request.config.getoption("--wsts-env")).get(None, {}))
     simulation.start()
     yield simulation
     simulation.stop()
@@ -58,7 +61,8 @@ def wsts_system_simulation(request):
     directory = request.config.getoption("--wsts-system")
     if not directory:
         raise pytest.UsageError("this test needs --wsts-system <generated system directory>")
-    system = SystemSimulation(Path(directory), gds=request.config.getoption("--wsts-gds"))
+    system = SystemSimulation(Path(directory), gds=request.config.getoption("--wsts-gds"),
+                              env=request.config.getoption("--wsts-env"))
     system.start()
     yield system
     system.stop()

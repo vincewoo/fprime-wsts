@@ -50,6 +50,31 @@ module SensorSim {
     """
   }
 
+  @ Clock of the simulation's own rate group. Its rate is given in the manifest (`clocks`).
+  instance simClock: Wsts.SimCycle base id 0x70004000
+
+  @ Rate group for models that are stepped faster than any flight rate group runs
+  instance fastGroup: Svc.PassiveRateGroup base id 0x70005000 \
+  {
+    phase Fpp.ToCpp.Phases.configObjects """
+    Svc::PassiveRateGroup::ContextArray contexts(0);
+    """
+    phase Fpp.ToCpp.Phases.configComponents """
+    SensorSim::fastGroup.configure(ConfigObjects::SensorSim_fastGroup::contexts);
+    """
+  }
+
+  @ A sensor model stepped by fastGroup
+  instance gyroSim: SensorSim.GyroSim base id 0x70006000 \
+  {
+    phase Fpp.ToCpp.Phases.configComponents """
+    // The flight main() has no option for this: the simulation takes it from the
+    // environment (`run.env` in the manifest, or `fprime-wsts run --env`). Unset, the
+    // model uses its built-in profile.
+    SensorSim::gyroSim.configure(SensorSim::FAST_GROUP_HZ, std::getenv("SENSOR_SIM_PROFILE"));
+    """
+  }
+
   @ The simulated sensor with what it needs. Nothing here names a flight instance: the
   @ manifest connects it to the deployment it is used with.
   topology Simulator {
@@ -58,6 +83,14 @@ module SensorSim {
     instance txBuffers
     instance sensorPort
     instance prmDb
+    instance simClock
+    instance fastGroup
+    instance gyroSim
+
+    connections FastRateGroup {
+      simClock.CycleOut -> fastGroup.CycleIn
+      fastGroup.RateGroupMemberOut[0] -> gyroSim.schedIn
+    }
 
     connections Parameters {
       sensorSim.prmGetOut -> prmDb.getPrm

@@ -7,13 +7,13 @@ Start with [README.md](README.md); the design is in [docs/design.md](docs/design
 
 | Path | Contents |
 |---|---|
-| `Wsts/Core/` | Plain C++: bus, faults, control core, scenario player, recorder, bridge, reference models, links between elements. No F´ dependencies |
-| `Wsts/Drv/`, `Wsts/Svc/` | F´ components: surrogates, `BusByteStreamDevice` (adapter that puts an F´ simulator on a bus endpoint), `SimControl` (commands/events/telemetry), `SimSetup` (anchor) |
+| `Wsts/Core/` | Plain C++: bus, faults, control core, cycle clocks, scenario player, recorder, bridge, reference models, links between elements. No F´ dependencies |
+| `Wsts/Drv/`, `Wsts/Svc/` | F´ components: surrogates, `BusByteStreamDevice` (adapter that puts an F´ simulator on a bus endpoint), `SimCycle` (cycle source with its own rate), `SimControl` (commands/events/telemetry), `SimSetup` (anchor) |
 | `catalog/wsts-catalog.yaml` | Which flight components each surrogate replaces |
 | `python/fprime_wsts/` | `generate.py` (transform), `fpp.py` (model loading), `manifest.py`, `simulators.py` (added F´ instances, bus devices), `system.py` (multi-element systems), `bridge.py`, `runner.py`, `scaffold.py`, `cli.py` |
 | `examples/linux-demo/`, `examples/vx-demo/` | Flight projects. `examples/*/wsts/` is **generated**: change the generator or `wsts.yaml`, then regenerate |
 | `examples/subtop-demo/` | Flight project whose UART driver is inside a library subtopology (`lib/sensor-lib`), with `CONFIGURATION_OVERRIDES` and a `system.fpp`. `wsts/SubtopDemo/` is **generated**, including its copy of the subtopology under `SensorLib/` |
-| `examples/subtop-demo-sim/` | Standalone simulation project for `subtop-demo` with a device simulator written as an F´ component (`simulators`, `devices`, `cmake.cache` in its manifest). Its `wsts/SubtopDemo/` is **generated** and checked in |
+| `examples/subtop-demo-sim/` | Standalone simulation project for `subtop-demo` with simulators written as F´ components, a vendored library (`lib/sim-common`), a 125 Hz clock, configuration overrides and a bus-less surrogate (`simulators`, `devices`, `clocks`, `libraries.sim`, `cmake.*`, `run.env` in its manifest). Its `wsts/SubtopDemo/` is **generated** and checked in |
 | `examples/hub-demo/` | Flight project with two deployments (`Cdh`, `Payload`) joined by a `GenericHub`; `wsts-system.yaml` makes them one system. `wsts/HubDemo/` is **generated** |
 | `examples/linux-demo-sim/` | Standalone simulation project for `linux-demo`: manifest, project surrogate and model. Its `wsts/` is generated and not checked in |
 | `tests/e2e/` | End-to-end tests against a running simulation and GDS |
@@ -26,7 +26,7 @@ pip install -r lib/fprime/requirements.txt -e ./python     # once, in a virtual 
 ```
 
 ```bash
-pytest python/tests                                     # generator, manifest, systems, bridge (about three minutes)
+pytest python/tests                                     # generator, manifest, systems, bridge (about ten minutes)
 ```
 
 ```bash
@@ -62,6 +62,11 @@ version, unset `JAVA_HOME` so the bundled JRE is used.
   numbered by instance name, not by position in the topology: `simulators.py` pins the
   flight targets, and `verify_flight_connections` compares the patched model with flight.
 - FPP checks base IDs across every instance definition it reads, used in a topology or not.
+- F´ lets the last registration of a configuration file win. Libraries are read before the
+  overlay adds flight modules, so the overlay holds the simulation's override modules back
+  (`WSTS_DEFERRED_MODULES`) and adds them last. The analysis root order must match.
+- A tick source declares its period (`Control::setTickPeriod`): cycle clocks are granted
+  their cycles from it on each tick. `tick` always counts flight ticks.
 - A component with parameters asserts in `loadParameters()` if `prmGetOut` is unconnected.
 - Autocoded handlers take enum and string arguments by `const&`.
 - `fprime-util generate` fails if the build directory already exists: after regenerating

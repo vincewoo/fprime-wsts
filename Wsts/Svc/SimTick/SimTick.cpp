@@ -46,6 +46,8 @@ void SimTick::startTimer(FwSizeType microseconds) {
 
 void SimTick::begin(U64 microseconds) {
     m_quit.store(false);
+    // Cycle sources with their own rate are fed from the simulated time of each tick
+    Control::get().setTickPeriod(microseconds * 1000u);
     if (m_threaded) {
         if (!m_thread.joinable()) {
             m_thread = std::thread([this, microseconds]() { this->loop(microseconds); });

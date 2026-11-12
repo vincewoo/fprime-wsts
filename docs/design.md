@@ -278,7 +278,7 @@ flowchart LR
     wsts_instances.fpp              the wstsSetup and wstsControl instances
     WstsSetup.cpp                   binds surrogates, builds and attaches models, starts the runtime
     WstsCompat.hpp                  force-included: aliases flight driver classes to their surrogates
-  <Lib>/<Sub>/                     only when a substituted instance is defined in that module:
+  <Lib>/<Sub>/                     only when a flight file outside Top needs an edit:
     <Sub>.fpp                      patched copy of the subtopology model
     CMakeLists.txt                 the original's, pointing back at the original for everything else
   wsts-report.json, wsts-report.md   fidelity report
@@ -513,6 +513,79 @@ deployment's files or in copies of subtopology files (the mechanism of
 [Instances inside subtopologies](#instances-inside-subtopologies) extends to any flight
 file that needs an edit), and queue attributes are inserted in the order FPP requires.
 
+### Clocks of the simulation
+
+A simulator may need a rate that flight has no rate group for: faster than the flight
+tick, or not a multiple of it. The tick surrogate cannot serve it (its cycle output
+drives the flight rate group driver, and an output drives one input), and the rate must
+not depend on which tick source a deployment has. So the mechanism is in the control
+core, and `Wsts.SimCycle` is a thin component on top of it.
+
+```mermaid
+flowchart LR
+  src["Tick source<br/>Wsts.SimTick, built-in ticker,<br/>or a project surrogate"]:::toolkit
+  core["Control core<br/>onTick(): simulated time<br/>advances by one tick period"]:::toolkit
+  frg["Flight rate group driver<br/>and rate groups"]:::flight
+  subgraph clock["Wsts.SimCycle instance (one per clock)"]
+    direction TB
+    sched["Schedule<br/>cycle j at j / rate,<br/>integer arithmetic"]:::toolkit
+    thr["Clock thread<br/>issues each cycle<br/>at its instant"]:::toolkit
+    sched -->|"instants inside<br/>this tick"| thr
+  end
+  srg["Rate group of the simulation<br/>Svc.PassiveRateGroup, ..."]:::user
+  sim["Simulator components"]:::user
+  man["Manifest: clocks<br/>generated wstsClock(hz)"]:::generated
+
+  src -->|"each tick"| core
+  src -->|"CycleOut, tick thread"| frg
+  core -->|"grant: tick period<br/>and time scale"| sched
+  thr -->|"CycleOut, clock thread"| srg
+  srg --> sim
+  man -.-> clock
+
+  classDef flight fill:#dbeafe,stroke:#1d4ed8,color:#0b1f4d
+  classDef toolkit fill:#dcfce7,stroke:#15803d,color:#052e16
+  classDef generated fill:#ffedd5,stroke:#c2410c,color:#431407
+  classDef user fill:#f3e8ff,stroke:#7e22ce,color:#3b0764
+  style clock fill:none,stroke:#94a3b8,color:#475569
+```
+
+Two designs were possible.
+
+- **(a) Free-running**: each cycle source has a thread paced by the wall clock, scaled by
+  the time scale and gated by the pause flag. Simple, and independent of the tick source.
+  But its time is the host's, not the simulation's: its count against the flight tick
+  drifts with every scheduling delay, and it has nothing to follow once simulated time is
+  stepped (roadmap 1), when the wall clock stops meaning anything.
+- **(b) Driven by the core**: the core keeps simulated time and each cycle source fires as
+  that time crosses its period.
+
+(b) was chosen, in a form that avoids its usual drawback of firing in a burst at each
+tick. The core does not issue the cycles; it *grants* them. On every tick it tells each
+clock how much simulated time the tick covers and the current time scale. The clock's
+schedule (integer arithmetic on nanoseconds and milli-hertz) yields the cycles whose
+instants lie in that interval, with their offsets, and the clock's own thread issues
+each at its offset, divided by the time scale, from the moment the tick arrived. So:
+
+- the count is exact in simulated time and cannot drift: 64 ticks of a 64 Hz source carry
+  exactly 1000 cycles of a 1000 Hz clock, in grants of 15 and 16;
+- cycles are evenly spaced, and cycle 0 coincides with the first tick, which fixes the
+  phase;
+- no ticks, no grants: pause, resume and the time scale need no code of their own, and
+  work for any tick source. Cycles already granted when a pause arrives are held and keep
+  their spacing afterwards;
+- the flight cycle is never delayed by a simulator: handlers run on the clock's thread.
+  A clock that cannot keep up drops cycles beyond a few ticks' worth and says so, rather
+  than growing a backlog;
+- under stepped time the same grants apply; only the pacing inside a tick changes, from
+  the wall clock to the stepper.
+
+The one thing the core needs that it did not have is the simulated duration of a tick.
+Tick sources declare it (`Control::setTickPeriod`; `Wsts.SimTick` and the built-in ticker
+do). For a project tick surrogate that only calls `onTick()`, the core measures the
+interval between ticks and uses that, which is as exact as the measurement. `tick` keeps
+its meaning everywhere: it counts flight ticks.
+
 ### Configuration overrides
 
 F´ 4.4 lets a configuration module replace files of earlier configuration modules:
@@ -526,6 +599,21 @@ and of the configuration files with an overridden name only the winner goes to
 an override listed through a variable is not seen, and a call inside `if()` is taken to
 apply. For projects that override by convention alone, a file in a directory called
 `config` still replaces `default/config/<same name>`.
+
+**The simulation's overrides come last.** A simulation that adds instances often has to
+raise a limit that the flight project itself overrides (rate group ports, the opcode
+table). Its configuration module must therefore register after the flight project's. But
+the simulation is a library of the overlay, and libraries are read before the overlay's
+own `CMakeLists.txt` adds the flight modules: left alone, the flight override would win
+in the build while the analysis, which orders roots framework, libraries, flight project,
+simulation, said the simulation's had won. The overlay closes the gap with the mechanism
+of [Instances inside subtopologies](#instances-inside-subtopologies): its
+`add_fprime_subdirectory()` skips the simulation's override modules while the libraries
+are read, and the root `CMakeLists.txt` adds them after the flight modules. Because the
+flight modules are registered by then, a file that only the flight project supplies can
+be overridden too. Further libraries of the simulation (`libraries.sim`) are roots in
+their own right, in the analysis and in the build, so a library vendored inside the
+simulation project keeps its own module names.
 
 ### WSTS control wiring
 

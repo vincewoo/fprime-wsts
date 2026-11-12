@@ -63,6 +63,7 @@ void Runtime::stop() {
         return;
     }
     Control::get().stopInternalTicker();
+    Control::get().stopClocks();
     JsonObj action;
     action.set("op", "record_stop");
     std::string error;

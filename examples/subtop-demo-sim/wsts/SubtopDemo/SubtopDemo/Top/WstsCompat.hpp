@@ -7,12 +7,14 @@
 #define WSTS_GENERATED_COMPAT_HPP
 #ifdef __cplusplus
 
+#include <SensorSim/SimTime/SimTime.hpp>
 #include <Wsts/Drv/SimByteStream/SimByteStream.hpp>
 #include <Wsts/Svc/SimTick/SimTick.hpp>
 
 // For the phase code of the simulator instances (`simulators.headers` in the manifest)
 #include <SensorSim/Top/SubtopologyTopologyDefs.hpp>
 
+namespace Svc { using ChronoTime = ::SensorSim::SimTime; }
 namespace VxWorksSvc { using VxWatchDogTimer = ::Wsts::SimTick; }
 namespace VxWorksDrv { using VxWorksUartDriver = ::Wsts::SimByteStream; }
 

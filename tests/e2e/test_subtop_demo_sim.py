@@ -84,3 +84,82 @@ def test_pause_stops_the_simulator_with_the_flight_rate_groups(gds, wsts):
         wsts.resume()
     wsts.advance(15)
     assert wsts.status()["transactions"] > before
+
+
+# ----------------------------------------------------------------------
+# A simulator on a clock of its own: SensorSim.simClock at 125 Hz cycles a passive rate
+# group of the simulation, which steps SensorSim.gyroSim. The flight tick is 10 Hz.
+# ----------------------------------------------------------------------
+
+STEPS = "SensorSim.gyroSim.Steps"
+CLOCK_HZ = 125.0
+
+
+def sample(gds):
+    """A (steps, seconds) pair: the step count and the time it was written at"""
+    gds.clear_histories()
+    item = gds.await_telemetry(STEPS, timeout=T)
+    assert item is not None, "no gyro simulator telemetry"
+    time_tag = item.get_time()
+    return item.get_val(), time_tag.seconds + time_tag.useconds / 1e6
+
+
+def measured_rate(gds, seconds=4.0):
+    steps_a, time_a = sample(gds)
+    time.sleep(seconds)
+    steps_b, time_b = sample(gds)
+    assert time_b > time_a
+    return (steps_b - steps_a) / (time_b - time_a)
+
+
+def test_fast_simulator_runs_at_its_own_rate(gds):
+    # 12.5 cycles per flight tick: the count is exact in simulated time, and the tick is
+    # paced by the host, so a few percent either way over some seconds
+    assert abs(measured_rate(gds) - CLOCK_HZ) < 0.05 * CLOCK_HZ
+
+
+def test_clock_stops_with_pause_and_restarts_with_resume(gds, wsts):
+    steps_before, _ = sample(gds)
+    tick_before = wsts.status()["tick"]
+    wsts.pause()
+    try:
+        time.sleep(3.0)  # 375 cycles if the clock ran on
+        assert wsts.status()["tick"] <= tick_before + 1
+    finally:
+        wsts.resume()
+    wsts.advance(20)
+    steps_after, _ = sample(gds)
+    ticks = wsts.status()["tick"] - tick_before
+    expected = ticks * CLOCK_HZ / 10.0
+    # The step sample and the tick count are read up to about a second apart
+    assert steps_after > steps_before, "the clock restarts"
+    assert abs((steps_after - steps_before) - expected) < 1.5 * CLOCK_HZ, \
+        f"{steps_after - steps_before} steps over {ticks} ticks: the clock ran while paused, or did not restart"
+
+
+def test_clock_scales_with_the_simulation_rate(gds, wsts):
+    wsts.set_rate(2.0)
+    try:
+        wsts.advance(10)
+        fast = measured_rate(gds, seconds=3.0)
+    finally:
+        wsts.set_rate(1.0)
+    assert abs(fast - 2 * CLOCK_HZ) < 0.08 * 2 * CLOCK_HZ
+    wsts.advance(10)
+    assert abs(measured_rate(gds, seconds=3.0) - CLOCK_HZ) < 0.05 * CLOCK_HZ
+
+
+def test_environment_variable_reaches_the_simulator(gds):
+    # run.env in the manifest names profiles/calm.txt; the gyro simulator's phase code reads
+    # the variable and reports what it loaded with its first step
+    assert gds.await_telemetry("SensorSim.gyroSim.Profile", timeout=T) is not None
+    gds.assert_telemetry("SensorSim.gyroSim.Profile", value="CALM", timeout=T)
+
+
+def test_time_comes_from_the_surrogate_without_an_endpoint(gds, wsts):
+    # SubtopDemo.chronoTime is SensorSim.SimTime: no bus endpoint, and time stamps advance
+    assert wsts.status()["endpoints"] == ["uart"]
+    _, first = sample(gds)
+    time.sleep(1.5)
+    _, second = sample(gds)
+    assert second > first > 1_600_000_000

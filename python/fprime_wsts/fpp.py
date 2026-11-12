@@ -355,11 +355,36 @@ def find_config_overrides(roots: Iterable[Path], suffixes: Tuple[str, ...] = (".
     return found, warnings
 
 
-def config_constant(roots: List[Path], framework: Path, header: str, constant: str) -> Optional[Tuple[int, Path]]:
+def find_override_modules(roots: Iterable[Path]) -> Tuple[List[Path], List[Path]]:
+    """Where the configuration overrides under `roots` are registered: the module
+    directories (a CMakeLists.txt with `register_fprime_config(CONFIGURATION_OVERRIDES)`),
+    and any other CMake file that registers overrides directly (a library.cmake)."""
+    modules: List[Path] = []
+    others: List[Path] = []
+    for root in [r.resolve() for r in roots if r.is_dir()]:
+        for directory, subdirs, files in os.walk(root):
+            here = Path(directory)
+            subdirs[:] = sorted(d for d in subdirs if not _is_excluded_dir(here / d))
+            for name in sorted(files):
+                if name != "CMakeLists.txt" and not name.endswith(".cmake"):
+                    continue
+                cmake = (here / name).resolve()
+                if not any(call.get("CONFIGURATION_OVERRIDES") for call in read_calls(cmake, "register_fprime_config")):
+                    continue
+                target = modules if name == "CMakeLists.txt" else others
+                entry = cmake.parent if name == "CMakeLists.txt" else cmake
+                if entry not in target:
+                    target.append(entry)
+    return modules, others
+
+
+def config_constant(roots: List[Path], framework: Path, header: str, constant: str,
+                    overrides: Optional[List[ConfigOverride]] = None) -> Optional[Tuple[int, Path]]:
     """Value of an integer constant in a configuration header (`NAME = 150`), read from the
     file the build would use: a CONFIGURATION_OVERRIDES replacement, else the framework's
     default. None when the header or the constant is not found."""
-    overrides, _ = find_config_overrides(roots, (".hpp", ".h"))
+    if overrides is None:
+        overrides, _ = find_config_overrides(roots, (".hpp", ".h"))
     file = next((o.winner for o in overrides if o.name == header), framework / "default" / "config" / header)
     if not file.is_file():
         return None

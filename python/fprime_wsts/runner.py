@@ -108,6 +108,12 @@ class Simulation:
                                                     cwd=self.log_dir, start_new_session=True))
             arguments = ["-a", "127.0.0.1", "-p", str(self.gds_port)]
         env = dict(os.environ)
+        # Defaults from the manifest (`run.env`), then what this run was given
+        defaults = self.report.get("run", {})
+        for name, value in defaults.get("env", {}).items():
+            if name in defaults.get("env_paths", []):
+                value = str((self.directory / value).resolve())
+            env[name] = value
         env.update(self.extra_env)
         env["WSTS_BRIDGE"] = self.bridge
         env.setdefault("WSTS_DIR", str(self.files_dir))
@@ -180,11 +186,32 @@ class Simulation:
         self.stop()
 
 
+def parse_env(entries, elements: Optional[List[str]] = None) -> Dict[Optional[str], Dict[str, str]]:
+    """`--env NAME=VALUE` options. For a system, `<element>.NAME=VALUE` sets a variable for
+    one element only. Returns {element or None: {name: value}}."""
+    found: Dict[Optional[str], Dict[str, str]] = {}
+    for entry in entries or []:
+        name, separator, value = str(entry).partition("=")
+        element = None
+        if "." in name:
+            element, name = name.split(".", 1)
+            if elements is None or element not in elements:
+                raise WstsError(
+                    f"--env {entry}: '{element}' is not an element"
+                    + (f" of this system ({', '.join(elements)})" if elements else "; this is a single deployment")
+                )
+        if not separator or not name.replace("_", "a").isalnum() or name[0].isdigit():
+            raise WstsError(f"--env {entry}: expected NAME=VALUE")
+        found.setdefault(element, {})[name] = value
+    return found
+
+
 class SystemSimulation:
     """A running system: one simulated deployment per element, joined by their links, with
     an optional headless GDS on the ground element using the merged dictionary"""
 
-    def __init__(self, directory: Path, gds: bool = False, gds_port: int = 50000, log_dir: Optional[Path] = None):
+    def __init__(self, directory: Path, gds: bool = False, gds_port: int = 50000, log_dir: Optional[Path] = None,
+                 env: Optional[List[str]] = None):
         from .system import load_description
 
         self.directory = Path(directory).resolve()
@@ -198,6 +225,8 @@ class SystemSimulation:
         self.elements: Dict[str, Simulation] = {}
         self.started = 0.0
         self._link_dir: Optional[str] = None
+        # NAME=VALUE for every element, <element>.NAME=VALUE for one
+        self.env = parse_env(env, [element["name"] for element in self.description["elements"]])
 
     def merge_dictionaries(self) -> Path:
         """One dictionary for the whole system, as the ground system uses for deployments
@@ -242,7 +271,8 @@ class SystemSimulation:
                 simulation = Simulation(
                     self.directory / element["directory"], gds=self.gds and is_ground, gds_port=self.gds_port,
                     bridge=element["bridge"], log_dir=self.log_dir / name,
-                    dictionary=self.dictionary if is_ground else None, env={"WSTS_LINK_DIR": self._link_dir},
+                    dictionary=self.dictionary if is_ground else None,
+                    env={**self.env.get(None, {}), **self.env.get(name, {}), "WSTS_LINK_DIR": self._link_dir},
                 )
                 self.elements[name] = simulation
                 try:
@@ -307,7 +337,7 @@ def run_system_cli(args) -> int:
             raise WstsError(f"--{option.replace('_', '-')} applies to a single deployment and is not supported when "
                             "running a system; drive the elements through their bridges instead")
     system = SystemSimulation(Path(args.directory), gds=args.gds, gds_port=args.gds_port,
-                              log_dir=Path(args.log_dir) if args.log_dir else None)
+                              log_dir=Path(args.log_dir) if args.log_dir else None, env=getattr(args, "env", None))
     system.start()
     if not args.json:
         bridges = ", ".join(f"{name} {simulation.bridge}" for name, simulation in system.elements.items())
@@ -372,7 +402,8 @@ def run_cli(args) -> int:
     simulation = Simulation(Path(args.directory), gds=args.gds, gds_port=args.gds_port, bridge=args.bridge,
                             scenario=args.scenario, scenario_mode=args.scenario_mode, record=args.record,
                             log_dir=Path(args.log_dir) if args.log_dir else None,
-                            files_dir=Path(args.files_dir) if args.files_dir else None)
+                            files_dir=Path(args.files_dir) if args.files_dir else None,
+                            env=parse_env(getattr(args, "env", None)).get(None, {}))
     simulation.start()
     if not args.json:
         print(f"simulation running: {simulation.binary.name} (bridge {simulation.bridge}, logs {simulation.log_dir})")

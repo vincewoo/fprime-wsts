@@ -15,7 +15,7 @@ module SubtopDemo {
     stack size Default.STACK_SIZE \
     priority 42
 
-  instance chronoTime: Svc.ChronoTime base id 0x20010000
+  instance chronoTime: SensorSim.SimTime base id 0x20010000
 
   instance rateGroupDriver: Svc.RateGroupDriver base id 0x20011000
 

@@ -18,8 +18,9 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from . import fpp
 from .fpp import WstsError
-from .manifest import ConnectionSpec, DeviceSpec, Manifest
+from .manifest import ClockSpec, ConnectionSpec, DeviceSpec, Manifest
 
+CYCLE_SOURCE = "Wsts.SimCycle"
 # Stock adapters: component -> the kind of bus endpoint it is the device on
 DEVICE_ADAPTERS = {"Wsts.BusByteStreamDevice": "bytestream"}
 PING_PORT = "Svc.Ping"
@@ -36,6 +37,16 @@ FPP_KEYWORDS = set("""
     red ref reg request resp save send serial set severity signal size stack state string struct sync system
     telemetry text throttle time topology true type unmatched update warning with yellow
 """.split())
+
+
+OVERRIDE_HELP = (
+    "To change it for the simulated build only, put a copy of {file} with the new value in a module directory of "
+    "the simulation project (for example config/), with a CMakeLists.txt that says\n"
+    "  register_fprime_config(\n      CONFIGURATION_OVERRIDES\n"
+    "          \"${{CMAKE_CURRENT_LIST_DIR}}/{file}\"\n      INTERFACE\n  )\n"
+    "and add that directory in the simulation project's library.cmake. fprime-wsts registers it after the flight "
+    "project's configuration, so it wins even when flight overrides the same file."
+)
 
 
 def fpp_name(qualified: str, topology: Optional[fpp.Topology] = None) -> str:
@@ -91,12 +102,21 @@ class PlannedDevice:
 
 
 @dataclass
+class PlannedClock:
+    spec: ClockSpec
+    instance: str
+    hz: float
+    drives: List[str]  # what its CycleOut is connected to
+
+
+@dataclass
 class SimulatorPlan:
     added: List[AddedInstance] = field(default_factory=list)
     topologies: List[str] = field(default_factory=list)  # subtopologies added as a whole
     instances: List[str] = field(default_factory=list)  # instances added one by one
     connections: List[PlannedConnection] = field(default_factory=list)
     devices: List[PlannedDevice] = field(default_factory=list)
+    clocks: List[PlannedClock] = field(default_factory=list)
     # The flight health pattern to pin, and the instances it reaches in the flight topology
     health_pattern: Optional[fpp.Pattern] = None
     health_targets: List[str] = field(default_factory=list)
@@ -307,9 +327,10 @@ def plan_connections(sim: SimulatorPlan, model: fpp.Model, manifest: Manifest, t
                 raise WstsError(
                     f"{where}: {from_instance} ({component.name}) has no free {from_port} port: all {source.size} "
                     f"are connected.{sized_by}"
-                    + (" (configuration FPP, AcConstants.fpp in a default F Prime project): raise it for the "
-                       "simulated build, or connect the simulator to another rate group." if source.size_constant
-                       else ". Connect the simulator to another instance.")
+                    + (" (configuration FPP, AcConstants.fpp in a default F Prime project). Raise it for the "
+                       "simulated build, connect the simulator to another rate group, or give the simulation a rate "
+                       "group of its own behind a Wsts.SimCycle ('clocks').\n" + OVERRIDE_HELP.format(file="AcConstants.fpp")
+                       if source.size_constant else ". Connect the simulator to another instance.")
                 )
             # A port array gets its number written out, so nothing is left for FPP to place
             # among the flight connections
@@ -425,6 +446,50 @@ def plan_devices(sim: SimulatorPlan, model: fpp.Model, manifest: Manifest, topol
         sim.devices.append(PlannedDevice(spec, instance, component, kind, spec.endpoint))
 
 
+def plan_clocks(sim: SimulatorPlan, model: fpp.Model, manifest: Manifest, topology: fpp.Topology) -> None:
+    """`clocks` gives the rate of each Wsts.SimCycle instance the simulation added"""
+    from .generate import resolve_instance
+
+    seen: Set[str] = set()
+    connected: Dict[str, List[str]] = {}
+    for source in [model.topologies[name] for name in sim.topologies]:
+        for connection in source.connections:
+            connected.setdefault(connection.from_instance, []).append(f"{connection.to_instance}.{connection.to_port}")
+    for connection in sim.connections:
+        connected.setdefault(connection.from_instance, []).append(f"{connection.to_instance}.{connection.to_port}")
+    for spec in manifest.clocks:
+        where = f"clocks: {spec.instance}"
+        instance = resolve_instance(spec.instance, topology.instances + sim.names)
+        if instance is None or instance not in sim.names:
+            raise WstsError(
+                f"{where}: " + ("it is a flight instance" if instance else "there is no such instance")
+                + f". A clock is an instance of {CYCLE_SOURCE} that the simulation defines in its FPP and adds with "
+                f"'simulators'. Added instances: {', '.join(sim.names) or 'none'}"
+            )
+        component = model.instances[instance].component
+        if component != CYCLE_SOURCE:
+            raise WstsError(
+                f"{where}: {instance} is a {component}, not a {CYCLE_SOURCE}. Define an instance of {CYCLE_SOURCE}, "
+                "connect its CycleOut to the rate group (or rate group driver) of the simulation, and name that "
+                "instance here."
+            )
+        if instance in seen:
+            raise WstsError(f"{where}: {instance} is listed twice; a clock has one rate")
+        seen.add(instance)
+        if not connected.get(instance):
+            raise WstsError(
+                f"{where}: {instance}.CycleOut is not connected to anything, so the clock would cycle nothing. "
+                "Connect it to a Svc.RateGroupDriver, Svc.PassiveRateGroup or Svc.ActiveRateGroup of the simulation."
+            )
+        sim.clocks.append(PlannedClock(spec, instance, spec.hz, sorted(connected[instance])))
+    for added in sim.added:
+        if added.component == CYCLE_SOURCE and added.name not in seen:
+            raise WstsError(
+                f"{added.name} is a {CYCLE_SOURCE} with no rate: add it to 'clocks' in the manifest\n"
+                f"  clocks:\n    - instance: {added.name}\n      hz: <cycles per second>"
+            )
+
+
 def render_block(sim: SimulatorPlan, topology: fpp.Topology) -> str:
     """What is added at the end of the topology's body"""
     lines = ["", "    # Simulator instances and their connections (generated from `simulators` in the manifest)"]
@@ -493,7 +558,8 @@ def check_capacity(sim: SimulatorPlan, model: fpp.Model, topology: fpp.Topology,
                 f"the simulated topology has {commanded} instances with commands, and {pattern.source} "
                 f"({dispatcher.name}) has {ports[0].size} command ports"
                 + (f", set by the constant {ports[0].size_constant}" if ports[0].size_constant else "")
-                + ". Raise it in the configuration FPP for the simulated build, or add fewer simulator instances."
+                + ". Raise it for the simulated build, or add fewer simulator instances.\n" + OVERRIDE_HELP.format(
+                    file="AcConstants.fpp")
             )
         if ports:
             figures["command_ports"] = {"used": commanded, "size": ports[0].size, "constant": ports[0].size_constant}
@@ -507,8 +573,8 @@ def check_capacity(sim: SimulatorPlan, model: fpp.Model, topology: fpp.Topology,
             raise WstsError(
                 f"the simulated topology registers {used} opcodes, and the command dispatcher's table holds "
                 f"{size[0]} (CMD_DISPATCHER_DISPATCH_TABLE_SIZE in {size[1]}): it would assert at start-up. The "
-                "simulators add to the flight total. Raise the constant for the simulated build with a "
-                "configuration override."
+                "simulators add to the flight total. Raise the constant for the simulated build.\n"
+                + OVERRIDE_HELP.format(file="CommandDispatcherImplCfg.hpp")
             )
         if size and used > size[0]:
             sim.notes.append(
