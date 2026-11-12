@@ -2,33 +2,31 @@
 overrides, tick sources. Needs the FPP tools (fprime-fpp) on PATH."""
 
 import shutil
-from pathlib import Path
 
 import pytest
-import yaml
 
 from fprime_wsts import fpp
 from fprime_wsts.fpp import WstsError
 from fprime_wsts.generate import Plan, _check_tick_sources, generate, resolve_instance
 from fprime_wsts.manifest import LinkEnd, parse_manifest
 from fprime_wsts.system import parse_system
+from mission import CDH_MAIN, MISSION, REPO, SYSTEM, copy_flight, flight_manifest, needs_fpp
 
-REPO = Path(__file__).resolve().parents[2]
-SUBTOP = REPO / "examples" / "subtop-demo"
-LINUX = REPO / "examples" / "linux-demo"
-VX = REPO / "examples" / "vx-demo"
-HUB = REPO / "examples" / "hub-demo"
 UART = "SensorLink.uart"
 
-needs_fpp = pytest.mark.skipif(
-    shutil.which("fpp-to-json") is None or not (REPO / "lib" / "fprime" / "cmake").is_dir(),
-    reason="needs the FPP tools on PATH and the lib/fprime submodule",
-)
+#: Cdh with a manifest in the flight project: the UART is inside the SensorLink
+#: subtopology of lib/sensor-lib, and a stock model answers behind it
+CDH = {
+    "deployment": "Cdh",
+    "keep": ["comDriver"],
+    "main": CDH_MAIN,
+    "models": [{"name": "tempSensor", "class": "Wsts::ScriptedByteStream", "endpoint": "uart", "kind": "bytestream",
+                "params": {"text": "$TEMP,21.5\n", "period": "10"}}],
+}
 
 
-def manifest_of(project: Path = SUBTOP, deployment: str = "SubtopDemo", **changes):
-    data = yaml.safe_load((project / deployment / "wsts.yaml").read_text())
-    data.update(changes)
+def manifest_of(**changes):
+    data = {**CDH, **changes}
     return parse_manifest({k: v for k, v in data.items() if v is not None})
 
 
@@ -38,27 +36,19 @@ def chosen(result):
 
 @pytest.fixture(scope="module")
 def default(tmp_path_factory):
-    """SubtopDemo generated from its checked-in manifest"""
-    return generate(SUBTOP, manifest_of(), tmp_path_factory.mktemp("subtop") / "out")
+    """Cdh generated from that manifest"""
+    return generate(MISSION, manifest_of(), tmp_path_factory.mktemp("subtop") / "out")
 
 
 @pytest.fixture
 def two_uarts(tmp_path):
     """A copy of the project with a second `uart`, in the deployment's own Top"""
-    project = tmp_path / "project"
-    shutil.copytree(SUBTOP, project, ignore=shutil.ignore_patterns("wsts"))
-    (project / "settings.ini").write_text(
-        "[fprime]\n"
-        f"framework_path: {REPO / 'lib' / 'fprime'}\n"
-        "project_root: .\n"
-        f"library_locations: {REPO / 'lib' / 'fprime-vxworks'}:lib/sensor-lib\n"
-        "default_toolchain: vxworks\n"
-    )
-    top = project / "SubtopDemo" / "Top"
+    project = copy_flight(tmp_path, "project")
+    top = project / "Cdh" / "Top"
     instances = (top / "instances.fpp").read_text()
     (top / "instances.fpp").write_text(instances.replace(
-        "  # The serial driver is not here",
-        "  instance uart: VxWorksDrv.VxWorksUartDriver base id 0x20022000\n\n  # The other serial driver is not here"))
+        "  # The serial sensor's driver is not here",
+        "  instance uart: VxWorksDrv.VxWorksUartDriver base id 0x10023000\n\n  # The serial sensor's driver is not here"))
     topology = (top / "topology.fpp").read_text()
     (top / "topology.fpp").write_text(
         topology.replace("    instance vxTimer\n", "    instance vxTimer\n    instance uart\n")
@@ -101,7 +91,7 @@ def test_system_link_takes_a_qualified_instance():
 @needs_fpp
 def test_subtopology_instance_is_substituted_from_the_catalog(default):
     assert chosen(default) == {
-        "SubtopDemo.vxTimer": ("Wsts.SimTick", "catalog", "vxTimer"),
+        "Cdh.vxTimer": ("Wsts.SimTick", "catalog", "vxTimer"),
         UART: ("Wsts.SimByteStream", "catalog", "uart"),
     }
 
@@ -109,18 +99,17 @@ def test_subtopology_instance_is_substituted_from_the_catalog(default):
 @needs_fpp
 @pytest.mark.parametrize("name", [UART, "uart"])
 def test_subtopology_instance_named_in_the_manifest(tmp_path, name):
-    models = yaml.safe_load((SUBTOP / "SubtopDemo" / "wsts.yaml").read_text())["models"]
-    models[0]["endpoint"] = "sensorPort"
+    models = [{**CDH["models"][0], "endpoint": "sensorPort"}]
     manifest = manifest_of(
         substitute=[{"instance": name, "with": "Wsts.SimByteStream", "endpoint": "sensorPort"}], models=models)
-    result = generate(SUBTOP, manifest, tmp_path / "out")
+    result = generate(MISSION, manifest, tmp_path / "out")
     assert chosen(result)[UART] == ("Wsts.SimByteStream", "manifest", "sensorPort")
-    assert '::SensorLink::uart.wstsBind("sensorPort", "");' in (result.output / "SubtopDemo/Top/WstsSetup.cpp").read_text()
+    assert '::SensorLink::uart.wstsBind("sensorPort", "");' in (result.output / "Cdh/Top/WstsSetup.cpp").read_text()
 
 
 @needs_fpp
 def test_keep_with_the_qualified_name(tmp_path):
-    result = generate(SUBTOP, manifest_of(keep=["comDriver", UART], models=None), tmp_path / "out")
+    result = generate(MISSION, manifest_of(keep=["comDriver", UART], models=None), tmp_path / "out")
     assert UART not in chosen(result)
     assert result.report["kept_hardware_instances"] == [UART]
     assert "replaced_modules" not in result.report
@@ -133,14 +122,14 @@ def test_link_ends_at_a_subtopology_instance(tmp_path):
     manifest = manifest_of(models=None)
     manifest.system, manifest.element = "Pair", "a"
     manifest.links = [LinkEnd(link="wire", instance=UART, role="listen", peer="b.uart")]
-    result = generate(SUBTOP, manifest, tmp_path / "out")
+    result = generate(MISSION, manifest, tmp_path / "out")
     assert result.report["links"] == [
         {"link": "wire", "instance": UART, "endpoint": "uart", "role": "listen", "peer": "b.uart"}]
 
 
 @needs_fpp
 def test_ambiguous_base_name_is_an_error(two_uarts, tmp_path):
-    with pytest.raises(WstsError, match=r"'uart' is ambiguous.*SensorLink\.uart, SubtopDemo\.uart"):
+    with pytest.raises(WstsError, match=r"'uart' is ambiguous.*Cdh\.uart, SensorLink\.uart"):
         generate(two_uarts, manifest_of(keep=["comDriver", "uart"]), tmp_path / "out")
 
 
@@ -149,13 +138,13 @@ def test_two_instances_with_one_base_name_need_endpoints(two_uarts, tmp_path):
     with pytest.raises(WstsError, match=r"(?s)endpoint 'uart' is used by both .*endpoint: <name>"):
         generate(two_uarts, manifest_of(), tmp_path / "out")
     manifest = manifest_of(substitute=[
-        {"instance": "SubtopDemo.uart", "with": "Wsts.SimByteStream", "endpoint": "spare"},
+        {"instance": "Cdh.uart", "with": "Wsts.SimByteStream", "endpoint": "spare"},
     ])
     result = generate(two_uarts, manifest, tmp_path / "out")
     assert {name: values[2] for name, values in chosen(result).items()} == {
-        "SubtopDemo.vxTimer": "vxTimer", "SubtopDemo.uart": "spare", UART: "uart"}
+        "Cdh.vxTimer": "vxTimer", "Cdh.uart": "spare", UART: "uart"}
     removed = result.report["dictionary"]["removed"]["events"]
-    assert "SensorLink.uart.OpenError" in removed and "SubtopDemo.uart.OpenError" in removed
+    assert "SensorLink.uart.OpenError" in removed and "Cdh.uart.OpenError" in removed
 
 
 # ----------------------------------------------------------------------
@@ -167,12 +156,12 @@ def test_two_instances_with_one_base_name_need_endpoints(two_uarts, tmp_path):
 def test_patched_subtopology_takes_the_place_of_the_original(default):
     out = default.output
     patched = (out / "SensorLib" / "SensorLink" / "SensorLink.fpp").read_text()
-    original = (SUBTOP / "lib/sensor-lib/SensorLib/SensorLink/SensorLink.fpp").read_text()
+    original = (MISSION / "lib/sensor-lib/SensorLib/SensorLink/SensorLink.fpp").read_text()
     assert "instance uart: Wsts.SimByteStream base id SensorLinkConfig.BASE_ID + 0x1000" in patched
     assert patched == original.replace("VxWorksDrv.VxWorksUartDriver base id", "Wsts.SimByteStream base id"), \
         "only the component type changes: the phase code still names the flight driver"
     assert "VxWorksDrv::VxWorksUartDriver::BAUD_19200" in patched
-    assert original == (SUBTOP / "lib/sensor-lib/SensorLib/SensorLink/SensorLink.fpp").read_text()
+    assert original == (MISSION / "lib/sensor-lib/SensorLib/SensorLink/SensorLink.fpp").read_text()
 
     module = (out / "SensorLib" / "SensorLink" / "CMakeLists.txt").read_text()
     assert '"${CMAKE_CURRENT_LIST_DIR}/SensorLink.fpp"' in module
@@ -192,22 +181,22 @@ def test_patched_subtopology_takes_the_place_of_the_original(default):
     assert {k: v for k, v in module_report.items() if k != "original"} == {
         "module": "SensorLib_SensorLink", "copy": "SensorLib/SensorLink", "files": ["SensorLink.fpp"]}
 
-    compat = (out / "SubtopDemo" / "Top" / "WstsCompat.hpp").read_text()
+    compat = (out / "Cdh" / "Top" / "WstsCompat.hpp").read_text()
     assert "namespace VxWorksDrv { using VxWorksUartDriver = ::Wsts::SimByteStream; }" in compat
-    assert (out / "SubtopDemo" / "Top" / "system.fpp").read_text() == (SUBTOP / "SubtopDemo/Top/system.fpp").read_text()
+    assert (out / "Cdh" / "Top" / "system.fpp").read_text() == (MISSION / "Cdh/Top/system.fpp").read_text()
 
 
 @needs_fpp
 def test_original_subtopology_is_not_in_the_patched_model(default, tmp_path):
     """The model the overlay builds from passes fpp-check with the copy and without the original"""
     out = default.output
-    settings = fpp.read_settings(SUBTOP)
-    roots = [settings.framework_path, *settings.library_locations, SUBTOP, REPO / "Wsts"]
+    settings = fpp.read_settings(MISSION)
+    roots = [settings.framework_path, *settings.library_locations, MISSION, REPO / "Wsts"]
     overrides, _ = fpp.find_config_overrides(roots)
-    original = SUBTOP / "lib/sensor-lib/SensorLib/SensorLink/SensorLink.fpp"
-    top = sorted((out / "SubtopDemo" / "Top").glob("*.fpp"))
+    original = MISSION / "lib/sensor-lib/SensorLib/SensorLink/SensorLink.fpp"
+    top = sorted((out / "Cdh" / "Top").glob("*.fpp"))
     candidates = [c for c in fpp.select_candidates(fpp.find_fpp_files(roots), settings.framework_path, overrides)
-                  if SUBTOP / "SubtopDemo" not in c.parents]
+                  if MISSION / "Cdh" not in c.parents]
     copy = out / "SensorLib" / "SensorLink" / "SensorLink.fpp"
     fpp.locate_defs(tmp_path, [c for c in candidates if c != original] + [copy])
     closure = fpp.depend(tmp_path, top)
@@ -229,12 +218,6 @@ def test_report_lists_the_qualified_instance(default):
     assert "## Modules built from a patched copy" in text and "`SensorLib_SensorLink`" in text
     assert any("fprime-vxworks" in library for library in report["libraries"]["dropped"])
     assert any(library.endswith("lib/sensor-lib") for library in report["libraries"]["kept"])
-
-
-@needs_fpp
-def test_checked_in_example_is_current():
-    result = generate(SUBTOP, manifest_of(), check=True)
-    assert result.changed == [], f"regenerate: fprime-wsts generate {SUBTOP / 'SubtopDemo' / 'wsts.yaml'}"
 
 
 # ----------------------------------------------------------------------
@@ -296,7 +279,7 @@ def test_project_overrides_reach_the_analysis(default):
     found = {o["file"]: (o["uses"], o["replaces"]) for o in report["config_overrides"]}
     assert sorted(found) == ["AcConstants.fpp", "CdhCoreConfig.fpp", "SensorLinkConfig.fpp"]
     uses, replaces = found["CdhCoreConfig.fpp"]
-    assert uses.endswith("subtop-demo/config/project/CdhCoreConfig.fpp") or uses == "../../config/project/CdhCoreConfig.fpp"
+    assert uses.endswith("mission/config/project/CdhCoreConfig.fpp") or uses == "../../config/project/CdhCoreConfig.fpp"
     assert len(replaces) == 1 and replaces[0].endswith("lib/fprime/Svc/Subtopologies/CdhCore/CdhCoreConfig/CdhCoreConfig.fpp")
     uses, replaces = found["SensorLinkConfig.fpp"]
     assert uses.endswith("config/project/SensorLinkConfig.fpp")
@@ -314,10 +297,10 @@ def test_project_overrides_reach_the_analysis(default):
 
 @needs_fpp
 def test_kept_tick_source_is_reported(tmp_path):
-    result = generate(SUBTOP, manifest_of(keep=["comDriver", "vxTimer"]), tmp_path / "out")
+    result = generate(MISSION, manifest_of(keep=["comDriver", "vxTimer"]), tmp_path / "out")
     warnings = [w for w in result.report["warnings"] if "cycles the flight rate groups" in w]
-    assert len(warnings) == 1 and warnings[0].startswith("SubtopDemo.vxTimer (VxWorksSvc.VxWatchDogTimer)")
-    assert "SubtopDemo.rateGroupDriver" in warnings[0] and "project surrogate" in warnings[0]
+    assert len(warnings) == 1 and warnings[0].startswith("Cdh.vxTimer (VxWorksSvc.VxWatchDogTimer)")
+    assert "Cdh.rateGroupDriver" in warnings[0] and "project surrogate" in warnings[0]
     assert any("rate groups may never run" in note for note in result.report["fidelity_notes"])
 
 
@@ -326,9 +309,8 @@ def test_no_tick_warning_for_the_examples(default, tmp_path):
     from fprime_wsts.system import generate_system, load_system
 
     reports = [default.report]
-    reports.append(generate(LINUX, manifest_of(LINUX, "LinuxDemo"), tmp_path / "linux").report)
-    reports.append(generate(VX, manifest_of(VX, "VxDemo"), tmp_path / "vx").report)
-    system = generate_system(load_system(HUB / "wsts-system.yaml"), tmp_path / "hub")
+    reports.append(generate(MISSION, flight_manifest("Payload"), tmp_path / "payload").report)
+    system = generate_system(load_system(SYSTEM), tmp_path / "system")
     reports += [element.report for element in system.elements.values()]
     for report in reports:
         assert not [w for w in report["warnings"] if "rate groups" in w or "time comes from" in w], report["topology"]
@@ -468,8 +450,8 @@ def test_replaced_module_build_file(tmp_path):
 def test_subtopology_inside_the_flight_project(tmp_path):
     """The same mechanism when the subtopology is a project module, not a library's"""
     project = tmp_path / "project"
-    shutil.copytree(SUBTOP, project, ignore=shutil.ignore_patterns("wsts", "lib"))
-    shutil.copytree(SUBTOP / "lib" / "sensor-lib" / "SensorLib", project / "SensorLib")
+    shutil.copytree(MISSION, project, ignore=shutil.ignore_patterns("wsts", "lib"))
+    shutil.copytree(MISSION / "lib" / "sensor-lib" / "SensorLib", project / "SensorLib")
     (project / "settings.ini").write_text(
         "[fprime]\n"
         f"framework_path: {REPO / 'lib' / 'fprime'}\n"
@@ -487,6 +469,6 @@ def test_subtopology_inside_the_flight_project(tmp_path):
     # The project module is still added from the flight project, and redirected to the
     # copy; the module that overrides its configuration comes after it
     names = [line.split("/")[-1].rstrip('")') for line in added]
-    assert sorted(names) == ["SensorLink", "SerialSensor", "SubtopDemo", "project"]
+    assert sorted(names) == ["Cdh", "SensorLink", "SerialSensor", "project"]
     assert names.index("project") > names.index("SensorLink")
     assert 'add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/SensorLib/SensorLink")' in added

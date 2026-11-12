@@ -2,8 +2,6 @@
 system client. The generator tests need the FPP tools (fprime-fpp) on PATH."""
 
 import json
-import shutil
-from pathlib import Path
 
 import pytest
 import yaml
@@ -11,17 +9,8 @@ import yaml
 from fprime_wsts.bridge import BridgeError, WstsSystem
 from fprime_wsts.fpp import WstsError
 from fprime_wsts.system import generate_system, is_system_manifest, load_system, parse_system
+from mission import CDH_MAIN, MISSION, SIM, SYSTEM, copy_flight, needs_fpp
 from test_bridge import FakeSim
-
-REPO = Path(__file__).resolve().parents[2]
-HUB = REPO / "examples" / "hub-demo"
-LINUX = REPO / "examples" / "linux-demo"
-VX = REPO / "examples" / "vx-demo"
-
-needs_fpp = pytest.mark.skipif(
-    shutil.which("fpp-to-json") is None or not (REPO / "lib" / "fprime" / "cmake").is_dir(),
-    reason="needs the FPP tools on PATH and the lib/fprime submodule",
-)
 
 TWO = {
     "system": "Demo",
@@ -53,9 +42,9 @@ def test_system_manifest(tmp_path):
 
 
 def test_system_manifests_are_told_from_deployment_manifests():
-    assert is_system_manifest(HUB / "wsts-system.yaml")
-    assert not is_system_manifest(HUB / "Cdh" / "wsts.yaml")
-    assert load_system(HUB / "wsts-system.yaml").name == "HubDemo"
+    assert is_system_manifest(SYSTEM)
+    assert not is_system_manifest(SIM / "cdh.yaml")
+    assert load_system(SYSTEM).name == "Mission"
 
 
 @pytest.mark.parametrize("data, message", [
@@ -86,11 +75,11 @@ def test_system_manifest_errors(data, message):
 # ----------------------------------------------------------------------
 
 
-def hub_system(tmp_path, **changes):
-    """The HubDemo system manifest, changed, in a place of its own"""
-    data = yaml.safe_load((HUB / "wsts-system.yaml").read_text())
+def mission_system(tmp_path, **changes):
+    """The example's system manifest, changed, in a place of its own"""
+    data = yaml.safe_load(SYSTEM.read_text())
     for name, element in data["elements"].items():
-        element["manifest"] = str(HUB / element["manifest"])
+        element["manifest"] = str(SIM / element["manifest"])
     for key, value in changes.items():
         if key in data["elements"]:
             data["elements"][key].update(value)
@@ -102,8 +91,8 @@ def hub_system(tmp_path, **changes):
 
 
 @needs_fpp
-def test_hub_demo_system(tmp_path):
-    result = generate_system(hub_system(tmp_path), tmp_path / "out")
+def test_mission_system(tmp_path):
+    result = generate_system(mission_system(tmp_path), tmp_path / "out")
     assert set(result.elements) == {"cdh", "payload"}
     chosen = {
         sub["instance"]: (sub["flight_component"], sub["surrogate"], sub["chosen_by"])
@@ -132,29 +121,30 @@ def test_hub_demo_system(tmp_path):
     elements = {element["name"]: element for element in description["elements"]}
     # Each element has its own bridge, and its wstsControl inside its own ID window
     assert elements["cdh"]["bridge"] != elements["payload"]["bridge"]
-    assert 0x10022000 < elements["cdh"]["control_base_id"] < 0x20000000
-    assert 0x20021000 < elements["payload"]["control_base_id"] <= 0x2FFFFFFF
+    # (above the simulators the Cdh element adds, at 0x18000000)
+    assert 0x18006000 < elements["cdh"]["control_base_id"] < 0x20000000
+    assert 0x20036000 < elements["payload"]["control_base_id"] <= 0x2FFFFFFF
     assert description["links"] == [{
         "name": "hub", "kind": "bytestream",
         "a": {"element": "cdh", "instance": "Cdh.hubDriver", "endpoint": "hubDriver"},
         "b": {"element": "payload", "instance": "Payload.hubDriver", "endpoint": "hubDriver"},
     }]
     report = result.elements["payload"].report
-    assert report["system"] == {"name": "HubDemo", "element": "payload", "ids": [0x20000000, 0x2FFFFFFF]}
+    assert report["system"] == {"name": "Mission", "element": "payload", "ids": [0x20000000, 0x2FFFFFFF]}
     assert report["links"] == [{"link": "hub", "instance": "Payload.hubDriver", "endpoint": "hubDriver",
                                 "role": "connect", "peer": "cdh.hubDriver"}]
     assert "## Links" in (tmp_path / "out" / "payload" / "wsts-report.md").read_text()
 
     # Regenerating over the output is allowed, and --check finds it current
-    assert generate_system(hub_system(tmp_path), tmp_path / "out", check=True).changed == []
+    assert generate_system(mission_system(tmp_path), tmp_path / "out", check=True).changed == []
     (tmp_path / "out" / "wsts-system.json").write_text("{}\n")
-    assert generate_system(hub_system(tmp_path), tmp_path / "out", check=True).changed == ["wsts-system.json"]
+    assert generate_system(mission_system(tmp_path), tmp_path / "out", check=True).changed == ["wsts-system.json"]
 
 
 @needs_fpp
-def test_checked_in_hub_demo_is_current():
-    result = generate_system(load_system(HUB / "wsts-system.yaml"), check=True)
-    assert result.changed == [], f"regenerate: fprime-wsts generate {HUB / 'wsts-system.yaml'}"
+def test_checked_in_example_is_current():
+    result = generate_system(load_system(SYSTEM), check=True)
+    assert result.changed == [], f"regenerate: fprime-wsts generate {SYSTEM}"
 
 
 @needs_fpp
@@ -162,23 +152,23 @@ def test_checked_in_hub_demo_is_current():
     ({"links": [{"name": "hub", "a": "cdh.noSuchInstance", "b": "payload.hubDriver"}]},
      "element 'cdh': link 'hub' ends at instance 'noSuchInstance', which is not in topology"),
     ({"links": [{"name": "hub", "a": "cdh.comDriver", "b": "payload.hubDriver"}]}, "lists under 'keep'"),
-    ({"links": [{"name": "hub", "a": "cdh.linuxTimer", "b": "payload.hubDriver"}]}, "not a byte stream driver"),
+    ({"links": [{"name": "hub", "a": "cdh.vxTimer", "b": "payload.hubDriver"}]}, "not a byte stream driver"),
     ({"links": [{"name": "hub", "a": "cdh.hub", "b": "payload.hubDriver"}]}, "cannot replace"),
     # The top of this window is where Payload's flight instances already are
-    ({"payload": {"ids": [0x20000000, 0x20021FFF]}}, "no room for the WSTS instances"),
+    ({"payload": {"ids": [0x20000000, 0x20036FFF]}}, "no room for the WSTS instances"),
     ({"payload": {"ids": [0x20000000, 0x20000FFF]}}, "outside the element's 'ids' window"),
     ({"cdh": {"bridge": "tcp:50101"}}, "both use bridge tcp:50101"),
 ])
 def test_system_generation_errors(tmp_path, changes, message):
     with pytest.raises(WstsError, match=message):
-        generate_system(hub_system(tmp_path, **changes), tmp_path / "out")
+        generate_system(mission_system(tmp_path, **changes), tmp_path / "out")
 
 
-def standalone(tmp_path, name, project, deployment, **changes):
-    """A deployment manifest kept outside its flight project, with its models removed"""
-    data = yaml.safe_load((project / deployment / "wsts.yaml").read_text())
-    data.pop("models", None)
-    data.update(project=str(project), **changes)
+def standalone(tmp_path, name, deployment, project=MISSION, **data):
+    """A manifest for a deployment, in a simulation project of its own with no models"""
+    data = {"project": str(project), "deployment": deployment, **data}
+    if deployment == "Cdh":
+        data = {"keep": ["comDriver"], "main": CDH_MAIN, **data}
     directory = tmp_path / name
     directory.mkdir()
     (directory / "wsts.yaml").write_text(yaml.safe_dump(data))
@@ -187,24 +177,27 @@ def standalone(tmp_path, name, project, deployment, **changes):
 
 @needs_fpp
 def test_uart_link_between_projects_and_platforms(tmp_path):
-    """A serial link between a Linux deployment and a VxWorks one, from different projects.
-    Their UART drivers are replaced from the catalog; the link takes the model's place."""
+    """A serial link between a Linux deployment and a VxWorks one, from different projects
+    (the VxWorks one from a copy of the flight project). Their UART drivers are replaced
+    from the catalog, the VxWorks one inside its subtopology; the link takes the place of
+    a model."""
     data = {
         "system": "Serial",
         "elements": {
-            "linux": standalone(tmp_path, "linux", LINUX, "LinuxDemo"),
-            "vx": standalone(tmp_path, "vx", VX, "VxDemo"),
+            "linux": standalone(tmp_path, "linux", "Payload"),
+            "vx": standalone(tmp_path, "vx", "Cdh", project=copy_flight(tmp_path)),
         },
-        "links": [{"name": "crosslink", "a": "vx.sensorUart", "b": "linux.sensorUart"}],
+        "links": [{"name": "crosslink", "a": "vx.uart", "b": "linux.sensorUart"}],
     }
     (tmp_path / "wsts-system.yaml").write_text(yaml.safe_dump(data))
     result = generate_system(load_system(tmp_path / "wsts-system.yaml"))
     assert result.output == tmp_path / "wsts" / "Serial"
-    for name, role in (("linux", "connect"), ("vx", "listen")):
+    for name, endpoint, role in (("linux", "sensorUart", "connect"), ("vx", "uart", "listen")):
         report = result.elements[name].report
-        uart = next(sub for sub in report["substitutions"] if sub["endpoint"] == "sensorUart")
+        uart = next(sub for sub in report["substitutions"] if sub["endpoint"] == endpoint)
         assert uart["chosen_by"] == "catalog"
         assert report["links"][0]["role"] == role
+    assert result.elements["vx"].report["links"][0]["instance"] == "SensorLink.uart"
     # Without 'ids' windows each wstsControl sits above its own element's flight IDs
     bases = [element["control_base_id"] for element in result.description["elements"]]
     assert len(set(bases)) == 2
@@ -216,9 +209,9 @@ def test_uart_link_between_projects_and_platforms(tmp_path):
 def test_link_and_model_cannot_share_an_endpoint(tmp_path):
     data = {
         "system": "Serial",
-        # LinuxDemo's own manifest attaches the temperature sensor model to sensorUart
-        "elements": {"linux": str(LINUX / "LinuxDemo" / "wsts.yaml"), "vx": standalone(tmp_path, "vx", VX, "VxDemo")},
-        "links": [{"name": "crosslink", "a": "vx.sensorUart", "b": "linux.sensorUart"}],
+        # Payload's own manifest attaches the temperature sensor model to sensorUart
+        "elements": {"linux": str(SIM / "payload.yaml"), "vx": standalone(tmp_path, "vx", "Cdh")},
+        "links": [{"name": "crosslink", "a": "vx.uart", "b": "linux.sensorUart"}],
     }
     (tmp_path / "wsts-system.yaml").write_text(yaml.safe_dump(data))
     with pytest.raises(WstsError, match="has both the model 'tempSensor' and the link 'crosslink'"):
@@ -232,8 +225,8 @@ def test_elements_must_not_share_wsts_ids(tmp_path):
     data = {
         "system": "Twins",
         "elements": {
-            "one": standalone(tmp_path, "one", LINUX, "LinuxDemo"),
-            "two": standalone(tmp_path, "two", LINUX, "LinuxDemo", bridge="tcp:50107"),
+            "one": standalone(tmp_path, "one", "Payload"),
+            "two": standalone(tmp_path, "two", "Payload", bridge="tcp:50107"),
         },
     }
     (tmp_path / "wsts-system.yaml").write_text(yaml.safe_dump(data))

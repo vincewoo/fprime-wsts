@@ -14,25 +14,22 @@ from fprime_wsts.generate import generate, module_name
 from fprime_wsts.manifest import LinkEnd, parse_manifest
 from fprime_wsts.runner import parse_env
 
-REPO = Path(__file__).resolve().parents[2]
-FLIGHT = REPO / "examples" / "subtop-demo"
-SIM = REPO / "examples" / "subtop-demo-sim"
+from mission import MISSION as FLIGHT
+from mission import SIM, needs_fpp
 
-needs_fpp = pytest.mark.skipif(
-    shutil.which("fpp-to-json") is None or not (REPO / "lib" / "fprime" / "cmake").is_dir(),
-    reason="needs the FPP tools on PATH and the lib/fprime submodule",
-)
+#: The element of the example system whose manifest uses all of these
+ELEMENT = "cdh.yaml"
 
 
 def manifest_of(sim_project: Path = SIM, **changes):
-    data = yaml.safe_load((sim_project / "wsts.yaml").read_text())
+    data = yaml.safe_load((sim_project / ELEMENT).read_text())
     data["project"] = str(FLIGHT)
     for key, value in changes.items():
         if value is None:
             data.pop(key, None)
         else:
             data[key] = value
-    return parse_manifest(data, sim_project / "wsts.yaml")
+    return parse_manifest(data, sim_project / ELEMENT)
 
 
 def run(sim_project: Path, out: Path, **changes):
@@ -119,7 +116,7 @@ def test_env_options():
 
 @needs_fpp
 def test_clock_is_set_up_and_reported(default):
-    setup = (default.output / "SubtopDemo" / "Top" / "WstsSetup.cpp").read_text()
+    setup = (default.output / "Cdh" / "Top" / "WstsSetup.cpp").read_text()
     assert '    ::SensorSim::simClock.wstsClock(125.0, "");\n' in setup
     assert setup.index("wstsClock") < setup.index("Wsts::Runtime::start(config);")
     assert default.report["simulators"]["clocks"] == [
@@ -128,7 +125,7 @@ def test_clock_is_set_up_and_reported(default):
     # The clock adds nothing to the dictionary, and the flight tick source is untouched
     clock = next(i for i in default.report["simulators"]["instances"] if i["instance"] == "SensorSim.simClock")
     assert not any(clock["dictionary_items"].values()) and clock["last_id"] is None
-    assert default.report["time"]["tick_source"] == "SubtopDemo.vxTimer"
+    assert default.report["time"]["tick_source"] == "Cdh.vxTimer"
 
 
 @needs_fpp
@@ -162,7 +159,7 @@ def test_extra_library_is_a_root_of_its_own(default):
     settings = (default.output / "settings.ini").read_text()
     locations = next(line for line in settings.splitlines() if line.startswith("library_locations:")).split(":")
     names = [Path(entry.strip()).name for entry in locations[1:]]
-    assert names[-2:] == ["sim-common", "subtop-demo-sim"], "the vendored library, then the project that builds on it"
+    assert names[-2:] == ["sim-common", "mission-sim"], "the vendored library, then the project that builds on it"
     assert default.report["simulation_libraries"][0].endswith("lib/sim-common")
     # In the analysis: SensorSim.GyroSim uses SimCommon.Motion, which only that library defines
     gyro = next(i for i in default.report["simulators"]["instances"] if i["instance"] == "SensorSim.gyroSim")
@@ -184,7 +181,7 @@ def test_cmake_is_included_at_the_documented_points(default, project, tmp_path):
         'add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/config/project")',
         "set(WSTS_ADDING_DEFERRED ON)",
         'sim.cmake")',
-        'add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/SubtopDemo")',
+        'add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Cdh")',
     )]
     assert order == sorted(order), "after every flight, library and simulation module; before the deployment"
     assert default.report["cmake_includes"]["before_libraries"] == []
@@ -192,7 +189,7 @@ def test_cmake_is_included_at_the_documented_points(default, project, tmp_path):
 
     (project / "early.cmake").write_text("# options and functions for this project's library.cmake\n")
     result = run(project, tmp_path / "out", cmake={
-        "cache": {"SENSOR_SIM_COMPONENTS": ["SerialSensorSim", "GyroSim", "SimTime", "Top"]},
+        "cache": {"MISSION_SIM_MODULES": [f"SensorSim/{m}" for m in ("SerialSensorSim", "GyroSim", "SimTime", "Top")]},
         "include": ["sim.cmake"], "include_early": ["early.cmake"]})
     root = (result.output / "CMakeLists.txt").read_text()
     assert root.index("find_package(FPrime") < root.index('early.cmake")') < root.index("\nfprime_setup_included_code()")
@@ -208,9 +205,9 @@ def test_early_include_without_anything_else(tmp_path):
     sim = tmp_path / "sim"
     sim.mkdir()
     (sim / "early.cmake").write_text("set(SOME_LIBRARY_OPTION ON)\n")
-    manifest = parse_manifest({"project": str(REPO / "examples" / "linux-demo"), "deployment": "LinuxDemo",
-                               "keep": ["comDriver"], "cmake": {"include_early": ["early.cmake"]}}, sim / "wsts.yaml")
-    result = generate(REPO / "examples" / "linux-demo", manifest, tmp_path / "out")
+    manifest = parse_manifest({"project": str(FLIGHT), "deployment": "Payload",
+                               "cmake": {"include_early": ["early.cmake"]}}, sim / "wsts.yaml")
+    result = generate(FLIGHT, manifest, tmp_path / "out")
     root = (result.output / "CMakeLists.txt").read_text()
     assert "set(FPRIME_INCLUDE_FRAMEWORK_CODE OFF)" in root and "function(add_fprime_subdirectory" not in root
     assert root.index("find_package(FPrime") < root.index('early.cmake")') < root.index("fprime_setup_included_code()")
@@ -235,7 +232,7 @@ def test_simulation_override_wins_in_the_analysis_and_is_built_last(default):
     simulation = {o["file"]: o for o in report["simulation_config_overrides"]}
     assert sorted(simulation) == ["AcConstants.fpp", "CommandDispatcherImplCfg.hpp"]
     constants = simulation["AcConstants.fpp"]
-    assert constants["uses"].endswith("subtop-demo-sim/config/AcConstants.fpp") or constants["uses"] == "../../config/AcConstants.fpp"
+    assert constants["uses"].endswith("mission-sim/config/AcConstants.fpp") or constants["uses"] == "../../config/AcConstants.fpp"
     assert [Path(r).parent.name for r in constants["replaces"]] == ["project", "config"], \
         "the flight project's override, and the framework default under it"
     # Flight's own overrides are listed apart, without the files the simulation took over
@@ -243,14 +240,14 @@ def test_simulation_override_wins_in_the_analysis_and_is_built_last(default):
 
     # The value in force is the simulation's: the flight project gives its rate groups 6
     # ports, and the patched model uses a seventh (FPP has checked it)
-    top = (default.output / "SubtopDemo" / "Top" / "topology.fpp").read_text()
+    top = (default.output / "Cdh" / "Top" / "topology.fpp").read_text()
     assert "rateGroup1Hz.RateGroupMemberOut[6] -> SensorSim.txBuffers.schedIn" in top
     assert "ActiveRateGroupOutputPorts = 6" in (FLIGHT / "config" / "project" / "AcConstants.fpp").read_text()
     assert "ActiveRateGroupOutputPorts = 10" in (SIM / "config" / "AcConstants.fpp").read_text()
     # Table sizes are read from the file the build uses
     table = report["capacity"]["command_table"]
     assert table["size"] == 80 and table["source"].endswith("config/CommandDispatcherImplCfg.hpp")
-    assert "subtop-demo/config" not in table["source"]
+    assert "mission/config" not in table["source"]
     assert table["used"] > 36, "more opcodes than the flight project's table of 36 holds"
 
     # The build agrees: F Prime lets the last registration win, and the simulation's
@@ -272,7 +269,7 @@ def test_without_the_simulation_override_the_flight_limits_apply(project, tmp_pa
     with pytest.raises(WstsError) as error:
         run(project, tmp_path / "out")
     message = str(error.value)
-    assert "SubtopDemo.rateGroup1Hz (Svc.ActiveRateGroup) has no free RateGroupMemberOut port: all 6 are connected" in message
+    assert "Cdh.rateGroup1Hz (Svc.ActiveRateGroup) has no free RateGroupMemberOut port: all 6 are connected" in message
     assert "ActiveRateGroupOutputPorts" in message and "'clocks'" in message
     assert 'register_fprime_config(' in message and '"${CMAKE_CURRENT_LIST_DIR}/AcConstants.fpp"' in message
     assert "simulation project's library.cmake" in message and "wins even when flight overrides the same file" in message
@@ -285,7 +282,7 @@ def test_opcode_table_of_the_flight_project_is_too_small(project, tmp_path):
         run(project, tmp_path / "out")
     message = str(error.value)
     assert "registers 40 opcodes" in message and "table holds 36" in message
-    assert "subtop-demo/config/project/CommandDispatcherImplCfg.hpp" in message
+    assert "mission/config/project/CommandDispatcherImplCfg.hpp" in message
     assert '"${CMAKE_CURRENT_LIST_DIR}/CommandDispatcherImplCfg.hpp"' in message
 
 
@@ -350,18 +347,18 @@ def test_table_sizes_follow_header_overrides(tmp_path):
 
 @needs_fpp
 def test_substitution_without_an_endpoint(default):
-    setup = (default.output / "SubtopDemo" / "Top" / "WstsSetup.cpp").read_text()
+    setup = (default.output / "Cdh" / "Top" / "WstsSetup.cpp").read_text()
     assert "chronoTime.wstsBind" not in setup
-    assert "// ::SubtopDemo::chronoTime: SensorSim.SimTime does not use the bus" in setup
+    assert "// ::Cdh::chronoTime: SensorSim.SimTime does not use the bus" in setup
     assert '::SensorLink::uart.wstsBind("uart", "");' in setup
-    assert "instance chronoTime: SensorSim.SimTime base id 0x20010000" in (default.output / "SubtopDemo/Top/instances.fpp").read_text()
-    compat = (default.output / "SubtopDemo" / "Top" / "WstsCompat.hpp").read_text()
+    assert "instance chronoTime: SensorSim.SimTime base id 0x10010000" in (default.output / "Cdh/Top/instances.fpp").read_text()
+    compat = (default.output / "Cdh" / "Top" / "WstsCompat.hpp").read_text()
     assert "namespace Svc { using ChronoTime = ::SensorSim::SimTime; }" in compat
-    time_source = next(s for s in default.report["substitutions"] if s["instance"] == "SubtopDemo.chronoTime")
+    time_source = next(s for s in default.report["substitutions"] if s["instance"] == "Cdh.chronoTime")
     assert time_source["endpoint"] is None and time_source["chosen_by"] == "manifest"
-    assert "| `SubtopDemo.chronoTime` | `Svc.ChronoTime` | `SensorSim.SimTime` | manifest | no bus endpoint |" in \
+    assert "| `Cdh.chronoTime` | `Svc.ChronoTime` | `SensorSim.SimTime` | manifest | no bus endpoint |" in \
         (default.output / "wsts-report.md").read_text()
-    assert any("SubtopDemo.chronoTime is replaced by SensorSim.SimTime, which has no bus endpoint" in note
+    assert any("Cdh.chronoTime is replaced by SensorSim.SimTime, which has no bus endpoint" in note
                and "do not reach that link" in note for note in default.report["fidelity_notes"])
 
 
@@ -369,15 +366,15 @@ def test_substitution_without_an_endpoint(default):
 def test_nothing_attaches_to_a_substitution_without_an_endpoint(tmp_path):
     model = [{"name": "clock", "class": "Wsts::ScriptedByteStream", "endpoint": "chronoTime", "kind": "bytestream"}]
     with pytest.raises(WstsError, match=r"model 'clock' attaches to endpoint 'chronoTime', which no surrogate is bound to. "
-                                        r"SubtopDemo.chronoTime is substituted with 'endpoint: none'"):
+                                        r"Cdh.chronoTime is substituted with 'endpoint: none'"):
         run(SIM, tmp_path / "out", models=model)
     with pytest.raises(WstsError, match=r"devices: SensorSim.sensorPort: there is no endpoint 'chronoTime'. "
-                                        r"SubtopDemo.chronoTime is substituted with 'endpoint: none'"):
+                                        r"Cdh.chronoTime is substituted with 'endpoint: none'"):
         run(SIM, tmp_path / "out", devices=[{"instance": "SensorSim.sensorPort", "endpoint": "chronoTime"}])
     manifest = manifest_of(SIM)
     manifest.system, manifest.element = "Pair", "a"
     manifest.links = [LinkEnd(link="wire", instance="chronoTime", role="listen", peer="b.x")]
-    with pytest.raises(WstsError, match=r"link 'wire' ends at SubtopDemo.chronoTime, which is substituted with 'endpoint: none'"):
+    with pytest.raises(WstsError, match=r"link 'wire' ends at Cdh.chronoTime, which is substituted with 'endpoint: none'"):
         generate(FLIGHT, manifest, tmp_path / "out")
 
 
@@ -386,9 +383,9 @@ def test_endpoint_none_from_a_catalog(project, tmp_path):
     (project / "catalog.yaml").write_text(yaml.safe_dump({"surrogates": [
         {"surrogate": "SensorSim.SimTime", "replaces": ["Svc.ChronoTime"], "endpoint": "none"}]}))
     result = run(project, tmp_path / "out", catalogs=["catalog.yaml"], substitute=None)
-    time_source = next(s for s in result.report["substitutions"] if s["instance"] == "SubtopDemo.chronoTime")
+    time_source = next(s for s in result.report["substitutions"] if s["instance"] == "Cdh.chronoTime")
     assert (time_source["chosen_by"], time_source["endpoint"]) == ("catalog", None)
-    assert "chronoTime.wstsBind" not in (result.output / "SubtopDemo" / "Top" / "WstsSetup.cpp").read_text()
+    assert "chronoTime.wstsBind" not in (result.output / "Cdh" / "Top" / "WstsSetup.cpp").read_text()
     (project / "catalog.yaml").write_text(yaml.safe_dump({"surrogates": [
         {"surrogate": "SensorSim.SimTime", "replaces": ["Svc.ChronoTime"], "endpoint": "clock"}]}))
     with pytest.raises(WstsError, match=r"in a catalog, 'endpoint' can only be 'none'"):
@@ -410,9 +407,3 @@ def test_run_environment_is_carried_to_the_overlay(default, tmp_path):
     result = run(SIM, tmp_path / "out", run={"env": {"SIM_SEED": 7, "SIM_MODE": "relative/not/a/path"}})
     assert result.report["run"] == {"env": {"SIM_SEED": "7", "SIM_MODE": "relative/not/a/path"}, "env_paths": []}
     assert "Environment: `SENSOR_SIM_PROFILE=" in (default.output / "wsts-report.md").read_text()
-
-
-@needs_fpp
-def test_checked_in_examples_are_current():
-    result = generate(FLIGHT, parse_manifest(yaml.safe_load((SIM / "wsts.yaml").read_text()), SIM / "wsts.yaml"), check=True)
-    assert result.changed == [], f"regenerate: fprime-wsts generate {SIM / 'wsts.yaml'}"

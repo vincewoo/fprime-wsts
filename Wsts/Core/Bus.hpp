@@ -205,7 +205,9 @@ class Bus {
     //! recorded responses, and byte stream / GPIO input comes only from injections.
     void setReplay(bool enabled);
     bool replay() const { return m_replay.load(); }
-    void queueReplayResponse(const std::string& endpoint, int status, const Bytes& read);
+    //! Queue a recorded response. I2C responses are served in order per endpoint and
+    //! address, so the devices sharing a bus each get their own; SPI uses address 0.
+    void queueReplayResponse(const std::string& endpoint, std::uint32_t addr, int status, const Bytes& read);
 
     // ---- Housekeeping ----
 
@@ -226,7 +228,8 @@ class Bus {
         bool outLevel = false;
         bool inLevel = false;
         bool inDriven = false;
-        std::deque<std::pair<int, Bytes>> replayResponses;
+        //! Recorded responses by device address (0 for SPI)
+        std::map<std::uint32_t, std::deque<std::pair<int, Bytes>>> replayResponses;
     };
 
     //! What the active faults ask for on one transaction

@@ -401,16 +401,16 @@ int Bus::i2cTransact(const std::string& endpoint, std::uint32_t addr, const Byte
         record.status = toDevice.error ? toDevice.status : 2;
     } else if (m_replay.load()) {
         std::lock_guard<std::mutex> lock(m_mutex);
-        Endpoint& ep = this->endpointLocked(endpoint);
-        if (ep.replayResponses.empty()) {
+        auto& responses = this->endpointLocked(endpoint).replayResponses[addr];
+        if (responses.empty()) {
             record.status = 5;  // I2C_OTHER_ERR: recording exhausted
         } else {
-            record.status = ep.replayResponses.front().first;
-            const Bytes& recorded = ep.replayResponses.front().second;
+            record.status = responses.front().first;
+            const Bytes& recorded = responses.front().second;
             for (std::size_t i = 0; i < read.size() && i < recorded.size(); i++) {
                 read[i] = recorded[i];
             }
-            ep.replayResponses.pop_front();
+            responses.pop_front();
         }
         record.src = "replay";
     } else {
@@ -460,16 +460,16 @@ int Bus::spiTransfer(const std::string& endpoint, const Bytes& write, Bytes& rea
         record.status = toDevice.error ? toDevice.status : 4;  // 4 = SPI_WRITE_ERR
     } else if (m_replay.load()) {
         std::lock_guard<std::mutex> lock(m_mutex);
-        Endpoint& ep = this->endpointLocked(endpoint);
-        if (ep.replayResponses.empty()) {
+        auto& responses = this->endpointLocked(endpoint).replayResponses[0];
+        if (responses.empty()) {
             record.status = 5;  // SPI_OTHER_ERR: recording exhausted
         } else {
-            record.status = ep.replayResponses.front().first;
-            const Bytes& recorded = ep.replayResponses.front().second;
+            record.status = responses.front().first;
+            const Bytes& recorded = responses.front().second;
             for (std::size_t i = 0; i < read.size() && i < recorded.size(); i++) {
                 read[i] = recorded[i];
             }
-            ep.replayResponses.pop_front();
+            responses.pop_front();
         }
         record.src = "replay";
     } else {
@@ -503,9 +503,9 @@ int Bus::spiTransfer(const std::string& endpoint, const Bytes& write, Bytes& rea
     return record.status;
 }
 
-void Bus::queueReplayResponse(const std::string& endpoint, int status, const Bytes& read) {
+void Bus::queueReplayResponse(const std::string& endpoint, std::uint32_t addr, int status, const Bytes& read) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    this->endpointLocked(endpoint).replayResponses.emplace_back(status, read);
+    this->endpointLocked(endpoint).replayResponses[addr].emplace_back(status, read);
 }
 
 void Bus::setReplay(bool enabled) {

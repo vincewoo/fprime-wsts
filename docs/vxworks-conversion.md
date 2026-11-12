@@ -1,35 +1,23 @@
 # Converting a deployment that targets another operating system
 
-`examples/vx-demo` is the worked example: a VxWorks downloadable kernel module that uses
-`VxWorksDrv.VxWorksUartDriver` and `VxWorksSvc.VxWatchDogTimer` from `fprime-vxworks`.
+The `Cdh` computer of the repository's [example](../examples/README.md) is the worked
+example: a VxWorks downloadable kernel module (`examples/mission/Cdh`) that uses
+`VxWorksSvc.VxWatchDogTimer` and `VxWorksDrv.VxWorksUartDriver` from `fprime-vxworks`. It
+is also assembled from subtopologies: its UART driver is inside a subtopology of a project
+library (`lib/sensor-lib`), the driver is opened and started by phase code in that
+subtopology, the project overrides configuration of the library and of the framework, and
+the model has a `system.fpp`. Its manifest (`examples/mission-sim/cdh.yaml`) names no
+drivers.
 
 ```bash
-fprime-wsts generate examples/vx-demo/VxDemo/wsts.yaml
+fprime-wsts generate examples/mission-sim/wsts-system.yaml
 ```
 
 ```bash
-cd examples/vx-demo/wsts/VxDemo && fprime-util generate && fprime-util build
+cd examples/mission-sim/wsts/Mission/cdh && fprime-util generate && fprime-util build
 ```
 
 No VxWorks toolchain is involved at any point.
-
-`examples/subtop-demo` is a second worked example, for a deployment assembled from
-subtopologies: its VxWorks UART driver is inside a subtopology of a project library, the
-driver is opened and started by phase code in that subtopology, the project overrides
-configuration of the library and of the framework, and the model has a `system.fpp`. Its
-manifest names no drivers.
-
-```bash
-fprime-wsts generate examples/subtop-demo/SubtopDemo/wsts.yaml
-```
-
-```bash
-cd examples/subtop-demo/wsts/SubtopDemo && fprime-util generate && fprime-util build
-```
-
-```bash
-fprime-wsts run examples/subtop-demo/wsts/SubtopDemo --gds --duration 30 --json
-```
 
 ## What the generator does
 
@@ -51,28 +39,28 @@ fprime-wsts run examples/subtop-demo/wsts/SubtopDemo --gds --duration 30 --json
 | Simulators the project already has as F´ components, in their own library | Added to the topology from the manifest (`simulators`, `devices`), with clocks of their own (`clocks`), their libraries (`libraries.sim`), CMake around the flight modules (`cmake.include`) and configuration overrides that win over flight's |
 | FPP tools older or newer than the framework pins; a Java runtime that is too old | Reported before the analysis, and again with the tool's error |
 
-The manifest for VxDemo:
+What the manifest for Cdh needs for the conversion (the rest of `cdh.yaml` is about its
+simulators):
 
 ```yaml
-deployment: VxDemo
+project: ../mission
+deployment: Cdh
 keep: [comDriver]
 main:
   generate: true
   declarations: |
-    extern "C" int vxDemoStart(const char* hostname, int port);
-    extern "C" void vxDemoStop();
-  start: vxDemoStart(hostname, port)
-  stop: vxDemoStop()
-models:
-  - {name: tempSensor, class: "Wsts::ScriptedByteStream", endpoint: sensorUart, kind: bytestream,
-     params: {text: "$TEMP,-12.25\n", period: "10"}}
+    extern "C" int cdhStart(const char* hostname, int port, int hubPort);
+    extern "C" void cdhStop();
+  start: cdhStart(hostname, port, 50050)
+  stop: cdhStop()
 ```
 
-In the generated `main()`, `hostname` and `port` come from `-a` and `-p`.
+In the generated `main()`, `hostname` and `port` come from `-a` and `-p`; `start` is any
+C++ expression, so other arguments of the entry point are written into it.
 
 ## What you still have to deal with
 
-- **Code that includes the target OS's headers.** Guard it, as `VxDemo/Entry.cpp` does with
+- **Code that includes the target OS's headers.** Guard it, as `Cdh/Entry.cpp` does with
   `#ifdef TGT_OS_TYPE_VXWORKS`, or with `#ifndef WSTS_SIM` (defined for every simulated
   build). A component that is built around OS calls should be replaced by a surrogate. A
   POSIX-backed VxWorks API shim is planned, not built.

@@ -27,9 +27,9 @@ the flight project root.
 
 ```yaml
 project: ../flight               # flight project root, relative to this file (standalone simulation project)
-deployment: LinuxDemo            # deployment directory (the one containing Top/)
-topology: LinuxDemo.LinuxDemo    # only needed if Top/ defines more than one topology
-output: wsts/LinuxDemo            # default: wsts/<deployment> in the simulation project, else in the flight project
+deployment: Payload              # deployment directory (the one containing Top/)
+topology: Payload.Payload        # only needed if Top/ defines more than one topology
+output: wsts/Payload              # default: wsts/<deployment> in the simulation project, else in the flight project
 
 keep: [comDriver]                # instances never substituted (see "Instance names")
 substitute:                      # explicit choices; override the catalog
@@ -49,7 +49,7 @@ models:                          # in-process C++ device models
   - name: imu                    # used by model_set / MODEL_SET
     class: Wsts::RegisterMapI2c
     header: Wsts/Core/Models.hpp  # default
-    endpoint: imuBus
+    endpoint: i2cBus
     kind: i2c                    # bytestream | i2c | spi | gpio | none
     address: 0x68                # i2c only
     params: {"0x75": "0x68"}     # each becomes model.set(key, value) at start-up
@@ -110,7 +110,7 @@ defines: [MY_SIM_FLAG]               # compile definitions, in addition to WSTS_
 ### Instance names
 
 A topology's instances include those of the subtopologies it imports, each under its
-qualified FPP name: `SubtopDemo.vxTimer` is defined in the deployment's own module,
+qualified FPP name: `Cdh.vxTimer` is defined in the deployment's own module,
 `SensorLink.uart` in the `SensorLink` subtopology of a library. Wherever a manifest names
 an instance (`keep`, `substitute: - instance:`, the ends of a system's `links`) it may give:
 
@@ -289,15 +289,15 @@ that `cmake.cache` sets is left out.
 For a flight system of several computers. See [systems.md](systems.md).
 
 ```yaml
-system: HubDemo                  # required: a name for the system
+system: Mission                  # required: a name for the system
 ground: cdh                      # element the GDS connects to; default: the first
-output: wsts/HubDemo             # default: wsts/<system>, relative to this file
+output: wsts/Mission             # default: wsts/<system>, relative to this file
 elements:                        # required: element name -> deployment manifest
   cdh:
-    manifest: Cdh/wsts.yaml      # relative to this file
+    manifest: cdh.yaml           # relative to this file
     ids: [0x00000000, 0x1FFFFFFF]  # IDs routed to this element; its WSTS instances go inside
     bridge: tcp:50100            # default: the manifest's, else tcp:50100, tcp:50101, ...
-  payload: Payload/wsts.yaml     # short form
+  payload: payload.yaml         # short form
 links:
   - name: hub                    # also the name faults are addressed by
     kind: bytestream             # default
@@ -383,7 +383,10 @@ One JSON object per line. Blank lines and lines starting with `#` are ignored.
 - Action lines have `tick` (relative to scenario start) and the action fields above.
 - Recording lines have `rec` (`bs_tx`, `bs_rx`, `i2c`, `spi`, `gpio_out`, `gpio_in`),
   `tick`, `endpoint`, `src` (`flight`, `model`, `link`, `inject`, `replay`) and the data. They are
-  ignored in `stimulus` mode and replayed in `responses` mode.
+  ignored in `stimulus` mode and replayed in `responses` mode. Recorded I2C and SPI
+  responses are served in the order flight software asks for them, separately for each
+  endpoint and, on I2C, each device address: devices that share a bus keep their own
+  responses even when the replay interleaves their transactions differently.
 
 ## Bridge protocol
 

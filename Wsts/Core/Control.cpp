@@ -643,14 +643,16 @@ bool Control::scenarioStart(std::string& error) {
     }
     Bus& bus = Bus::get();
     if (m_scenarioMode == ReplayMode::RESPONSES) {
-        // Recorded I2C/SPI responses are served in order, per endpoint, from the first poll on
+        // Recorded I2C/SPI responses are served in order, per endpoint and I2C address, from
+        // the first poll on
         bus.setReplay(true);
         for (const Step& step : m_steps) {
             const std::string rec = step.action.str("rec");
             if (rec == "i2c" || rec == "spi") {
                 Bytes read;
                 (void)fromHex(step.action.str("read"), read);
-                bus.queueReplayResponse(step.action.str("endpoint"), static_cast<int>(step.action.num("status")),
+                const auto addr = rec == "i2c" ? static_cast<std::uint32_t>(step.action.num("addr")) : 0U;
+                bus.queueReplayResponse(step.action.str("endpoint"), addr, static_cast<int>(step.action.num("status")),
                                         read);
             }
         }

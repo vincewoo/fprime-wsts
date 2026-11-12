@@ -1,0 +1,621 @@
+{
+  "system": {
+    "name": "Mission",
+    "element": "cdh",
+    "ids": [
+      0,
+      536870911
+    ]
+  },
+  "links": [
+    {
+      "link": "hub",
+      "instance": "Cdh.hubDriver",
+      "endpoint": "hubDriver",
+      "role": "listen",
+      "peer": "payload.hubDriver"
+    }
+  ],
+  "simulators": {
+    "instances": [
+      {
+        "instance": "SensorSim.sensorSim",
+        "component": "SensorSim.SerialSensorSim",
+        "kind": "queued",
+        "base_id": 402653184,
+        "last_id": 402653186,
+        "from": "SensorSim.Simulator",
+        "defined_in": "SensorSim.fpp",
+        "pinged": null,
+        "dictionary_items": {
+          "commands": [
+            "SensorSim.sensorSim.SET_BIAS",
+            "SensorSim.sensorSim.TEMPERATURE",
+            "SensorSim.sensorSim.TEMPERATURE"
+          ],
+          "events": [
+            "SensorSim.sensorSim.QueryReceived",
+            "SensorSim.sensorSim.ReportDropped"
+          ],
+          "channels": [
+            "SensorSim.sensorSim.QueriesReceived",
+            "SensorSim.sensorSim.ReportsSent"
+          ],
+          "params": [
+            "SensorSim.sensorSim.TEMPERATURE"
+          ]
+        }
+      },
+      {
+        "instance": "SensorSim.txBuffers",
+        "component": "Svc.BufferManager",
+        "kind": "passive",
+        "base_id": 402657280,
+        "last_id": 402657284,
+        "from": "SensorSim.Simulator",
+        "defined_in": "SensorSim.fpp",
+        "pinged": null,
+        "dictionary_items": {
+          "commands": [],
+          "events": [
+            "SensorSim.txBuffers.NoBuffsAvailable",
+            "SensorSim.txBuffers.NullEmptyBuffer"
+          ],
+          "channels": [
+            "SensorSim.txBuffers.CurrBuffs",
+            "SensorSim.txBuffers.EmptyBuffs",
+            "SensorSim.txBuffers.HiBuffs",
+            "SensorSim.txBuffers.NoBuffs",
+            "SensorSim.txBuffers.TotalBuffs"
+          ],
+          "params": []
+        }
+      },
+      {
+        "instance": "SensorSim.sensorPort",
+        "component": "Wsts.BusByteStreamDevice",
+        "kind": "passive",
+        "base_id": 402661376,
+        "last_id": null,
+        "from": "SensorSim.Simulator",
+        "defined_in": "SensorSim.fpp",
+        "pinged": null,
+        "dictionary_items": {
+          "commands": [],
+          "events": [],
+          "channels": [],
+          "params": []
+        }
+      },
+      {
+        "instance": "SensorSim.prmDb",
+        "component": "Svc.PrmDb",
+        "kind": "active",
+        "base_id": 402665472,
+        "last_id": 402665484,
+        "from": "SensorSim.Simulator",
+        "defined_in": "SensorSim.fpp",
+        "pinged": false,
+        "dictionary_items": {
+          "commands": [
+            "SensorSim.prmDb.PRM_COMMIT_STAGED",
+            "SensorSim.prmDb.PRM_LOAD_FILE",
+            "SensorSim.prmDb.PRM_SAVE_FILE"
+          ],
+          "events": [
+            "SensorSim.prmDb.PrmDbCommitComplete",
+            "SensorSim.prmDb.PrmDbCopyAllComplete",
+            "SensorSim.prmDb.PrmDbFileLoadFailed",
+            "SensorSim.prmDb.PrmDbFileLoadInvalidAction",
+            "SensorSim.prmDb.PrmDbFull",
+            "SensorSim.prmDb.PrmFileBadCrc",
+            "SensorSim.prmDb.PrmFileLoadComplete",
+            "SensorSim.prmDb.PrmFileReadError",
+            "SensorSim.prmDb.PrmFileSaveComplete",
+            "SensorSim.prmDb.PrmFileWriteError",
+            "SensorSim.prmDb.PrmIdAdded",
+            "SensorSim.prmDb.PrmIdNotFound",
+            "SensorSim.prmDb.PrmIdUpdated"
+          ],
+          "channels": [],
+          "params": []
+        }
+      },
+      {
+        "instance": "SensorSim.simClock",
+        "component": "Wsts.SimCycle",
+        "kind": "passive",
+        "base_id": 402669568,
+        "last_id": null,
+        "from": "SensorSim.Simulator",
+        "defined_in": "SensorSim.fpp",
+        "pinged": null,
+        "dictionary_items": {
+          "commands": [],
+          "events": [],
+          "channels": [],
+          "params": []
+        }
+      },
+      {
+        "instance": "SensorSim.fastGroup",
+        "component": "Svc.PassiveRateGroup",
+        "kind": "passive",
+        "base_id": 402673664,
+        "last_id": 402673668,
+        "from": "SensorSim.Simulator",
+        "defined_in": "SensorSim.fpp",
+        "pinged": null,
+        "dictionary_items": {
+          "commands": [
+            "SensorSim.fastGroup.CLEAR_STATISTICS"
+          ],
+          "events": [],
+          "channels": [
+            "SensorSim.fastGroup.CycleCount",
+            "SensorSim.fastGroup.CycleTime",
+            "SensorSim.fastGroup.MaxCycleTime",
+            "SensorSim.fastGroup.PortCycleTime",
+            "SensorSim.fastGroup.PortCycleTimeHWM"
+          ],
+          "params": []
+        }
+      },
+      {
+        "instance": "SensorSim.gyroSim",
+        "component": "SensorSim.GyroSim",
+        "kind": "passive",
+        "base_id": 402677760,
+        "last_id": 402677762,
+        "from": "SensorSim.Simulator",
+        "defined_in": "SensorSim.fpp",
+        "pinged": null,
+        "dictionary_items": {
+          "commands": [],
+          "events": [
+            "SensorSim.gyroSim.ProfileLoaded"
+          ],
+          "channels": [
+            "SensorSim.gyroSim.ModelTime",
+            "SensorSim.gyroSim.Profile",
+            "SensorSim.gyroSim.Steps"
+          ],
+          "params": []
+        }
+      }
+    ],
+    "devices": [
+      {
+        "instance": "SensorSim.sensorPort",
+        "component": "Wsts.BusByteStreamDevice",
+        "endpoint": "uart",
+        "kind": "bytestream"
+      }
+    ],
+    "connections": [
+      {
+        "connection": "rateGroup1Hz.RateGroupMemberOut[5] -> SensorSim.Simulator.schedIn",
+        "port_type": "Svc.Sched",
+        "port_number_chosen": true
+      },
+      {
+        "connection": "rateGroup1Hz.RateGroupMemberOut[6] -> SensorSim.txBuffers.schedIn",
+        "port_type": "Svc.Sched",
+        "port_number_chosen": true
+      }
+    ],
+    "scheduling": [
+      {
+        "instance": "SensorSim.sensorSim",
+        "port": "schedIn",
+        "driven_by": "Cdh.rateGroup1Hz.RateGroupMemberOut[5]"
+      },
+      {
+        "instance": "SensorSim.txBuffers",
+        "port": "schedIn",
+        "driven_by": "Cdh.rateGroup1Hz.RateGroupMemberOut[6]"
+      }
+    ],
+    "clocks": [
+      {
+        "instance": "SensorSim.simClock",
+        "hz": 125.0,
+        "drives": [
+          "SensorSim.fastGroup.CycleIn"
+        ]
+      }
+    ],
+    "health": {
+      "flight_targets_listed": [
+        "Cdh.rateGroup10Hz",
+        "Cdh.rateGroup1Hz",
+        "CdhCore.cmdDisp",
+        "CdhCore.events",
+        "CdhCore.tlmSend"
+      ],
+      "not_pinged": [
+        "SensorSim.prmDb"
+      ]
+    },
+    "dictionary_items_added": {
+      "commands": [
+        "SensorSim.sensorSim.SET_BIAS",
+        "SensorSim.sensorSim.TEMPERATURE",
+        "SensorSim.sensorSim.TEMPERATURE",
+        "SensorSim.prmDb.PRM_COMMIT_STAGED",
+        "SensorSim.prmDb.PRM_LOAD_FILE",
+        "SensorSim.prmDb.PRM_SAVE_FILE",
+        "SensorSim.fastGroup.CLEAR_STATISTICS"
+      ],
+      "events": [
+        "SensorSim.sensorSim.QueryReceived",
+        "SensorSim.sensorSim.ReportDropped",
+        "SensorSim.txBuffers.NoBuffsAvailable",
+        "SensorSim.txBuffers.NullEmptyBuffer",
+        "SensorSim.prmDb.PrmDbCommitComplete",
+        "SensorSim.prmDb.PrmDbCopyAllComplete",
+        "SensorSim.prmDb.PrmDbFileLoadFailed",
+        "SensorSim.prmDb.PrmDbFileLoadInvalidAction",
+        "SensorSim.prmDb.PrmDbFull",
+        "SensorSim.prmDb.PrmFileBadCrc",
+        "SensorSim.prmDb.PrmFileLoadComplete",
+        "SensorSim.prmDb.PrmFileReadError",
+        "SensorSim.prmDb.PrmFileSaveComplete",
+        "SensorSim.prmDb.PrmFileWriteError",
+        "SensorSim.prmDb.PrmIdAdded",
+        "SensorSim.prmDb.PrmIdNotFound",
+        "SensorSim.prmDb.PrmIdUpdated",
+        "SensorSim.gyroSim.ProfileLoaded"
+      ],
+      "channels": [
+        "SensorSim.sensorSim.QueriesReceived",
+        "SensorSim.sensorSim.ReportsSent",
+        "SensorSim.txBuffers.CurrBuffs",
+        "SensorSim.txBuffers.EmptyBuffs",
+        "SensorSim.txBuffers.HiBuffs",
+        "SensorSim.txBuffers.NoBuffs",
+        "SensorSim.txBuffers.TotalBuffs",
+        "SensorSim.fastGroup.CycleCount",
+        "SensorSim.fastGroup.CycleTime",
+        "SensorSim.fastGroup.MaxCycleTime",
+        "SensorSim.fastGroup.PortCycleTime",
+        "SensorSim.fastGroup.PortCycleTimeHWM",
+        "SensorSim.gyroSim.ModelTime",
+        "SensorSim.gyroSim.Profile",
+        "SensorSim.gyroSim.Steps"
+      ],
+      "params": [
+        "SensorSim.sensorSim.TEMPERATURE"
+      ]
+    }
+  },
+  "generator": "fprime-wsts",
+  "topology": "Cdh.Cdh",
+  "flight_toolchain": "vxworks",
+  "sim_toolchain": "native (Linux)",
+  "time": {
+    "mode": "real-time",
+    "tick_source": "Cdh.vxTimer"
+  },
+  "substitutions": [
+    {
+      "instance": "Cdh.chronoTime",
+      "flight_component": "Svc.ChronoTime",
+      "surrogate": "SensorSim.SimTime",
+      "seam": "S1 topology",
+      "chosen_by": "manifest",
+      "endpoint": null,
+      "options": "",
+      "base_id": 268500992,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [],
+        "channels": [],
+        "params": []
+      }
+    },
+    {
+      "instance": "Cdh.hubDriver",
+      "flight_component": "Drv.TcpServer",
+      "surrogate": "Wsts.SimByteStream",
+      "seam": "S1 topology",
+      "chosen_by": "link",
+      "endpoint": "hubDriver",
+      "options": "",
+      "base_id": 268570624,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [],
+        "channels": [],
+        "params": []
+      }
+    },
+    {
+      "instance": "Cdh.vxTimer",
+      "flight_component": "VxWorksSvc.VxWatchDogTimer",
+      "surrogate": "Wsts.SimTick",
+      "seam": "S1 topology",
+      "chosen_by": "catalog",
+      "endpoint": "vxTimer",
+      "options": "mode=thread tick_hz=60",
+      "base_id": 268574720,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [],
+        "channels": [],
+        "params": []
+      }
+    },
+    {
+      "instance": "SensorLink.uart",
+      "flight_component": "VxWorksDrv.VxWorksUartDriver",
+      "surrogate": "Wsts.SimByteStream",
+      "seam": "S1 topology",
+      "chosen_by": "catalog",
+      "endpoint": "uart",
+      "options": "",
+      "base_id": 100667392,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [
+          "BufferTooSmall",
+          "ConfigError",
+          "NoBuffers",
+          "OpenError",
+          "PortOpened",
+          "ReadError",
+          "WriteError"
+        ],
+        "channels": [
+          "BytesRecv",
+          "BytesSent"
+        ],
+        "params": []
+      }
+    }
+  ],
+  "kept_hardware_instances": [],
+  "models": [],
+  "control": {
+    "enabled": true,
+    "setup_base_id": 402681856,
+    "control_base_id": 402685952
+  },
+  "bridge": "tcp:50100",
+  "dictionary": {
+    "identical_to_flight": false,
+    "flight_ids_unchanged": true,
+    "removed": {
+      "commands": [],
+      "events": [
+        "SensorLink.uart.BufferTooSmall",
+        "SensorLink.uart.ConfigError",
+        "SensorLink.uart.NoBuffers",
+        "SensorLink.uart.OpenError",
+        "SensorLink.uart.PortOpened",
+        "SensorLink.uart.ReadError",
+        "SensorLink.uart.WriteError"
+      ],
+      "channels": [
+        "SensorLink.uart.BytesRecv",
+        "SensorLink.uart.BytesSent"
+      ],
+      "params": []
+    },
+    "added": {
+      "commands": [
+        "Cdh.wstsControl.FAULT_CLEAR",
+        "Cdh.wstsControl.FAULT_SET",
+        "Cdh.wstsControl.GPIO_FORCE",
+        "Cdh.wstsControl.I2C_REG_SET",
+        "Cdh.wstsControl.INJECT_BYTES",
+        "Cdh.wstsControl.INJECT_TEXT",
+        "Cdh.wstsControl.MODEL_SET",
+        "Cdh.wstsControl.RECORD_START",
+        "Cdh.wstsControl.RECORD_STOP",
+        "Cdh.wstsControl.SCENARIO_LOAD",
+        "Cdh.wstsControl.SCENARIO_START",
+        "Cdh.wstsControl.SCENARIO_STOP",
+        "Cdh.wstsControl.SIM_PAUSE",
+        "Cdh.wstsControl.SIM_RESUME",
+        "Cdh.wstsControl.SIM_SET_RATE"
+      ],
+      "events": [
+        "Cdh.wstsControl.ActionFailed",
+        "Cdh.wstsControl.FaultArmed",
+        "Cdh.wstsControl.FaultExpired",
+        "Cdh.wstsControl.FaultTriggered",
+        "Cdh.wstsControl.FaultsCleared",
+        "Cdh.wstsControl.Injected",
+        "Cdh.wstsControl.RecordStarted",
+        "Cdh.wstsControl.RecordStopped",
+        "Cdh.wstsControl.ScenarioCompleted",
+        "Cdh.wstsControl.ScenarioError",
+        "Cdh.wstsControl.ScenarioLoaded",
+        "Cdh.wstsControl.ScenarioStarted",
+        "Cdh.wstsControl.ScenarioStopped",
+        "Cdh.wstsControl.SimLog",
+        "Cdh.wstsControl.SimPaused",
+        "Cdh.wstsControl.SimRateSet",
+        "Cdh.wstsControl.SimResumed"
+      ],
+      "channels": [
+        "Cdh.wstsControl.ActiveFaults",
+        "Cdh.wstsControl.BusBytes",
+        "Cdh.wstsControl.BusErrors",
+        "Cdh.wstsControl.BusTransactions",
+        "Cdh.wstsControl.FaultHits",
+        "Cdh.wstsControl.Recording",
+        "Cdh.wstsControl.ScenarioRunState",
+        "Cdh.wstsControl.ScenarioStep",
+        "Cdh.wstsControl.ScenarioSteps",
+        "Cdh.wstsControl.SimRunState",
+        "Cdh.wstsControl.SimTicks",
+        "Cdh.wstsControl.SimTimeScale"
+      ]
+    },
+    "added_by_simulators": {
+      "commands": [
+        "SensorSim.sensorSim.SET_BIAS",
+        "SensorSim.sensorSim.TEMPERATURE",
+        "SensorSim.sensorSim.TEMPERATURE",
+        "SensorSim.prmDb.PRM_COMMIT_STAGED",
+        "SensorSim.prmDb.PRM_LOAD_FILE",
+        "SensorSim.prmDb.PRM_SAVE_FILE",
+        "SensorSim.fastGroup.CLEAR_STATISTICS"
+      ],
+      "events": [
+        "SensorSim.sensorSim.QueryReceived",
+        "SensorSim.sensorSim.ReportDropped",
+        "SensorSim.txBuffers.NoBuffsAvailable",
+        "SensorSim.txBuffers.NullEmptyBuffer",
+        "SensorSim.prmDb.PrmDbCommitComplete",
+        "SensorSim.prmDb.PrmDbCopyAllComplete",
+        "SensorSim.prmDb.PrmDbFileLoadFailed",
+        "SensorSim.prmDb.PrmDbFileLoadInvalidAction",
+        "SensorSim.prmDb.PrmDbFull",
+        "SensorSim.prmDb.PrmFileBadCrc",
+        "SensorSim.prmDb.PrmFileLoadComplete",
+        "SensorSim.prmDb.PrmFileReadError",
+        "SensorSim.prmDb.PrmFileSaveComplete",
+        "SensorSim.prmDb.PrmFileWriteError",
+        "SensorSim.prmDb.PrmIdAdded",
+        "SensorSim.prmDb.PrmIdNotFound",
+        "SensorSim.prmDb.PrmIdUpdated",
+        "SensorSim.gyroSim.ProfileLoaded"
+      ],
+      "channels": [
+        "SensorSim.sensorSim.QueriesReceived",
+        "SensorSim.sensorSim.ReportsSent",
+        "SensorSim.txBuffers.CurrBuffs",
+        "SensorSim.txBuffers.EmptyBuffs",
+        "SensorSim.txBuffers.HiBuffs",
+        "SensorSim.txBuffers.NoBuffs",
+        "SensorSim.txBuffers.TotalBuffs",
+        "SensorSim.fastGroup.CycleCount",
+        "SensorSim.fastGroup.CycleTime",
+        "SensorSim.fastGroup.MaxCycleTime",
+        "SensorSim.fastGroup.PortCycleTime",
+        "SensorSim.fastGroup.PortCycleTimeHWM",
+        "SensorSim.gyroSim.ModelTime",
+        "SensorSim.gyroSim.Profile",
+        "SensorSim.gyroSim.Steps"
+      ],
+      "params": [
+        "SensorSim.sensorSim.TEMPERATURE"
+      ]
+    }
+  },
+  "libraries": {
+    "kept": [
+      "../../../../mission/lib/sensor-lib"
+    ],
+    "dropped": [
+      "../../../../../lib/fprime-vxworks"
+    ]
+  },
+  "project_modules": [
+    "config/project"
+  ],
+  "reused_sources": {
+    "topology": [
+      "../../../../mission/Cdh/Top/CdhTopology.cpp"
+    ],
+    "main": [
+      "../../../../mission/Cdh/Entry.cpp",
+      "WstsMain.cpp (generated)"
+    ]
+  },
+  "fidelity_notes": [
+    "Cdh.chronoTime is replaced by SensorSim.SimTime, which has no bus endpoint: it talks to the flight components over their ports directly. Fault injection, recording, replay and the bridge do not reach that link.",
+    "Simulator components (see 'Simulator components') are part of the simulated deployment only: their commands, events, telemetry and parameters are in its dictionary and not in the flight one, and they use command dispatcher, telemetry and rate group capacity that flight does not.",
+    "Operating system: flight OSAL implementations are replaced by the Linux/POSIX ones. Task priorities are advisory and scheduling is not real-time, so timing and preemption order differ from the target.",
+    "Word size and byte order are those of the host; code that depends on the target's differs here.",
+    "Surrogates replace drivers at their port interface: driver internals (register access, interrupt handling, device files) are not exercised.",
+    "Time follows the host wall clock, scaled by the simulation rate. Runs are repeatable to tick granularity, not cycle-exact."
+  ],
+  "warnings": [],
+  "dropped_cmake_options": [
+    "VX_TARGET_TYPE=DKM",
+    "FPRIME_PLATFORM=VxWorks"
+  ],
+  "simulation_project": "../../..",
+  "replaced_modules": [
+    {
+      "module": "SensorLib_SensorLink",
+      "original": "../../../../mission/lib/sensor-lib/SensorLib/SensorLink",
+      "copy": "SensorLib/SensorLink",
+      "files": [
+        "SensorLink.fpp"
+      ]
+    }
+  ],
+  "capacity": {
+    "command_ports": {
+      "used": 10,
+      "size": 30,
+      "constant": "CmdDispatcherComponentCommandPorts"
+    },
+    "command_table": {
+      "used": 40,
+      "size": 80,
+      "source": "../../../config/CommandDispatcherImplCfg.hpp"
+    },
+    "parameter_table": {
+      "used": 1,
+      "size": 25,
+      "source": "../../../../../lib/fprime/default/config/PrmDbImplCfg.hpp"
+    }
+  },
+  "config_overrides": [
+    {
+      "file": "CdhCoreConfig.fpp",
+      "uses": "../../../../mission/config/project/CdhCoreConfig.fpp",
+      "replaces": [
+        "../../../../../lib/fprime/Svc/Subtopologies/CdhCore/CdhCoreConfig/CdhCoreConfig.fpp"
+      ]
+    },
+    {
+      "file": "SensorLinkConfig.fpp",
+      "uses": "../../../../mission/config/project/SensorLinkConfig.fpp",
+      "replaces": [
+        "../../../../mission/lib/sensor-lib/SensorLib/SensorLink/SensorLinkConfig/SensorLinkConfig.fpp"
+      ]
+    }
+  ],
+  "simulation_config_overrides": [
+    {
+      "file": "AcConstants.fpp",
+      "uses": "../../../config/AcConstants.fpp",
+      "replaces": [
+        "../../../../mission/config/project/AcConstants.fpp",
+        "../../../../../lib/fprime/default/config/AcConstants.fpp"
+      ]
+    },
+    {
+      "file": "CommandDispatcherImplCfg.hpp",
+      "uses": "../../../config/CommandDispatcherImplCfg.hpp",
+      "replaces": [
+        "../../../../mission/config/project/CommandDispatcherImplCfg.hpp",
+        "../../../../../lib/fprime/default/config/CommandDispatcherImplCfg.hpp"
+      ]
+    }
+  ],
+  "simulation_libraries": [
+    "../../../lib/sim-common"
+  ],
+  "cmake_includes": {
+    "before_libraries": [],
+    "after_modules": [
+      "../../../sim.cmake"
+    ]
+  },
+  "run": {
+    "env": {
+      "SENSOR_SIM_PROFILE": "../../../profiles/calm.txt"
+    },
+    "env_paths": [
+      "SENSOR_SIM_PROFILE"
+    ]
+  }
+}

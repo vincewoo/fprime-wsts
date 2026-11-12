@@ -39,7 +39,8 @@ There are three places a deployment can be cut, and they trade effort against fi
 
 The seam is chosen per instance. The default is S1 from the surrogate catalog.
 
-The same I2C device in flight and at the two topology seams, using the LinuxDemo names:
+The same I2C device in flight and at the two topology seams, using the names of the example's
+`Payload` computer:
 
 ```mermaid
 flowchart TB
@@ -54,7 +55,7 @@ flowchart TB
     direction TB
     sa["Application components"]:::flight
     sm["imu<br/>Components.ImuManager"]:::flight
-    sd["imuBus<br/>Wsts.SimI2c"]:::toolkit
+    sd["i2cBus<br/>Wsts.SimI2c"]:::toolkit
     sb["Wsts bus"]:::toolkit
     sx["IMU model<br/>stock RegisterMapI2c or yours"]:::user
     sa --> sm -->|"Drv.I2c"| sd --> sb --> sx
@@ -63,7 +64,7 @@ flowchart TB
     direction TB
     fa["Application components"]:::flight
     fm["imu<br/>Components.ImuManager"]:::flight
-    fd["imuBus<br/>Drv.LinuxI2cDriver"]:::flight
+    fd["i2cBus<br/>Drv.LinuxI2cDriver"]:::flight
     fh["/dev/i2c-1, IMU chip"]:::external
     fa --> fm -->|"Drv.I2c"| fd --> fh
   end
@@ -90,7 +91,7 @@ end of the bridge, or absent.
 
 **Control core** (`Wsts/Core/Control`). Owns run state, the tick count, the scenario player
 and the recorder. It executes *actions*: small flat JSON objects such as
-`{"op": "fault_set", "endpoint": "imuBus", "kind": "error"}`. Three front ends produce
+`{"op": "fault_set", "endpoint": "i2cBus", "kind": "error"}`. Three front ends produce
 actions, so they can all do the same things:
 
 - `Wsts.SimControl`, an F´ component with commands, events and telemetry;
@@ -174,7 +175,7 @@ flowchart TB
   style front fill:none,stroke:#94a3b8,color:#475569
 ```
 
-One tick of LinuxDemo, and the I2C transaction it causes:
+One tick of the example's `Payload` computer, and the I2C transaction it causes:
 
 ```mermaid
 sequenceDiagram
@@ -187,7 +188,7 @@ sequenceDiagram
     participant Imu as imu (ImuManager)
   end
   box rgb(220, 252, 231) fprime-wsts
-    participant Sur as imuBus (Wsts.SimI2c)
+    participant Sur as i2cBus (Wsts.SimI2c)
     participant Bus as Wsts bus
   end
   box rgb(243, 232, 255) Yours, or a stock model
@@ -627,12 +628,12 @@ uses no flight rate-group port: the simulation tick notifies it.
 ```mermaid
 flowchart LR
   gds["F´ GDS"]:::external
-  subgraph flight["Flight services, as in LinuxDemo"]
+  subgraph flight["Flight services, as in the example's Cdh"]
     direction TB
     disp["CdhCore.cmdDisp"]:::flight
     evt["CdhCore.events"]:::flight
     tlm["CdhCore.tlmSend"]:::flight
-    time["posixTime"]:::flight
+    time["chronoTime"]:::flight
   end
   ctl["wstsControl<br/>Wsts.SimControl<br/>instance in wsts_instances.fpp"]:::toolkit
   core["Control core"]:::toolkit

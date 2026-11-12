@@ -11,12 +11,9 @@ Start with [README.md](README.md); the design is in [docs/design.md](docs/design
 | `Wsts/Drv/`, `Wsts/Svc/` | F´ components: surrogates, `BusByteStreamDevice` (adapter that puts an F´ simulator on a bus endpoint), `SimCycle` (cycle source with its own rate), `SimControl` (commands/events/telemetry), `SimSetup` (anchor) |
 | `catalog/wsts-catalog.yaml` | Which flight components each surrogate replaces |
 | `python/fprime_wsts/` | `generate.py` (transform), `fpp.py` (model loading), `manifest.py`, `simulators.py` (added F´ instances, bus devices), `system.py` (multi-element systems), `bridge.py`, `runner.py`, `scaffold.py`, `cli.py` |
-| `examples/linux-demo/`, `examples/vx-demo/` | Flight projects. `examples/*/wsts/` is **generated**: change the generator or `wsts.yaml`, then regenerate |
-| `examples/subtop-demo/` | Flight project whose UART driver is inside a library subtopology (`lib/sensor-lib`), with `CONFIGURATION_OVERRIDES` and a `system.fpp`. `wsts/SubtopDemo/` is **generated**, including its copy of the subtopology under `SensorLib/` |
-| `examples/subtop-demo-sim/` | Standalone simulation project for `subtop-demo` with simulators written as F´ components, a vendored library (`lib/sim-common`), a 125 Hz clock, configuration overrides and a bus-less surrogate (`simulators`, `devices`, `clocks`, `libraries.sim`, `cmake.*`, `run.env` in its manifest). Its `wsts/SubtopDemo/` is **generated** and checked in |
-| `examples/hub-demo/` | Flight project with two deployments (`Cdh`, `Payload`) joined by a `GenericHub`; `wsts-system.yaml` makes them one system. `wsts/HubDemo/` is **generated** |
-| `examples/linux-demo-sim/` | Standalone simulation project for `linux-demo`: manifest, project surrogate and model. Its `wsts/` is generated and not checked in |
-| `tests/e2e/` | End-to-end tests against a running simulation and GDS |
+| `examples/mission/` | The example's flight project: `Cdh` (VxWorks, no `main()`, UART inside the `SensorLink` subtopology of `lib/sensor-lib`, `CONFIGURATION_OVERRIDES`, `system.fpp`) and `Payload` (Linux: I2C, SPI, UART, GPIO), joined by a `GenericHub`. Only read by the toolkit |
+| `examples/mission-sim/` | The example's simulation project: `wsts-system.yaml`, `cdh.yaml`, `payload.yaml`, simulators written as F´ components, a 125 Hz clock, a bus-less surrogate, a mirror surrogate, a device model, a vendored library, configuration overrides. Its `wsts/Mission/` is **generated** and checked in. `examples/README.md` maps each feature to where it is |
+| `tests/e2e/` | End-to-end tests against the running Mission system and a GDS (`test_system.py`, `test_cdh.py`, `test_payload.py`) |
 | `lib/` | Pinned submodules: `fprime` (v4.4.2), `fprime-vxworks` |
 
 ## Commands
@@ -34,15 +31,11 @@ fprime-util generate --ut && (cd Wsts/Core && fprime-util check)   # C++ unit te
 ```
 
 ```bash
-fprime-wsts generate examples/linux-demo/LinuxDemo/wsts.yaml        # regenerate an example
+fprime-wsts generate examples/mission-sim/wsts-system.yaml          # regenerate the example
 ```
 
 ```bash
-(cd examples/linux-demo/wsts/LinuxDemo && fprime-util generate && fprime-util build)
-```
-
-```bash
-fprime-wsts generate examples/hub-demo/wsts-system.yaml             # regenerate the two-element system
+for e in cdh payload; do (cd examples/mission-sim/wsts/Mission/$e && fprime-util generate && fprime-util build); done
 ```
 
 The end-to-end commands are in the README. If `fpp-*` tools complain about the Java
@@ -50,9 +43,11 @@ version, unset `JAVA_HOME` so the bundled JRE is used.
 
 ## Rules of thumb
 
-- Never edit files under `examples/*/wsts/`. CI runs `fprime-wsts generate --check` on the
-  checked-in ones.
-- After changing anything under `Wsts/`, rebuild the example overlays before running e2e tests.
+- Never edit files under `examples/mission-sim/wsts/`. CI runs `fprime-wsts generate --check`
+  on it.
+- After changing anything under `Wsts/`, rebuild both elements of the example before running
+  e2e tests. Build them from the same checkout state: the GDS refuses to merge dictionaries
+  whose project versions differ (`-dirty` on one of them).
 - FPP keywords (`state`, `reg`, `text`, …) must be escaped with `$` when used as names.
 - Instances of imported subtopologies are named by their own module (`SensorLink.uart`),
   not the deployment's. A substituted instance outside `Top` is patched in a copy of its
@@ -90,15 +85,20 @@ fixture sends flight commands and asserts on events and telemetry. `tests/e2e/` 
 patterns, including record and replay.
 
 For a system of several elements (see `docs/systems.md`) the same command takes the system
-directory, for example `examples/hub-demo/wsts/HubDemo`: every element starts, logs go to
+directory, for example `examples/mission-sim/wsts/Mission`: every element starts, logs go to
 `wsts-logs/<element>/`, and `--gds` uses the merged dictionary. In pytest use
-`--wsts-system <dir>` and the `wsts_system` fixture (`tests/e2e/test_hub_demo.py`).
+`--wsts-system <dir>` and the `wsts_system` fixture; `wsts_system["payload"]` is one
+element's `WstsBridge` (`tests/e2e/conftest.py`).
 
 Things that surprise:
 
 - Telemetry channels are downlinked about once a second with the latest value only; a
   free-running model can overwrite an injected value before it is seen.
-- While the simulation is paused the flight rate groups, and so downlink, are stopped.
+- While the simulation is paused the flight rate groups, and so downlink, are stopped. In
+  the example, pausing Payload alone does not stop its events: they go through the hub to
+  Cdh, which keeps running.
+- Events from Payload arrive late through the hub: one from before a `clear_histories()`
+  can still turn up after it.
 - Elements of a system keep separate tick counts and rates, and a pause reaches them one
   after another.
 - `fprime-gds` will not start over an existing log directory; `fprime-wsts run` clears its own.

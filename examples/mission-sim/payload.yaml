@@ -1,0 +1,59 @@
+# WSTS manifest for Payload, the Linux computer of the Mission system, reached only
+# through the hub.
+#
+# The timer, I2C, SPI, UART and GPIO drivers are found and replaced from the surrogate
+# catalogs: this project's (wsts-catalog.yaml) first, then the toolkit's. The Ethernet
+# driver to the Cdh computer is replaced because wsts-system.yaml ends a link at it. The
+# manifest adds what cannot be inferred: which device models sit behind the buses.
+project: ../mission
+deployment: Payload
+
+# Project surrogates: a mirror of Drv.LinuxGpioDriver for the heater and switch pins. It
+# keeps the flight driver's events in the dictionary and its pin-mode checks, where the
+# toolkit's general-purpose Wsts.SimGpio would accept any use of a pin.
+catalogs:
+  - wsts-catalog.yaml
+
+models:
+  # IMU at I2C address 0x68: a model of this project (Models/), set in g
+  - name: imu
+    class: Sim::ImuModel
+    header: Models/ImuModel.hpp
+    endpoint: i2cBus
+    kind: i2c
+    address: 0x68
+
+  # Power monitor on the same bus at 0x40: the toolkit's register map, 14.0 V and 500 mA
+  - name: power
+    class: Wsts::RegisterMapI2c
+    endpoint: i2cBus
+    kind: i2c
+    address: 0x40
+    params:
+      "0x02": "0x6D 0x60"
+      "0x04": "0x01 0xF4"
+
+  # The instrument's converter on SPI: the toolkit's loopback model shifts back what it
+  # is sent, which the flight component reads as a conversion of 0
+  - name: adc
+    class: Wsts::LoopbackSpi
+    endpoint: spiBus
+    kind: spi
+
+  # Serial temperature sensor reporting once a second (20 ticks at 20 Hz)
+  - name: tempSensor
+    class: Wsts::ScriptedByteStream
+    endpoint: sensorUart
+    kind: bytestream
+    params:
+      text: "$TEMP,21.5\n"
+      period: "20"
+
+cmake:
+  # This project's library.cmake builds only the modules this element uses
+  cache:
+    MISSION_SIM_MODULES: [Models, Surrogates/SimLinuxGpio]
+  # The model's module, for the generated set-up that creates it
+  depends: [Models]
+
+bridge: tcp:50101

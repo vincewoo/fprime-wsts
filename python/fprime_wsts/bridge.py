@@ -293,7 +293,7 @@ class WstsBridge:
 class WstsSystem:
     """Connections to every element of a running system (one simulated deployment each).
 
-        with WstsSystem("examples/hub-demo/wsts/HubDemo") as system:
+        with WstsSystem("examples/mission-sim/wsts/Mission") as system:
             system["payload"].inject_text("sensorUart", "$TEMP,48.0\\n")   # one element's bridge
             system.fault_set("hub", "drop")                                  # cut the link named hub
             system.pause()                                                   # every element
