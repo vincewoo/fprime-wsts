@@ -197,6 +197,9 @@ it. Events, telemetry and commands of every element are then available under the
 names (`Payload.instrument.TAKE_SAMPLE`, `Cdh.wstsControl.SIM_PAUSE`,
 `Payload.wstsControl.FAULT_SET`, ...).
 
+Add `--gds-gui` to serve that GDS's browser GUI on the ground element and print its URL
+(`--gds-gui-port`, default 5000; `--gds-gui-addr`, default `127.0.0.1`).
+
 `--scenario`, `--record`, `--bridge` and `--files-dir` apply to a single deployment and
 are rejected for a system.
 

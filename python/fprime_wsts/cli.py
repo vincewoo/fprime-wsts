@@ -120,6 +120,11 @@ def main(argv=None) -> int:
     run.add_argument("directory", nargs="?", default=".", help="generated simulation deployment directory, or generated system directory")
     run.add_argument("--gds", action="store_true", help="also start a headless fprime-gds")
     run.add_argument("--gds-port", type=int, default=50000, help="port the deployment connects to (default 50000)")
+    run.add_argument("--gds-gui", action="store_true",
+                     help="start fprime-gds with its browser GUI (implies --gds); the URL is printed")
+    run.add_argument("--gds-gui-port", type=int, default=5000, help="port of the GDS browser GUI (default 5000)")
+    run.add_argument("--gds-gui-addr", default="127.0.0.1",
+                     help="address the GDS browser GUI is served on (default 127.0.0.1; use 0.0.0.0 to reach it from another machine)")
     run.add_argument("--bridge", help="bridge address override, e.g. tcp:50100")
     run.add_argument("--scenario", help="scenario file to play from start-up")
     run.add_argument("--scenario-mode", choices=["stimulus", "responses"], default="stimulus")

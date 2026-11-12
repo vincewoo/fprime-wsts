@@ -41,7 +41,8 @@ fprime-wsts run examples/mission-sim/wsts/Mission --gds
 
 Both computers start, the hub link comes up, and one GDS commands either of them with the
 merged dictionary. Each element has its own bridge: `tcp:50100` for Cdh, `tcp:50101` for
-Payload.
+Payload. Use `--gds-gui` instead of `--gds` to get the GDS's browser GUI, whose URL the
+command prints.
 
 ```bash
 D=examples/mission-sim/wsts/Mission; pytest tests/e2e -p fprime_wsts.pytest_plugin --wsts-system $D --wsts-gds --dictionary $D/wsts-logs/MissionDictionary.json

@@ -79,6 +79,11 @@ starts the deployment and a headless GDS, runs for 30 seconds, and prints a JSON
 (exit code, final tick, bus counters, log directory). Exit status is non-zero if the
 deployment exits on its own. Logs: `<generated dir>/wsts-logs/sim.log` and `gds.log`.
 
+For a GDS you can open in a browser (a human, or a browser-automation agent), use
+`--gds-gui` instead of `--gds`: fprime-gds then serves its web UI on `--gds-gui-port`
+(default 5000) at `--gds-gui-addr` (default `127.0.0.1`), and `fprime-wsts run` prints the
+URL and reports it as `gds_gui` in `--json`. The GDS is otherwise the same one.
+
 For closed-loop checks use pytest with `-p fprime_wsts.pytest_plugin`: the `wsts` fixture is
 an `WstsBridge` (faults, injection, GPIO, status), and fprime-gds's `fprime_test_api`
 fixture sends flight commands and asserts on events and telemetry. `tests/e2e/` shows the

@@ -65,10 +65,31 @@ def _link_established(port: int) -> bool:
     return False
 
 
-class Simulation:
-    """A running simulated deployment, optionally with a headless GDS"""
+def gds_command(executable: str, dictionary: Path, gds_port: int, log_dir: Path,
+                gui_port: Optional[int] = None, gui_addr: str = "127.0.0.1") -> List[str]:
+    """The `fprime-gds` command line: headless, or with its browser GUI on `gui_port`.
 
-    def __init__(self, directory: Path, gds: bool = False, gds_port: int = 50000, bridge: Optional[str] = None,
+    `-n` keeps fprime-gds from running a deployment of its own: the simulation is started
+    separately. With a GUI the HTML app is served on `gui_addr:gui_port` (its own port, not
+    `gds_port`, which carries the flight link); the browser is left unopened because the run
+    may be on a headless host, so the caller prints the URL instead.
+    """
+    command = [executable, "-n", "--dictionary", str(dictionary), "--ip-port", str(gds_port),
+               "--logs", str(log_dir), "--log-directly"]
+    if gui_port is None:
+        command += ["-g", "none"]
+    else:
+        command += ["-g", "html", "--gui-addr", gui_addr, "--gui-port", str(gui_port),
+                    "--skip-browser-open"]
+    return command
+
+
+class Simulation:
+    """A running simulated deployment, optionally with a GDS (headless, or with its browser GUI)"""
+
+    def __init__(self, directory: Path, gds: bool = False, gds_port: int = 50000,
+                 gds_gui: Optional[int] = None, gds_gui_addr: str = "127.0.0.1",
+                 bridge: Optional[str] = None,
                  scenario: Optional[str] = None, scenario_mode: str = "stimulus", record: Optional[str] = None,
                  log_dir: Optional[Path] = None, files_dir: Optional[Path] = None,
                  dictionary: Optional[Path] = None, env: Optional[Dict[str, str]] = None):
@@ -80,6 +101,8 @@ class Simulation:
         self.bridge = bridge or self.report.get("bridge", "none")
         self.gds = gds
         self.gds_port = gds_port
+        self.gds_gui = gds_gui  # browser GUI port; None keeps the GDS headless
+        self.gds_gui_addr = gds_gui_addr
         self.scenario = scenario
         self.scenario_mode = scenario_mode
         self.record = record
@@ -102,8 +125,8 @@ class Simulation:
             # fprime-gds refuses to start over the logs of an earlier run
             shutil.rmtree(self.log_dir / "gds", ignore_errors=True)
             gds_log = open(self.log_dir / "gds.log", "w")
-            command = [executable, "-n", "-g", "none", "--dictionary", str(self.dictionary),
-                       "--ip-port", str(self.gds_port), "--logs", str(self.log_dir / "gds"), "--log-directly"]
+            command = gds_command(executable, self.dictionary, self.gds_port, self.log_dir / "gds",
+                                  self.gds_gui, self.gds_gui_addr)
             self._processes.append(subprocess.Popen(command, stdout=gds_log, stderr=subprocess.STDOUT,
                                                     cwd=self.log_dir, start_new_session=True))
             arguments = ["-a", "127.0.0.1", "-p", str(self.gds_port)]
@@ -150,6 +173,10 @@ class Simulation:
                                    + (f" (it exited with code {code})" if code is not None else "")
                                    + f"; see {self.log_dir}")
                 time.sleep(0.2)
+            if self.gds_gui:
+                # Best effort: the URL only means something once the HTML app answers, and
+                # that app is a child of the GDS, so a failure shows in the GDS log
+                _wait_for_port(self.gds_gui, 15)
         return self
 
     def connect(self):
@@ -157,6 +184,11 @@ class Simulation:
         from .bridge import WstsBridge
 
         return WstsBridge(self.bridge)
+
+    @property
+    def gds_gui_url(self) -> Optional[str]:
+        """Where the browser GUI is served, when this simulation runs one"""
+        return f"http://{self.gds_gui_addr}:{self.gds_gui}/" if self.gds_gui else None
 
     def stop(self) -> Optional[int]:
         code = None
@@ -208,10 +240,11 @@ def parse_env(entries, elements: Optional[List[str]] = None) -> Dict[Optional[st
 
 class SystemSimulation:
     """A running system: one simulated deployment per element, joined by their links, with
-    an optional headless GDS on the ground element using the merged dictionary"""
+    an optional GDS on the ground element using the merged dictionary (headless, or with its
+    browser GUI)"""
 
     def __init__(self, directory: Path, gds: bool = False, gds_port: int = 50000, log_dir: Optional[Path] = None,
-                 env: Optional[List[str]] = None):
+                 env: Optional[List[str]] = None, gds_gui: Optional[int] = None, gds_gui_addr: str = "127.0.0.1"):
         from .system import load_description
 
         self.directory = Path(directory).resolve()
@@ -220,6 +253,8 @@ class SystemSimulation:
         self.ground = self.description["ground"]
         self.gds = gds
         self.gds_port = gds_port
+        self.gds_gui = gds_gui  # browser GUI port; None keeps the GDS headless
+        self.gds_gui_addr = gds_gui_addr
         self.log_dir = Path(log_dir).resolve() if log_dir else self.directory / "wsts-logs"
         self.dictionary: Optional[Path] = None
         self.elements: Dict[str, Simulation] = {}
@@ -270,6 +305,7 @@ class SystemSimulation:
                 is_ground = name == self.ground
                 simulation = Simulation(
                     self.directory / element["directory"], gds=self.gds and is_ground, gds_port=self.gds_port,
+                    gds_gui=self.gds_gui if is_ground else None, gds_gui_addr=self.gds_gui_addr,
                     bridge=element["bridge"], log_dir=self.log_dir / name,
                     dictionary=self.dictionary if is_ground else None,
                     env={**self.env.get(None, {}), **self.env.get(name, {}), "WSTS_LINK_DIR": self._link_dir},
@@ -317,6 +353,12 @@ class SystemSimulation:
 
         return WstsSystem(self.description)
 
+    @property
+    def gds_gui_url(self) -> Optional[str]:
+        """Where the ground element's browser GUI is served, when the system runs one"""
+        element = self.elements.get(self.ground)
+        return element.gds_gui_url if element else None
+
     def stop(self) -> Dict[str, Optional[int]]:
         codes = {name: simulation.stop() for name, simulation in reversed(list(self.elements.items()))}
         if self._link_dir:
@@ -336,14 +378,19 @@ def run_system_cli(args) -> int:
         if getattr(args, option):
             raise WstsError(f"--{option.replace('_', '-')} applies to a single deployment and is not supported when "
                             "running a system; drive the elements through their bridges instead")
-    system = SystemSimulation(Path(args.directory), gds=args.gds, gds_port=args.gds_port,
+    gds = args.gds or args.gds_gui
+    system = SystemSimulation(Path(args.directory), gds=gds, gds_port=args.gds_port,
+                              gds_gui=args.gds_gui_port if args.gds_gui else None,
+                              gds_gui_addr=args.gds_gui_addr,
                               log_dir=Path(args.log_dir) if args.log_dir else None, env=getattr(args, "env", None))
     system.start()
     if not args.json:
         bridges = ", ".join(f"{name} {simulation.bridge}" for name, simulation in system.elements.items())
         print(f"system {system.name} running: bridges {bridges}; logs {system.log_dir}")
-        if args.gds:
+        if gds:
             print(f"GDS listening for element '{system.ground}' on port {args.gds_port}, dictionary {system.dictionary}")
+        if args.gds_gui:
+            print(f"GDS browser GUI for element '{system.ground}' at {system.gds_gui_url}")
     statuses: Dict[str, dict] = {}
     interrupted = False
     try:
@@ -371,6 +418,7 @@ def run_system_cli(args) -> int:
         "seconds": round(time.monotonic() - system.started, 2),
         "logs": str(system.log_dir),
         "dictionary": str(system.dictionary) if system.dictionary else None,
+        "gds_gui": system.gds_gui_url,
         "elements": {
             name: {
                 "deployment": simulation.binary.name,
@@ -399,7 +447,10 @@ def run_cli(args) -> int:
 
     if (Path(args.directory) / SYSTEM_FILE).is_file():
         return run_system_cli(args)
-    simulation = Simulation(Path(args.directory), gds=args.gds, gds_port=args.gds_port, bridge=args.bridge,
+    gds = args.gds or args.gds_gui
+    simulation = Simulation(Path(args.directory), gds=gds, gds_port=args.gds_port,
+                            gds_gui=args.gds_gui_port if args.gds_gui else None,
+                            gds_gui_addr=args.gds_gui_addr, bridge=args.bridge,
                             scenario=args.scenario, scenario_mode=args.scenario_mode, record=args.record,
                             log_dir=Path(args.log_dir) if args.log_dir else None,
                             files_dir=Path(args.files_dir) if args.files_dir else None,
@@ -407,8 +458,10 @@ def run_cli(args) -> int:
     simulation.start()
     if not args.json:
         print(f"simulation running: {simulation.binary.name} (bridge {simulation.bridge}, logs {simulation.log_dir})")
-        if args.gds:
+        if gds:
             print(f"GDS listening for the deployment on port {args.gds_port}")
+        if args.gds_gui:
+            print(f"GDS browser GUI at {simulation.gds_gui_url}")
     status = {}
     crashed = False
     interrupted = False
@@ -435,6 +488,7 @@ def run_cli(args) -> int:
         "interrupted": interrupted,
         "seconds": round(time.monotonic() - simulation.started, 2),
         "logs": str(simulation.log_dir),
+        "gds_gui": simulation.gds_gui_url,
         "final_status": status,
     }
     if args.json:

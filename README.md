@@ -193,7 +193,9 @@ fprime-wsts run examples/mission-sim/wsts/Mission --gds
 ```
 
 Both computers start, the hub link comes up, and one GDS commands either of them with the
-merged dictionary. No VxWorks toolchain is involved at any point.
+merged dictionary. Add `--gds-gui` for the GDS's browser GUI instead of the headless GDS;
+`fprime-wsts run` prints its URL (`http://127.0.0.1:5000/` by default). No VxWorks toolchain
+is involved at any point.
 
 ## Driving a simulation
 
