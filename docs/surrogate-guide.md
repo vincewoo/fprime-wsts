@@ -396,6 +396,27 @@ A surrogate is a normal F´ component with three conventions.
    surrogate, so the surrogate needs a `setup` that accepts those arguments. Type names
    used in it resolve through the alias as well.
 
+   **Includes of the flight driver's header are handled.** Flight code may include the
+   header of the driver you replace (`#include <Proj/Drv/FpgaDriver/FpgaDriver.hpp>`):
+   a subtopology's `SubtopologyTopologyDefs.hpp` does when its state has a field of one of
+   the driver's types, and `Main.cpp` then includes it through the `TopologyDefs`. The
+   generator writes a header at that include path which includes your surrogate's header
+   and declares the alias, and puts it first on the include path of every module
+   ([design](design.md#headers-of-replaced-drivers)). Nothing is needed from you except
+   that the surrogate's header is at `<directory of its .fpp>/<Name>.hpp`, as usual. A type
+   used in a `TopologyDefs` header, such as
+
+   ```cpp
+   Proj::FpgaDriver::ClockRate rate = Proj::FpgaDriver::RATE_50MHZ;
+   ```
+
+   resolves through the alias to `Proj::SimFpga::ClockRate`, so the surrogate must declare
+   that enumeration with the enumerators the flight code names, exactly as for arguments of
+   `open`. An include of `FpgaDriverComponentAc.hpp` is covered too, but only the include:
+   code that names the autocoded base class `FpgaDriverComponentBase` does not compile.
+   None of this applies while another instance still uses the flight component: its module
+   stays in the build, and the real header is used.
+
 Port handlers forward to the bus:
 
 ```cpp

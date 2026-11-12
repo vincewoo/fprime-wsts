@@ -279,6 +279,7 @@ flowchart LR
     wsts_instances.fpp              the wstsSetup and wstsControl instances
     WstsSetup.cpp                   binds surrogates, builds and attaches models, starts the runtime
     WstsCompat.hpp                  force-included: aliases flight driver classes to their surrogates
+  wsts-include/<path>/<Driver>.hpp   stand-ins at the include paths of replaced drivers' headers
   <Lib>/<Sub>/                     only when a flight file outside Top needs an edit:
     <Sub>.fpp                      patched copy of the subtopology model
     CMakeLists.txt                 the original's, pointing back at the original for everything else
@@ -293,7 +294,9 @@ Three things make it work without touching the flight project:
 - **Type aliases.** `WstsCompat.hpp` declares, for example,
   `namespace Drv { using LinuxGpioDriver = ::Wsts::SimGpio; }`. Flight code such as
   `pin.open("/dev/gpiochip0", 17, Drv::LinuxGpioDriver::GPIO_OUTPUT)` then compiles against
-  the surrogate, which provides the same enumerators and an `open` that accepts them.
+  the surrogate, which provides the same enumerators and an `open` that accepts them. Code
+  that includes the driver's header gets the same alias from a stand-in header (see
+  [Headers of replaced drivers](#headers-of-replaced-drivers)).
 - **An anchor instance.** `wstsSetup` is an instance of `Wsts.SimSetup`, a component with no
   ports and no dictionary entries. The generator attaches topology phase code to it, which
   is how `WstsGenerated::setup()` runs inside the autocoded `configComponents()` without an
@@ -304,8 +307,11 @@ F´ allows because the flight project root is listed as a library location. A st
 simulation project (a manifest with `project:`) is listed as a library location too: F´
 includes its `library.cmake`, which builds its surrogates and models, and names their
 modules relative to its root. The flight project is only read. Libraries the
-simulated topology no longer references are dropped; build options that select the flight
-toolchain or platform are not carried over. Both are listed in the report.
+simulated topology no longer references are dropped, unless they supply configuration that
+the build overrides (see
+[What is taken from the flight build](#what-is-taken-from-the-flight-build)); build options
+that select the flight toolchain or platform are not carried over. Both are listed in the
+report.
 
 What the build of an overlay project compiles, and where each part comes from:
 
@@ -353,6 +359,116 @@ flowchart LR
 
 Only the topology module mixes sources: the flight topology code is compiled next to
 generated files, against the surrogates that `WstsCompat.hpp` aliases in.
+
+### Headers of replaced drivers
+
+`WstsCompat.hpp` helps code that is already compiling. Flight code that says
+`#include <VxWorks/Drv/VxWorksUartDriver/VxWorksUartDriver.hpp>` fails earlier: the driver's
+module is not built, so the real header, if it is found at all, includes a
+`…ComponentAc.hpp` that nothing generates. A subtopology's `SubtopologyTopologyDefs.hpp`
+does this whenever it needs one of the driver's types, and through the deployment's
+`TopologyDefs.hpp` so do `Main.cpp`, the topology code and the autocoded topology.
+
+For every replaced component that no instance uses any more, the generator therefore
+writes a header at the component's include path, in `wsts-include/`:
+
+```cpp
+// wsts-include/VxWorks/Drv/VxWorksUartDriver/VxWorksUartDriver.hpp
+#include <Wsts/Drv/SimByteStream/SimByteStream.hpp>
+
+namespace VxWorksDrv { using VxWorksUartDriver = ::Wsts::SimByteStream; }
+```
+
+- **Where.** The include path is the header's path below the build root it belongs to (the
+  framework, a library or the project), which is how F´ code includes it. The file names
+  are `<Name>.hpp` and any other header beside the component's FPP that includes
+  `<Name>ComponentAc.hpp` (`<Name>ComponentImpl.hpp` in older code). `<Name>ComponentAc.hpp`
+  itself gets a stand-in that includes the first: it covers the include, not the autocoded
+  base class, which has no counterpart under the flight name.
+- **For every module.** The root `CMakeLists.txt` puts `wsts-include/` first on the include
+  path with `include_directories(BEFORE …)` before F´ adds any module, so the stand-in is
+  found before the original in the deployment module and in library modules as well as in
+  the topology module.
+- **Not when the component is still used.** If another instance keeps the flight component,
+  its module stays in the build and the real header is the right one: no stand-in, and no
+  alias in `WstsCompat.hpp` either, as before.
+- **The driver's own module.** A framework driver such as `Drv.LinuxGpioDriver` is still
+  compiled on a Linux host although nothing uses it. Its sources include their own header by
+  the same path, so the stand-in passes them on to the real one (`#include_next`) when
+  `WSTS_FLIGHT_DRIVER_BUILD` is defined, which the root `CMakeLists.txt` does for exactly
+  those module targets.
+- **One alias text.** `WstsCompat.hpp` still declares the alias: phase code and topology
+  code that never include the driver's header rely on it, and its content for existing
+  projects is unchanged. Both files get the declaration from one function
+  (`alias_declaration`), and C++ allows an alias to be declared twice for the same type.
+  Declarations a catalog entry carries in `compat` (enumerations that lived outside the
+  driver's class) cannot be repeated, so the stand-in guards them against `WstsCompat.hpp`.
+
+Simulation code cannot include the real header of a replaced driver this way; it has no
+reason to, since the component is not built for the deployment.
+
+### What is taken from the flight build
+
+The generator reads the model with the FPP tools and never configures the flight build. A
+few things that only the flight CMake says still have to reach the overlay. All of them
+are read as text (`flight_cmake.py`): a literal value is used, and anything that needs a
+variable, an `if()` or a generator expression is reported instead.
+
+**Libraries.** A flight library is built when a file of the patched model belongs to it,
+when the manifest lists it under `libraries.keep`, or when it supplies a configuration file
+(any of `AUTOCODER_INPUTS`, `HEADERS`, `SOURCES` of a `register_fprime_config`) that a module
+of the simulated build replaces with `CONFIGURATION_OVERRIDES`. Without the last rule a
+platform library such as `fprime-vxworks` is dropped, the project's configuration module
+still names `VxWorksCfg.hpp`, and F´ stops because the override replaces nothing. The rule
+is applied until nothing changes, since a kept library may itself override a file of
+another. The report gives the reason (the file and the module that overrides it) for a
+library that is kept for this alone, and `libraries.drop` on such a library is an error.
+A library kept this way is read whole. A platform library normally registers its
+configuration and then calls `restrict_platforms()`, which ends its `library.cmake` on the
+host; one that goes on to add unrestricted modules gets a warning naming them.
+
+**Modules that add other modules.** The overlay adds the project modules that hold FPP of
+the model. When one of them adds another itself (`config/` starting with
+`add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/dep_config")`), adding both is a CMake
+error. The generator follows `add_fprime_subdirectory()`, `add_subdirectory()` and
+`include()` of literal paths from each selected module, and leaves out of its own list
+every module that another one brings in. The ordering rule is unchanged: modules with
+`CONFIGURATION_OVERRIDES` (or bringing one in) come last. A module that is brought in is
+registered where its parent is, so if it supplies a file that another module overrides,
+the parent is moved ahead of that module; if the parent must also come after it, there is
+no order and the generator says so. What the text does not show (a path built from a
+variable) is caught at configure time: the overlay's `add_fprime_subdirectory()`, where the
+overlay has one, adds a directory once and skips a repeat.
+
+**The root `CMakeLists.txt`.** Flight projects set variables that a library's
+`library.cmake` insists on, add definitions and options for every module, and adjust
+targets after `fprime_setup_included_code()`. Two approaches were considered: report every
+such statement with the manifest key that reproduces it, or carry over those that are safe
+and report the rest. The second is used, because the common cases have one obvious
+translation and the first symptom of leaving them out is a `FATAL_ERROR` from a library
+that names neither the manifest nor the fix:
+
+| Statement in the flight root | In the overlay |
+|---|---|
+| `set(NAME value …)` and `option(NAME …)` of plain values, at top level, before F´ is read | A cache entry before `find_package(FPrime)`, like `cmake.cache` |
+| `add_compile_definitions(…)` (and `add_definitions(-D…)`) of plain values, at top level | Copied. Made before F´ is read, they reach every module; made after, only the modules the overlay adds after the framework and the libraries, as in flight |
+| `CMAKE_*`, `FPRIME_PLATFORM` and toolchain variables | Reported: `cmake.cache` if the host build needs them |
+| A value with `${…}`, `$ENV{…}` or `$<…>`; anything inside `if()`, `foreach()` | Reported: not evaluated |
+| `add_compile_options`, `include_directories`, `include()` of a project file, functions and macros, before F´ is read | Reported: `cmake.include_early` |
+| Anything after F´ is read (`set_target_properties`, `target_link_libraries`, `add_library(… ALIAS …)`) | Reported: `cmake.include` |
+
+Compile options and include directories are not carried over although they are literal:
+they are written for the target's compiler and SDK, and a flag the host compiler rejects
+would stop every build. A value the manifest sets (`cmake.cache`, `defines`) always wins
+over a carried one. The report lists each statement with what became of it; statements
+that are not carried over are also warnings, grouped by manifest key, with the YAML to
+paste. F´'s own lines (`project`, the F´ include, `add_fprime_subdirectory`) and variables
+the overlay sets from its own `settings.ini` are neither carried nor reported.
+
+**Link dependencies on SDK files.** A module whose `DEPENDS` (or `MOD_DEPS`) names a
+library file by path, or starts with a variable that nothing in the simulated build sets,
+would stop the configure step with "target … not available to deployment". The generator
+warns first, naming the module, the entry, and the instances whose component is in it.
 
 ### Instances inside subtopologies
 

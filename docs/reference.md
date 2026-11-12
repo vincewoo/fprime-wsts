@@ -13,6 +13,16 @@
 
 Errors the user can fix are printed as `fprime-wsts: error: …` with exit code 2.
 
+`fprime-wsts run --json` prints one summary when the run ends: `deployment`, `exit_code`,
+`exited_early`, `interrupted`, `seconds`, `logs`, `gds_gui`, `final_status`. When the
+deployment exits on its own and its log ends with an F´ assert, the summary has
+`assert: {file, line, instances}` (and `id` when the log printed a file ID, `0x…:line`,
+which is resolved with `hashes.txt` of the build cache). `instances` are the instances of
+the component the file belongs to, each with `kept: true` if the simulation did not
+substitute it. The same is printed on standard error, with the `substitute` entry to add
+when a kept instance is the cause. A deployment that stops before it opens its bridge is
+reported the same way, with `error` in the summary and exit code 2.
+
 ## Manifest (`wsts.yaml`)
 
 Only `deployment` is required.
@@ -88,7 +98,7 @@ main:
   stop: stop()
 cmake:
   extra_subdirectories: [Lib/Math]   # modules with no FPP model that components depend on
-  exclude_subdirectories: [...]
+  exclude_subdirectories: [...]      # modules to leave out, wherever they are added (project, library, framework)
   depends: [Proj_Math]               # extra link dependencies of the topology module
   cache:                             # CMake cache variables, set before F´ reads the libraries
     SIM_COMPONENTS: [SerialSensorSim, Top]   # a list becomes a CMake list
@@ -257,6 +267,36 @@ This is how a simulation raises `ActiveRateGroupOutputPorts`,
 `CMakeLists.txt` of its own directory (not in `library.cmake` itself), and each file
 replaces one that some earlier module supplies; both are checked. The report lists these
 overrides apart from flight's.
+
+### What the simulated build takes from the flight build
+
+Design and reasons: [design.md](design.md#what-is-taken-from-the-flight-build).
+
+- **Libraries.** A flight library is built if the patched model uses a file of it, if it is
+  under `libraries.keep`, or if it supplies a configuration file that a module of the build
+  overrides with `CONFIGURATION_OVERRIDES`. `libraries.drop` on a library of the last kind is
+  an error. The report has `libraries.kept`, `libraries.dropped` and, for libraries kept for
+  configuration alone, `libraries.kept_for_configuration: [{library, supplies, file,
+  overridden_by}]`.
+- **Headers of replaced drivers.** `wsts-include/` holds a stand-in for each header of a
+  replaced component that no instance uses any more (`driver_headers` in the report).
+- **Modules that add other modules** are added once, by their parent (`nested_modules` in
+  the report: `[{module, added_by, in}]`).
+- **The flight root `CMakeLists.txt`.** Plain `set()` and `option()` before F´ is read
+  become cache entries, and plain compile definitions are copied. Everything else that is
+  not F´ boilerplate is a warning with the manifest key to use. `cmake.cache` and `defines`
+  win over what is carried. The report has
+  `flight_cmake: {file, carried_over: [{line, statement, as}], not_carried_over: [{line,
+  statement, why, key}]}`.
+- **`cmake.exclude_subdirectories`** leaves a module out wherever it is added. One that the
+  overlay would add itself is simply not added; one that a library, the framework or another
+  module adds is skipped by the overlay's `add_fprime_subdirectory()` (`excluded_modules` in
+  the report). Something else must then provide whatever depended on it: a module of the
+  simulation, given the original's target name with `add_library(<name> ALIAS <target>)` in a
+  file named under `cmake.include`.
+- **Link dependencies that are files of the target's SDK** are reported as warnings, with
+  the ways out: substitute the instances that need the module, drop the library, exclude
+  the module, or point the variable at a host build with `cmake.cache`.
 
 ### Surrogates of another kind, or with other port names
 

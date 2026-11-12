@@ -249,6 +249,10 @@ class ConfigOverride:
     name: str  # file name: an override is matched to what it replaces by name only
     winner: Path
     replaced: List[Path]
+    # Where the file comes from and who replaces it, each as (the CMake file with the
+    # register_fprime_config() call, the configuration file)
+    suppliers: List[Tuple[Path, Path]] = field(default_factory=list)
+    overriders: List[Tuple[Path, Path]] = field(default_factory=list)
 
 
 CMAKE_CALL_DIRECTIVES = {
@@ -300,11 +304,13 @@ def find_config_overrides(roots: Iterable[Path], suffixes: Tuple[str, ...] = (".
     `fpp_exclude` in the manifest to settle such a case.
 
     Returns the overrides of FPP files and warnings. With other `suffixes` (".hpp") the same
-    is done for configuration headers, which are supplied under HEADERS.
+    is done for configuration headers, which are supplied under HEADERS, and with `("",)`
+    for every configuration file whatever its kind (SOURCES included).
     """
     roots = [r.resolve() for r in roots if r.is_dir()]
     supplied: Dict[str, List[Path]] = {}
     overrides: Dict[str, List[Tuple[int, Path]]] = {}
+    registered_in: Dict[Tuple[str, Path], Path] = {}  # (directive kind, file) -> CMake file
     seen: Set[Path] = set()
     for order, root in enumerate(roots):
         for directory, subdirs, files in os.walk(root):
@@ -326,15 +332,18 @@ def find_config_overrides(roots: Iterable[Path], suffixes: Tuple[str, ...] = (".
                 except OSError:
                     continue
                 for call in read_calls(cmake, "register_fprime_config"):
-                    for directive, table in (("AUTOCODER_INPUTS", None), ("HEADERS", None), ("CONFIGURATION_OVERRIDES", overrides)):
+                    for directive, table in (("AUTOCODER_INPUTS", None), ("HEADERS", None), ("SOURCES", None),
+                                             ("CONFIGURATION_OVERRIDES", overrides)):
                         for token in call.get(directive, []):
                             if not token.endswith(suffixes) or "${" in token:
                                 continue
                             path = (cmake.parent / token).resolve()
                             if table is None:
                                 supplied.setdefault(path.name, []).append(path)
+                                registered_in.setdefault(("supplied", path), cmake)
                             else:
                                 table.setdefault(path.name, []).append((order, path))
+                                registered_in.setdefault(("override", path), cmake)
     found: List[ConfigOverride] = []
     warnings: List[str] = []
     for name in sorted(overrides):
@@ -351,7 +360,11 @@ def find_config_overrides(roots: Iterable[Path], suffixes: Tuple[str, ...] = (".
         if not supplied.get(name):
             warnings.append(f"{winner} is a CONFIGURATION_OVERRIDES entry, but no configuration module supplies a file "
                             f"named {name}: F Prime will reject it")
-        found.append(ConfigOverride(name, winner, sorted(dict.fromkeys(replaced))))
+        found.append(ConfigOverride(
+            name, winner, sorted(dict.fromkeys(replaced)),
+            suppliers=[(registered_in[("supplied", p)], p) for p in dict.fromkeys(supplied.get(name, []))],
+            overriders=[(registered_in[("override", p)], p) for p in dict.fromkeys(p for _, p in ranked)],
+        ))
     return found, warnings
 
 

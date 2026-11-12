@@ -1,6 +1,6 @@
 module CdhCoreConfig {
     # Project override: CdhCore sits at 0x05000000 on this vehicle (framework default 0x01000000)
-    constant BASE_ID = 0x05000000
+    constant BASE_ID = MissionIds.CDH_CORE
     
     module QueueSizes {
         constant cmdDisp     = 10

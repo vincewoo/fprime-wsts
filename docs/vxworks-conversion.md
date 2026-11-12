@@ -27,6 +27,10 @@ No VxWorks toolchain is involved at any point.
 | OS layer | The overlay builds with the host toolchain, so F´ selects the Linux/POSIX OSAL implementations |
 | OS-specific components (`restrict_platforms`) | Replaced from the catalog, or by port-structure match, or it is an error naming the instance |
 | Platform libraries that do not configure on Linux | Dropped when the simulated topology no longer references them (reported) |
+| A platform library that supplies configuration the project overrides (`VxWorksCfg.hpp` of `fprime-vxworks`) | Kept, with the reason in the report: F´ rejects an override of a file nothing supplies. Its `library.cmake` registers the configuration and then stops on the host (`restrict_platforms`) |
+| Flight code that includes the header of a replaced driver (a `SubtopologyTopologyDefs.hpp` with a field of the driver's baud rate type) | A stand-in header at the same include path gives the surrogate under the driver's name, for every module |
+| A configuration module that adds another module of the project | The child is added once, by its parent |
+| A root `CMakeLists.txt` that sets variables a library requires, or adds compile definitions | Plain values are carried over; the rest is reported with the manifest key to use |
 | Toolchain build options (`FPRIME_PLATFORM=VxWorks`, `VX_TARGET_TYPE=…`) | Not carried over (reported) |
 | No `main()`: entry points are called from a start-up script | The manifest's `main` section generates a Linux `main()` that calls them |
 | Timer that fires from interrupt context | `Wsts.SimTick` in `mode=thread`: `startTimer…()` returns at once and ticks from its own thread |
@@ -60,6 +64,41 @@ C++ expression, so other arguments of the entry point are written into it.
 
 ## What you still have to deal with
 
+- **A platform library without a platform guard.** A library that is kept only for the
+  configuration it supplies is still read whole. `fprime-vxworks` calls
+  `restrict_platforms(vxworks)` in its `library.cmake` after registering its configuration,
+  so nothing else of it is added on the host. For a library that goes on to add modules
+  without such a call, the generator warns and names them. If they do not configure or
+  build on Linux, list them under `cmake.exclude_subdirectories` (paths relative to the
+  flight project, `../` allowed): the overlay then skips them where the library adds them.
+- **Modules that link files of the target's SDK** (`DEPENDS … ${SDK_ROOT}/3rdparty/lib/libx.a`).
+  The generator warns before the build does. Substitute the instances whose component is
+  in the module, drop the library, exclude the module and give its target name to a
+  stand-in (`add_library(<name> ALIAS <stand-in>)` in a `cmake.include` file), or set the
+  variable to a host build of the SDK with `cmake.cache`.
+- **Modules with a stub variant for unit tests.** A module that picks a stub source under
+  `if(BUILD_TESTING)` builds its real source in the simulated deployment: the overlay is
+  not a unit test build, and the generator does not switch variants. Substitute the
+  component, or select the stub from a `cmake.include_early` file if the module offers a
+  variable for it.
+- **A kept driver whose set-up touches hardware.** A driver the simulation does not
+  replace runs its flight code, including the phase code of its subtopology: a `setup()`
+  that maps a DMA window asserts on a workstation. There is no general way to detect this
+  from the model. `fprime-wsts run` names the file and line of an F´ assert the deployment
+  stops on, and the kept instance whose component the file belongs to; the remedy is a
+  surrogate for that instance.
+- **Statements of the flight root `CMakeLists.txt` that are not plain values**: compiler
+  options, include directories, target properties, anything inside `if()`. They are listed
+  as warnings with the manifest key that reproduces each.
+- **A module added twice through a path the generator cannot read** (built from a
+  variable). An overlay that defines its own `add_fprime_subdirectory()` (it does when a
+  module is patched, deferred or excluded) skips the repeat; otherwise CMake reports the
+  duplicate, and `cmake.exclude_subdirectories` on the child settles it.
+- **Memory-mapped registers and interrupts.** There is no stock surrogate for these
+  interfaces: a driver that uses them is substituted with a project surrogate.
+- **Third-party build systems inside libraries** behave on the host as they do there, not
+  as on the target's build machine (an autocoder script that depends on the shell, for
+  example). The toolkit builds them as they are.
 - **Code that includes the target OS's headers.** Guard it, as `Cdh/Entry.cpp` does with
   `#ifdef TGT_OS_TYPE_VXWORKS`, or with `#ifndef WSTS_SIM` (defined for every simulated
   build). A component that is built around OS calls should be replaced by a surrogate. A

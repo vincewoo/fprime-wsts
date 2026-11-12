@@ -303,6 +303,77 @@
     "Time follows the host wall clock, scaled by the simulation rate. Runs are repeatable to tick granularity, not cycle-exact."
   ],
   "warnings": [],
+  "driver_headers": {
+    "directory": "wsts-include",
+    "components": [
+      {
+        "component": "Svc.LinuxTimer",
+        "surrogate": "Wsts.SimTick",
+        "headers": [
+          "Svc/LinuxTimer/LinuxTimer.hpp",
+          "Svc/LinuxTimer/LinuxTimerComponentAc.hpp"
+        ]
+      },
+      {
+        "component": "Drv.TcpClient",
+        "surrogate": "Wsts.SimByteStream",
+        "headers": [
+          "Drv/TcpClient/TcpClient.hpp",
+          "Drv/TcpClient/TcpClientComponentImpl.hpp",
+          "Drv/TcpClient/TcpClientComponentAc.hpp"
+        ]
+      },
+      {
+        "component": "Drv.LinuxI2cDriver",
+        "surrogate": "Wsts.SimI2c",
+        "headers": [
+          "Drv/LinuxI2cDriver/LinuxI2cDriver.hpp",
+          "Drv/LinuxI2cDriver/LinuxI2cDriverComponentAc.hpp"
+        ]
+      },
+      {
+        "component": "Drv.PosixUartDriver",
+        "surrogate": "Wsts.SimByteStream",
+        "headers": [
+          "Drv/PosixUartDriver/PosixUartDriver.hpp",
+          "Drv/PosixUartDriver/PosixUartDriverComponentAc.hpp"
+        ]
+      },
+      {
+        "component": "Drv.LinuxGpioDriver",
+        "surrogate": "Sim.SimLinuxGpio",
+        "headers": [
+          "Drv/LinuxGpioDriver/LinuxGpioDriver.hpp",
+          "Drv/LinuxGpioDriver/LinuxGpioDriverComponentAc.hpp"
+        ]
+      },
+      {
+        "component": "Drv.LinuxSpiDriver",
+        "surrogate": "Wsts.SimSpi",
+        "headers": [
+          "Drv/LinuxSpiDriver/LinuxSpiDriver.hpp",
+          "Drv/LinuxSpiDriver/LinuxSpiDriverComponentImpl.hpp",
+          "Drv/LinuxSpiDriver/LinuxSpiDriverComponentAc.hpp"
+        ]
+      }
+    ]
+  },
+  "flight_cmake": {
+    "file": "../../../../mission/CMakeLists.txt",
+    "carried_over": [
+      {
+        "line": 13,
+        "statement": "set(SENSOR_LIB_BOARD cdh-rev-b)",
+        "as": "cache entry SENSOR_LIB_BOARD=cdh-rev-b"
+      },
+      {
+        "line": 16,
+        "statement": "add_compile_definitions(MISSION_VEHICLE_ID=2)",
+        "as": "compile definition MISSION_VEHICLE_ID=2"
+      }
+    ],
+    "not_carried_over": []
+  },
   "dropped_cmake_options": [
     "VX_TARGET_TYPE=DKM",
     "FPRIME_PLATFORM=VxWorks"

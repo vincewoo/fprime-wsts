@@ -18,7 +18,10 @@ ground over TCP and sends commands with opcodes from `0x20000000` up through the
 the payload computer. Its serial temperature sensor and UART driver are not in the
 deployment: they are inside the `SensorLink` subtopology of the project library
 `lib/sensor-lib`, whose phase code opens the driver. The project overrides configuration
-of that subtopology and of the framework (`config/project`).
+of that subtopology, of the framework and of the VxWorks platform library
+(`config/project`, which adds a module of constants, `dep_config`, itself). The project's
+root `CMakeLists.txt` sets the board that `lib/sensor-lib` requires and a compile
+definition that both entry points check.
 
 **`Payload`** is a Linux single-board computer with no ground link: its commands, events
 and telemetry all travel through the hub. It has an IMU and a power monitor on one I2C
@@ -59,6 +62,10 @@ runs the end-to-end tests against it.
 | A deployment for another OS, converted without its toolchain | Cdh (VxWorks), with a `main()` generated to call its entry points (`main` in `cdh.yaml`) | `test_cdh.py::test_watchdog_timer_surrogate_cycles_rate_groups` |
 | An instance inside a library subtopology | `SensorLink.uart` in `mission/lib/sensor-lib`, patched in a copy | `test_cdh.py` (the serial sensor tests) |
 | Configuration overrides of the flight project | `mission/config/project`: CdhCore and SensorLink IDs, 6 rate group ports, a 36-opcode table | `test_system.py::test_merged_dictionary_has_both_elements_and_the_project_ids` |
+| A library kept for the configuration it supplies | `lib/fprime-vxworks`: `config/project` overrides its `VxWorksCfg.hpp` | Python tests (`test_flight_shapes.py`); the build |
+| Flight code that includes a replaced driver's header | `SensorLink`'s `SubtopologyTopologyDefs.hpp` includes `VxWorksUartDriver.hpp` and holds a field of its baud rate type, used by the phase code; `wsts-include/` has the stand-in | the build; `test_cdh.py` (the serial sensor tests) |
+| A project module that adds another | `config/project` adds `config/project/dep_config`, whose constants the overrides use | Python tests; the build |
+| A flight root `CMakeLists.txt` that does more than include F´ | `set(SENSOR_LIB_BOARD …)`, without which `lib/sensor-lib` stops, and `add_compile_definitions(MISSION_VEHICLE_ID=2)`, which `Entry.cpp` and `Main.cpp` require | Python tests; the build |
 | Configuration overrides of the simulation, which win over flight's | `mission-sim/config`: 10 rate group ports and an 80-opcode table, for the simulators | Python tests (`test_sim_project.py`) |
 | A standalone simulation project | `mission-sim/`, with `project: ../mission` in each element manifest | all |
 | Project surrogates in a catalog of their own | `Sim.SimLinuxGpio`, a mirror of `Drv.LinuxGpioDriver` (`wsts-catalog.yaml`) | `test_payload.py::test_mirror_surrogate_keeps_the_flight_dictionary` and the GPIO tests |
@@ -81,4 +88,6 @@ runs the end-to-end tests against it.
 
 What the example does not show is covered by the Python tests instead: a manifest kept
 inside the flight project (`test_generate.py`), `control: none`, SPI, surrogates with other
-port names, and `cmake.include_early`.
+port names, `cmake.include_early`, statements of the flight root `CMakeLists.txt` that
+are reported and not carried over, modules that link SDK files, and the assert that
+`fprime-wsts run` resolves (`test_flight_shapes.py`).

@@ -9,6 +9,10 @@
 #include <Os/Os.hpp>
 #include <Payload/Top/PayloadTopology.hpp>
 
+#ifndef MISSION_VEHICLE_ID
+#error "MISSION_VEHICLE_ID is not defined: the project's CMakeLists.txt sets it for every module"
+#endif
+
 static void signalHandler(int signum) {
     (void)signum;
     Payload::stopRateGroups();

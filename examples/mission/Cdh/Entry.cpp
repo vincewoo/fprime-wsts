@@ -14,6 +14,10 @@
 #include <Fw/Logger/Logger.hpp>
 #include <Os/Os.hpp>
 
+#ifndef MISSION_VEHICLE_ID
+#error "MISSION_VEHICLE_ID is not defined: the project's CMakeLists.txt sets it for every module"
+#endif
+
 namespace {
 Cdh::TopologyState s_state{};
 }
@@ -30,7 +34,7 @@ extern "C" int cdhStart(const char* hostname, int port, int hubPort) {
     Cdh::setupTopology(s_state);
     // Returns at once: the watchdog timer fires the rate groups from then on
     Cdh::startRateGroups();
-    Fw::Logger::log("Cdh started\n");
+    Fw::Logger::log("Cdh started on vehicle %d\n", MISSION_VEHICLE_ID);
     return 0;
 }
 

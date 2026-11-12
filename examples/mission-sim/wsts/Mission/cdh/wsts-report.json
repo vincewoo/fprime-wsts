@@ -508,10 +508,17 @@
   },
   "libraries": {
     "kept": [
+      "../../../../../lib/fprime-vxworks",
       "../../../../mission/lib/sensor-lib"
     ],
-    "dropped": [
-      "../../../../../lib/fprime-vxworks"
+    "dropped": [],
+    "kept_for_configuration": [
+      {
+        "library": "../../../../../lib/fprime-vxworks",
+        "supplies": "VxWorksCfg.hpp",
+        "file": "../../../../../lib/fprime-vxworks/VxWorks/library/config/VxWorksCfg.hpp",
+        "overridden_by": "config/project"
+      }
     ]
   },
   "project_modules": [
@@ -535,6 +542,67 @@
     "Time follows the host wall clock, scaled by the simulation rate. Runs are repeatable to tick granularity, not cycle-exact."
   ],
   "warnings": [],
+  "nested_modules": [
+    {
+      "module": "config/project/dep_config",
+      "added_by": "config/project",
+      "in": "config/project/CMakeLists.txt"
+    }
+  ],
+  "driver_headers": {
+    "directory": "wsts-include",
+    "components": [
+      {
+        "component": "Svc.ChronoTime",
+        "surrogate": "SensorSim.SimTime",
+        "headers": [
+          "Svc/ChronoTime/ChronoTime.hpp",
+          "Svc/ChronoTime/ChronoTimeComponentAc.hpp"
+        ]
+      },
+      {
+        "component": "Drv.TcpServer",
+        "surrogate": "Wsts.SimByteStream",
+        "headers": [
+          "Drv/TcpServer/TcpServer.hpp",
+          "Drv/TcpServer/TcpServerComponentImpl.hpp",
+          "Drv/TcpServer/TcpServerComponentAc.hpp"
+        ]
+      },
+      {
+        "component": "VxWorksSvc.VxWatchDogTimer",
+        "surrogate": "Wsts.SimTick",
+        "headers": [
+          "VxWorks/Svc/VxWatchDogTimer/VxWatchDogTimer.hpp",
+          "VxWorks/Svc/VxWatchDogTimer/VxWatchDogTimerComponentAc.hpp"
+        ]
+      },
+      {
+        "component": "VxWorksDrv.VxWorksUartDriver",
+        "surrogate": "Wsts.SimByteStream",
+        "headers": [
+          "VxWorks/Drv/VxWorksUartDriver/VxWorksUartDriver.hpp",
+          "VxWorks/Drv/VxWorksUartDriver/VxWorksUartDriverComponentAc.hpp"
+        ]
+      }
+    ]
+  },
+  "flight_cmake": {
+    "file": "../../../../mission/CMakeLists.txt",
+    "carried_over": [
+      {
+        "line": 13,
+        "statement": "set(SENSOR_LIB_BOARD cdh-rev-b)",
+        "as": "cache entry SENSOR_LIB_BOARD=cdh-rev-b"
+      },
+      {
+        "line": 16,
+        "statement": "add_compile_definitions(MISSION_VEHICLE_ID=2)",
+        "as": "compile definition MISSION_VEHICLE_ID=2"
+      }
+    ],
+    "not_carried_over": []
+  },
   "dropped_cmake_options": [
     "VX_TARGET_TYPE=DKM",
     "FPRIME_PLATFORM=VxWorks"
