@@ -150,7 +150,9 @@ the bus:
   `duplicate`, per direction);
 - each element's **recorder** sees the traffic (`src` is `link`). When a recording is
   replayed in `responses` mode, what the other element sent comes from the recording and
-  live link traffic is ignored, as for any other model.
+  live link traffic is ignored, as for any other model. What flight software sends still
+  goes to the other element, which is running live, so a replaying element keeps its
+  downlink through the link.
 
 An endpoint has either a device model or a link, not both.
 
