@@ -4,11 +4,11 @@ A flight system with more than one computer is simulated as one process per elem
 element is an ordinary deployment with its own manifest, converted by the same transform.
 A system manifest names the elements and the links between them:
 
-    system: HubDemo
+    system: Mission
     ground: cdh
     elements:
-      cdh:     {manifest: Cdh/wsts.yaml,     ids: [0x00000000, 0x1FFFFFFF]}
-      payload: {manifest: Payload/wsts.yaml, ids: [0x20000000, 0x2FFFFFFF]}
+      cdh:     {manifest: cdh.yaml,     ids: [0x00000000, 0x1FFFFFFF]}
+      payload: {manifest: payload.yaml, ids: [0x20000000, 0x2FFFFFFF]}
     links:
       - {name: hub, a: cdh.hubDriver, b: payload.hubDriver}
 

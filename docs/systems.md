@@ -7,7 +7,7 @@ it, and one client controls it.
 
 ```mermaid
 flowchart TB
-  dict["Merged dictionary<br/>wsts-logs/HubDemoDictionary.json"]:::generated
+  dict["Merged dictionary<br/>wsts-logs/MissionDictionary.json"]:::generated
   gds["F´ GDS"]:::external
 
   subgraph run["fprime-wsts run &lt;system&gt;"]
@@ -22,7 +22,7 @@ flowchart TB
     end
     subgraph pay["Payload process"]
       direction TB
-      pfsw["Flight code<br/>GenericHub, Instrument"]:::flight
+      pfsw["Flight code<br/>GenericHub, device managers"]:::flight
       pdrv["hubDriver<br/>Wsts.SimByteStream"]:::toolkit
       pbus["Wsts bus<br/>LinkByteStream model"]:::toolkit
       pbr["bridge tcp:50101"]:::toolkit
@@ -52,9 +52,11 @@ Colours as in [design.md](design.md#reading-the-diagrams): 🟦 flight software,
 fprime-wsts, 🟧 generated, 🟪 yours. In flight the two `hubDriver` instances are a
 `Drv.TcpServer` (Cdh) and a `Drv.TcpClient` (Payload).
 
-[`examples/hub-demo`](../examples/hub-demo) is the worked example: a ground-facing `Cdh`
-deployment and a `Payload` deployment joined by an F´ `Svc.GenericHub` over Ethernet, with
-a `Svc.CmdSplitter` routing commands by opcode.
+The repository's [example](../examples/README.md) is such a system: a ground-facing `Cdh`
+deployment (VxWorks) and a `Payload` deployment (Linux) of the flight project
+`examples/mission`, joined by an F´ `Svc.GenericHub` over Ethernet, with a
+`Svc.CmdSplitter` routing commands by opcode. Its system manifest and the manifests of
+both elements are in the simulation project `examples/mission-sim`.
 
 ## What is simulated, and what is not
 
@@ -69,17 +71,17 @@ Each element keeps an ordinary [deployment manifest](reference.md#manifest-wstsy
 system manifest adds what makes them one system:
 
 ```yaml
-system: HubDemo
+system: Mission
 ground: cdh                              # the GDS connects to this element (default: the first)
-output: wsts/HubDemo                     # default: wsts/<system>, next to this file
+output: wsts/Mission                     # default: wsts/<system>, next to this file
 
 elements:
   cdh:
-    manifest: Cdh/wsts.yaml              # relative to this file; may be in another project
+    manifest: cdh.yaml                   # relative to this file; may be in another project
     ids: [0x00000000, 0x1FFFFFFF]        # IDs that reach this element (optional)
     bridge: tcp:50100                    # default: the manifest's, else tcp:50100, 50101, ...
   payload:
-    manifest: Payload/wsts.yaml
+    manifest: payload.yaml
     ids: [0x20000000, 0x2FFFFFFF]
 
 links:
@@ -90,7 +92,7 @@ links:
 ```
 
 ```bash
-fprime-wsts generate examples/hub-demo/wsts-system.yaml
+fprime-wsts generate examples/mission-sim/wsts-system.yaml
 ```
 
 writes one overlay project per element under the output directory (`cdh/`, `payload/`),
@@ -101,12 +103,12 @@ different platforms.
 ```mermaid
 flowchart LR
   sys["wsts-system.yaml<br/>elements, links, ID windows"]:::user
-  cman["Cdh/wsts.yaml"]:::user
-  pman["Payload/wsts.yaml"]:::user
+  cman["cdh.yaml"]:::user
+  pman["payload.yaml"]:::user
   cfl["Cdh deployment"]:::flight
   pfl["Payload deployment"]:::flight
   gen["fprime-wsts generate<br/>the transform once per element"]:::toolkit
-  subgraph out["wsts/HubDemo/"]
+  subgraph out["wsts/Mission/"]
     direction TB
     cov["cdh/ overlay project"]:::generated
     pov["payload/ overlay project"]:::generated
@@ -177,11 +179,11 @@ manifest overrides the placement; `control: none` leaves the instance out.
 Build each element once (they are separate F´ builds), then run the system directory:
 
 ```bash
-for e in cdh payload; do (cd examples/hub-demo/wsts/HubDemo/$e && fprime-util generate && fprime-util build); done
+for e in cdh payload; do (cd examples/mission-sim/wsts/Mission/$e && fprime-util generate && fprime-util build); done
 ```
 
 ```bash
-fprime-wsts run examples/hub-demo/wsts/HubDemo --gds --duration 30 --json
+fprime-wsts run examples/mission-sim/wsts/Mission --gds --duration 30 --json
 ```
 
 `run` starts every element with its own bridge and log directory
@@ -204,7 +206,7 @@ then stay down, as with the other computer switched off.
 ```python
 from fprime_wsts.bridge import WstsSystem
 
-with WstsSystem("examples/hub-demo/wsts/HubDemo") as system:
+with WstsSystem("examples/mission-sim/wsts/Mission") as system:
     system["payload"].inject_text("sensorUart", "$TEMP,48.0\n")  # one element's WstsBridge
     system.fault_set("hub", "drop", direction="a_to_b")          # a link, by name
     system.fault_set("payload.hubDriver", "corrupt", arg=0xFF)   # or <element>.<endpoint>
@@ -219,18 +221,20 @@ receives, `both` cuts the link.
 For tests, `-p fprime_wsts.pytest_plugin --wsts-system <dir> --wsts-gds` starts the system
 for the session; the `wsts_system` fixture is a `WstsSystem`, and fprime-gds's
 `fprime_test_api` works against the merged dictionary. See
-[`tests/e2e/test_hub_demo.py`](../tests/e2e/test_hub_demo.py).
+[`tests/e2e/`](../tests/e2e), whose fixtures `cdh` and `payload` are the elements' bridges.
 
 ## Things to know
 
 - **Time is per element.** Each element has its own tick source and tick count (in the
-  example `Cdh` ticks at 10 Hz and `Payload` at 1 Hz). `pause`, `resume` and `set_rate` on
+  example `Cdh` ticks at 10 Hz and `Payload` at 20 Hz). `pause`, `resume` and `set_rate` on
   the system reach the elements one after another, not at the same instant. Runs are not
   repeatable across elements to tick granularity. Lockstep waits on stepped time
   ([roadmap](design.md#roadmap)).
 - **Pausing one element** stops its rate groups while the others keep running, so
   whatever it sends periodically (telemetry, heartbeats) stops arriving. That is a useful
-  test of how the rest of the system reacts to a computer that has gone quiet.
+  test of how the rest of the system reacts to a computer that has gone quiet. What it
+  sends from other threads still arrives: in the example, Payload's events go straight to
+  the hub, so a paused Payload still reports that it was paused.
 - **Message boundaries are kept.** Each send by flight software is delivered whole to the
   other side (in pieces of at most the surrogate's `chunk`, 1024 bytes by default). A real
   UART or TCP stream gives no such guarantee, so missing framing does not show up here.

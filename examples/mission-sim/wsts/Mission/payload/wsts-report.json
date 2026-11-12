@@ -1,0 +1,345 @@
+{
+  "system": {
+    "name": "Mission",
+    "element": "payload",
+    "ids": [
+      536870912,
+      805306367
+    ]
+  },
+  "links": [
+    {
+      "link": "hub",
+      "instance": "Payload.hubDriver",
+      "endpoint": "hubDriver",
+      "role": "connect",
+      "peer": "cdh.hubDriver"
+    }
+  ],
+  "generator": "fprime-wsts",
+  "topology": "Payload.Payload",
+  "flight_toolchain": "vxworks",
+  "sim_toolchain": "native (Linux)",
+  "time": {
+    "mode": "real-time",
+    "tick_source": "Payload.linuxTimer"
+  },
+  "substitutions": [
+    {
+      "instance": "Payload.linuxTimer",
+      "flight_component": "Svc.LinuxTimer",
+      "surrogate": "Wsts.SimTick",
+      "seam": "S1 topology",
+      "chosen_by": "catalog",
+      "endpoint": "linuxTimer",
+      "options": "mode=block",
+      "base_id": 537067520,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [],
+        "channels": [],
+        "params": []
+      }
+    },
+    {
+      "instance": "Payload.hubDriver",
+      "flight_component": "Drv.TcpClient",
+      "surrogate": "Wsts.SimByteStream",
+      "seam": "S1 topology",
+      "chosen_by": "link",
+      "endpoint": "hubDriver",
+      "options": "",
+      "base_id": 537071616,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [],
+        "channels": [],
+        "params": []
+      }
+    },
+    {
+      "instance": "Payload.i2cBus",
+      "flight_component": "Drv.LinuxI2cDriver",
+      "surrogate": "Wsts.SimI2c",
+      "seam": "S1 topology",
+      "chosen_by": "catalog",
+      "endpoint": "i2cBus",
+      "options": "",
+      "base_id": 537075712,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [],
+        "channels": [],
+        "params": []
+      }
+    },
+    {
+      "instance": "Payload.sensorUart",
+      "flight_component": "Drv.PosixUartDriver",
+      "surrogate": "Wsts.SimByteStream",
+      "seam": "S1 topology",
+      "chosen_by": "catalog",
+      "endpoint": "sensorUart",
+      "options": "",
+      "base_id": 537079808,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [
+          "BufferTooSmall",
+          "ConfigError",
+          "NoBuffers",
+          "OpenError",
+          "PortOpened",
+          "ReadError",
+          "WriteError"
+        ],
+        "channels": [
+          "BytesRecv",
+          "BytesSent"
+        ],
+        "params": []
+      }
+    },
+    {
+      "instance": "Payload.heaterPin",
+      "flight_component": "Drv.LinuxGpioDriver",
+      "surrogate": "Sim.SimLinuxGpio",
+      "seam": "S1 topology",
+      "chosen_by": "catalog",
+      "endpoint": "heaterPin",
+      "options": "",
+      "base_id": 537083904,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [],
+        "channels": [],
+        "params": []
+      }
+    },
+    {
+      "instance": "Payload.switchPin",
+      "flight_component": "Drv.LinuxGpioDriver",
+      "surrogate": "Sim.SimLinuxGpio",
+      "seam": "S1 topology",
+      "chosen_by": "catalog",
+      "endpoint": "switchPin",
+      "options": "",
+      "base_id": 537088000,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [],
+        "channels": [],
+        "params": []
+      }
+    },
+    {
+      "instance": "Payload.spiBus",
+      "flight_component": "Drv.LinuxSpiDriver",
+      "surrogate": "Wsts.SimSpi",
+      "seam": "S1 topology",
+      "chosen_by": "catalog",
+      "endpoint": "spiBus",
+      "options": "",
+      "base_id": 537092096,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [
+          "SPI_ConfigError",
+          "SPI_ConfigMismatch",
+          "SPI_OpenError",
+          "SPI_PortOpened",
+          "SPI_WriteError"
+        ],
+        "channels": [
+          "SPI_Bytes"
+        ],
+        "params": []
+      }
+    }
+  ],
+  "kept_hardware_instances": [],
+  "models": [
+    {
+      "name": "imu",
+      "class": "Sim::ImuModel",
+      "endpoint": "i2cBus",
+      "kind": "i2c",
+      "address": 104
+    },
+    {
+      "name": "power",
+      "class": "Wsts::RegisterMapI2c",
+      "endpoint": "i2cBus",
+      "kind": "i2c",
+      "address": 64
+    },
+    {
+      "name": "adc",
+      "class": "Wsts::LoopbackSpi",
+      "endpoint": "spiBus",
+      "kind": "spi",
+      "address": 0
+    },
+    {
+      "name": "tempSensor",
+      "class": "Wsts::ScriptedByteStream",
+      "endpoint": "sensorUart",
+      "kind": "bytestream",
+      "address": 0
+    }
+  ],
+  "control": {
+    "enabled": true,
+    "setup_base_id": 537096192,
+    "control_base_id": 537100288
+  },
+  "bridge": "tcp:50101",
+  "dictionary": {
+    "identical_to_flight": false,
+    "flight_ids_unchanged": true,
+    "removed": {
+      "commands": [],
+      "events": [
+        "Payload.sensorUart.BufferTooSmall",
+        "Payload.sensorUart.ConfigError",
+        "Payload.sensorUart.NoBuffers",
+        "Payload.sensorUart.OpenError",
+        "Payload.sensorUart.PortOpened",
+        "Payload.sensorUart.ReadError",
+        "Payload.sensorUart.WriteError",
+        "Payload.spiBus.SPI_ConfigError",
+        "Payload.spiBus.SPI_ConfigMismatch",
+        "Payload.spiBus.SPI_OpenError",
+        "Payload.spiBus.SPI_PortOpened",
+        "Payload.spiBus.SPI_WriteError"
+      ],
+      "channels": [
+        "Payload.sensorUart.BytesRecv",
+        "Payload.sensorUart.BytesSent",
+        "Payload.spiBus.SPI_Bytes"
+      ],
+      "params": []
+    },
+    "added": {
+      "commands": [
+        "Payload.wstsControl.FAULT_CLEAR",
+        "Payload.wstsControl.FAULT_SET",
+        "Payload.wstsControl.GPIO_FORCE",
+        "Payload.wstsControl.I2C_REG_SET",
+        "Payload.wstsControl.INJECT_BYTES",
+        "Payload.wstsControl.INJECT_TEXT",
+        "Payload.wstsControl.MODEL_SET",
+        "Payload.wstsControl.RECORD_START",
+        "Payload.wstsControl.RECORD_STOP",
+        "Payload.wstsControl.SCENARIO_LOAD",
+        "Payload.wstsControl.SCENARIO_START",
+        "Payload.wstsControl.SCENARIO_STOP",
+        "Payload.wstsControl.SIM_PAUSE",
+        "Payload.wstsControl.SIM_RESUME",
+        "Payload.wstsControl.SIM_SET_RATE"
+      ],
+      "events": [
+        "Payload.wstsControl.ActionFailed",
+        "Payload.wstsControl.FaultArmed",
+        "Payload.wstsControl.FaultExpired",
+        "Payload.wstsControl.FaultTriggered",
+        "Payload.wstsControl.FaultsCleared",
+        "Payload.wstsControl.Injected",
+        "Payload.wstsControl.RecordStarted",
+        "Payload.wstsControl.RecordStopped",
+        "Payload.wstsControl.ScenarioCompleted",
+        "Payload.wstsControl.ScenarioError",
+        "Payload.wstsControl.ScenarioLoaded",
+        "Payload.wstsControl.ScenarioStarted",
+        "Payload.wstsControl.ScenarioStopped",
+        "Payload.wstsControl.SimLog",
+        "Payload.wstsControl.SimPaused",
+        "Payload.wstsControl.SimRateSet",
+        "Payload.wstsControl.SimResumed"
+      ],
+      "channels": [
+        "Payload.wstsControl.ActiveFaults",
+        "Payload.wstsControl.BusBytes",
+        "Payload.wstsControl.BusErrors",
+        "Payload.wstsControl.BusTransactions",
+        "Payload.wstsControl.FaultHits",
+        "Payload.wstsControl.Recording",
+        "Payload.wstsControl.ScenarioRunState",
+        "Payload.wstsControl.ScenarioStep",
+        "Payload.wstsControl.ScenarioSteps",
+        "Payload.wstsControl.SimRunState",
+        "Payload.wstsControl.SimTicks",
+        "Payload.wstsControl.SimTimeScale"
+      ]
+    }
+  },
+  "libraries": {
+    "kept": [
+      "../../../../mission/lib/sensor-lib"
+    ],
+    "dropped": [
+      "../../../../../lib/fprime-vxworks"
+    ]
+  },
+  "project_modules": [
+    "Components/Adc",
+    "Components/HeaterControl",
+    "Components/ImuManager",
+    "Components/Instrument",
+    "Components/PowerMonitor"
+  ],
+  "reused_sources": {
+    "topology": [
+      "../../../../mission/Payload/Top/PayloadTopology.cpp"
+    ],
+    "main": [
+      "../../../../mission/Payload/Main.cpp"
+    ]
+  },
+  "fidelity_notes": [
+    "Operating system: flight OSAL implementations are replaced by the Linux/POSIX ones. Task priorities are advisory and scheduling is not real-time, so timing and preemption order differ from the target.",
+    "Word size and byte order are those of the host; code that depends on the target's differs here.",
+    "Surrogates replace drivers at their port interface: driver internals (register access, interrupt handling, device files) are not exercised.",
+    "Time follows the host wall clock, scaled by the simulation rate. Runs are repeatable to tick granularity, not cycle-exact."
+  ],
+  "warnings": [],
+  "dropped_cmake_options": [
+    "VX_TARGET_TYPE=DKM",
+    "FPRIME_PLATFORM=VxWorks"
+  ],
+  "simulation_project": "../../..",
+  "config_overrides": [
+    {
+      "file": "CdhCoreConfig.fpp",
+      "uses": "../../../../mission/config/project/CdhCoreConfig.fpp",
+      "replaces": [
+        "../../../../../lib/fprime/Svc/Subtopologies/CdhCore/CdhCoreConfig/CdhCoreConfig.fpp"
+      ]
+    },
+    {
+      "file": "SensorLinkConfig.fpp",
+      "uses": "../../../../mission/config/project/SensorLinkConfig.fpp",
+      "replaces": [
+        "../../../../mission/lib/sensor-lib/SensorLib/SensorLink/SensorLinkConfig/SensorLinkConfig.fpp"
+      ]
+    }
+  ],
+  "simulation_config_overrides": [
+    {
+      "file": "AcConstants.fpp",
+      "uses": "../../../config/AcConstants.fpp",
+      "replaces": [
+        "../../../../mission/config/project/AcConstants.fpp",
+        "../../../../../lib/fprime/default/config/AcConstants.fpp"
+      ]
+    },
+    {
+      "file": "CommandDispatcherImplCfg.hpp",
+      "uses": "../../../config/CommandDispatcherImplCfg.hpp",
+      "replaces": [
+        "../../../../mission/config/project/CommandDispatcherImplCfg.hpp",
+        "../../../../../lib/fprime/default/config/CommandDispatcherImplCfg.hpp"
+      ]
+    }
+  ]
+}

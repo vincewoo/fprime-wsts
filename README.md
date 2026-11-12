@@ -159,71 +159,41 @@ python3 -m venv venv && . venv/bin/activate
 pip install -r lib/fprime/requirements.txt -e ./python
 ```
 
-Convert the Linux example, build it and run it:
+The repository has one example, which uses every part of the toolkit
+([examples/README.md](examples/README.md) maps each feature to where it is). It is the
+flight software of a spacecraft with two computers joined by an F´ `GenericHub`:
+
+```
+ground  <--TCP-->  Cdh (VxWorks)  <==hub over Ethernet==>  Payload (Linux)
+```
+
+- `examples/mission` is the flight project. `Cdh` is a VxWorks downloadable kernel module
+  with no `main()`, driven by a watchdog timer; its serial sensor and UART driver are
+  inside a subtopology of a project library, and the project overrides configuration of
+  that library and of the framework. `Payload` is a Linux single-board computer with an
+  IMU and a power monitor on I2C, a converter on SPI, a serial sensor, a heater pin and an
+  over-temperature switch, and no ground link of its own.
+- `examples/mission-sim` is its simulation project, which only reads the flight project.
+  It holds the system manifest, a manifest per computer, and all simulation code: device
+  simulators written as F´ components, a model on a 125 Hz clock of its own, a mirror
+  surrogate, a device model, a vendored library and configuration overrides of its own.
+
+Generate the simulated system, build both computers and run it:
 
 ```bash
-fprime-wsts generate examples/linux-demo/LinuxDemo/wsts.yaml
+fprime-wsts generate examples/mission-sim/wsts-system.yaml
 ```
 
 ```bash
-cd examples/linux-demo/wsts/LinuxDemo && fprime-util generate && fprime-util build
+for e in cdh payload; do (cd examples/mission-sim/wsts/Mission/$e && fprime-util generate && fprime-util build); done
 ```
 
 ```bash
-fprime-wsts run . --gds
+fprime-wsts run examples/mission-sim/wsts/Mission --gds
 ```
 
-`examples/linux-demo/LinuxDemo` is a flight deployment for a Linux single-board computer:
-an IMU on I2C, a serial temperature sensor, a heater pin and an over-temperature switch.
-Its manifest (`wsts.yaml`) names no drivers. The five hardware instances are found from the
-surrogate catalog; the manifest only says which device models sit behind the buses.
-
-`examples/vx-demo/VxDemo` targets VxWorks. It uses the `fprime-vxworks` UART driver and
-watchdog timer and has no `main()`. `fprime-wsts generate examples/vx-demo/VxDemo/wsts.yaml`
-produces a deployment that builds and runs on Linux with no VxWorks toolchain installed.
-
-`examples/subtop-demo/SubtopDemo` is a VxWorks deployment assembled from subtopologies. Its
-UART driver is not in the deployment at all: it is an instance of a subtopology in a
-project library (`lib/sensor-lib`), opened and started by that subtopology's phase code,
-and the project overrides configuration of the library and of the framework with
-`CONFIGURATION_OVERRIDES`. The generator finds the driver as `SensorLink.uart`, patches a
-copy of the subtopology and builds it in place of the original; the library is not
-touched. See [Instances inside subtopologies](docs/design.md#instances-inside-subtopologies).
-
-`examples/subtop-demo-sim` is a simulation project for that deployment in which the
-device simulators are themselves F´ components: a queued `SerialSensorSim` with its own
-command, parameter, event and telemetry, scheduled by a flight rate group and reached
-through the `Wsts.BusByteStreamDevice` adapter on the UART's bus endpoint. A second
-simulator is stepped at 125 Hz by a rate group of the simulation behind a `Wsts.SimCycle`
-clock, although the flight tick is 10 Hz. The project also vendors a library of its own,
-overrides configuration that the flight project overrides too, and replaces the flight
-time source with a component that uses no bus endpoint. The flight project is not touched. See
-[Device simulators as F´ components](docs/surrogate-guide.md#device-simulators-as-f-components).
-
-`examples/linux-demo-sim` keeps the simulation out of the flight project altogether. Its
-manifest names the flight project (`project: ../linux-demo`), and it holds its own
-surrogate (a mirror of the GPIO driver) and device model (the IMU). The generated
-deployment goes to `examples/linux-demo-sim/wsts/` and is not checked in. See
-[Where simulation code lives](docs/surrogate-guide.md#where-simulation-code-lives).
-
-`examples/hub-demo` is a flight system of two computers, `Cdh` and `Payload`, joined by an
-F´ `GenericHub` over Ethernet. Its system manifest (`wsts-system.yaml`) names the two
-deployments and the link between them:
-
-```bash
-fprime-wsts generate examples/hub-demo/wsts-system.yaml
-```
-
-```bash
-for e in cdh payload; do (cd examples/hub-demo/wsts/HubDemo/$e && fprime-util generate && fprime-util build); done
-```
-
-```bash
-fprime-wsts run examples/hub-demo/wsts/HubDemo --gds
-```
-
-Both deployments start, the hub link comes up, and one GDS commands either computer with
-the merged dictionary.
+Both computers start, the hub link comes up, and one GDS commands either of them with the
+merged dictionary. No VxWorks toolchain is involved at any point.
 
 ## Driving a simulation
 
@@ -232,9 +202,9 @@ From Python (tests, scripts, agents):
 ```python
 from fprime_wsts.bridge import WstsBridge
 
-with WstsBridge("tcp:50100") as sim:
+with WstsBridge("tcp:50101") as sim:                   # the Payload computer
     sim.subscribe()
-    sim.fault_set("imuBus", "error", arg=3, count=5)   # five failed I2C transactions
+    sim.fault_set("i2cBus", "error", arg=3, count=5)    # five failed I2C transactions
     sim.inject_text("sensorUart", "$TEMP,48.0\n")       # bytes "from the device"
     sim.gpio_force("switchPin", True)                   # drive an input pin
     sim.advance(20)                                     # wait 20 simulation ticks
@@ -251,11 +221,11 @@ From a scenario file, one action per line, keyed on simulation ticks:
 ```json
 {"tick": 20, "op": "inject_bytes", "endpoint": "sensorUart", "text": "$TEMP,95.5\n"}
 {"tick": 25, "op": "gpio_force", "endpoint": "switchPin", "level": true}
-{"tick": 40, "op": "fault_set", "endpoint": "imuBus", "kind": "error", "arg": 3, "ticks": 30}
+{"tick": 40, "op": "fault_set", "endpoint": "i2cBus", "kind": "error", "arg": 3, "ticks": 30}
 ```
 
 ```bash
-fprime-wsts run . --gds --scenario overtemp.jsonl --record run1.jsonl
+fprime-wsts run <generated deployment> --gds --scenario overtemp.jsonl --record run1.jsonl
 ```
 
 A recording is itself a scenario: load it again to replay the run.
@@ -282,35 +252,18 @@ pytest python/tests
 fprime-util generate --ut && (cd Wsts/Core && fprime-util check)
 ```
 
-End-to-end, after building a generated deployment (shown for LinuxDemo):
+End-to-end, after building the simulated system (the merged dictionary is written when
+the system starts):
 
 ```bash
-D=examples/linux-demo/wsts/LinuxDemo; pytest tests/e2e/test_linux_demo.py -p fprime_wsts.pytest_plugin --wsts-deployment $D --wsts-gds --dictionary $D/build-artifacts/Linux/LinuxDemo/dict/LinuxDemoTopologyDictionary.json
-```
-
-For SubtopDemo, whose driver is inside a library subtopology:
-
-```bash
-D=examples/subtop-demo/wsts/SubtopDemo; pytest tests/e2e/test_subtop_demo.py -p fprime_wsts.pytest_plugin --wsts-deployment $D --wsts-gds --dictionary $D/build-artifacts/Linux/SubtopDemo/dict/SubtopDemoTopologyDictionary.json
-```
-
-For the same deployment with the simulator component of `examples/subtop-demo-sim`:
-
-```bash
-D=examples/subtop-demo-sim/wsts/SubtopDemo; pytest tests/e2e/test_subtop_demo_sim.py -p fprime_wsts.pytest_plugin --wsts-deployment $D --wsts-gds --dictionary $D/build-artifacts/Linux/SubtopDemo/dict/SubtopDemoTopologyDictionary.json
-```
-
-For the two-computer system (the merged dictionary is written when the system starts):
-
-```bash
-D=examples/hub-demo/wsts/HubDemo; pytest tests/e2e/test_hub_demo.py -p fprime_wsts.pytest_plugin --wsts-system $D --wsts-gds --dictionary $D/wsts-logs/HubDemoDictionary.json
+D=examples/mission-sim/wsts/Mission; pytest tests/e2e -p fprime_wsts.pytest_plugin --wsts-system $D --wsts-gds --dictionary $D/wsts-logs/MissionDictionary.json
 ```
 
 ## Status
 
 Built against F´ v4.4.2. Working today: the surrogates and transform above, real-time and
 scaled simulation time, faults, scenarios, record/replay, the bridge, multi-element systems
-with byte stream links, substituting instances defined inside subtopologies, the examples.
+with byte stream links, substituting instances defined inside subtopologies, the example.
 Designed but not built yet: deterministic stepped time (and with it lockstep across the
 elements of a system), GPIO links between elements, a POSIX-backed VxWorks API shim,
 file-system path remapping. See

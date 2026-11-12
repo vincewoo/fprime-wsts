@@ -1,0 +1,28 @@
+# WSTS system manifest for Mission: two flight computers joined by an F Prime hub.
+#
+#   ground  <--TCP-->  Cdh (VxWorks)  <==hub over Ethernet==>  Payload (Linux)
+#
+# Each element is an ordinary deployment of the flight project ../mission, with its own
+# manifest in this simulation project. This file adds what makes them one system: which
+# element the ground talks to, the link between them, and the range of IDs that reaches
+# each element.
+system: Mission
+
+# The GDS connects to this element, with the merged dictionary of both
+ground: cdh
+
+elements:
+  cdh:
+    manifest: cdh.yaml
+    ids: [0x00000000, 0x1FFFFFFF]
+  payload:
+    manifest: payload.yaml
+    # Cdh's command splitter sends opcodes from 0x20000000 through the hub
+    ids: [0x20000000, 0x2FFFFFFF]
+
+links:
+  # Ends at the Ethernet driver instance of each element. Those instances are replaced by
+  # byte stream surrogates, and the link carries what flight software sends between them.
+  - name: hub
+    a: cdh.hubDriver
+    b: payload.hubDriver

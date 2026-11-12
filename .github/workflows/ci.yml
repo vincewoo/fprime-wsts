@@ -26,97 +26,26 @@ jobs:
       - name: Python tests (manifest, patching, bridge client, generator)
         run: pytest python/tests
 
-      - name: Generated examples are up to date
-        run: |
-          fprime-wsts generate examples/linux-demo/LinuxDemo/wsts.yaml --check
-          fprime-wsts generate examples/vx-demo/VxDemo/wsts.yaml --check
-          fprime-wsts generate examples/hub-demo/wsts-system.yaml --check
-          fprime-wsts generate examples/subtop-demo/SubtopDemo/wsts.yaml --check
-          fprime-wsts generate examples/subtop-demo-sim/wsts.yaml --check
+      - name: Generated example is up to date
+        run: fprime-wsts generate examples/mission-sim/wsts-system.yaml --check
 
       - name: C++ unit tests for the WSTS core
         run: |
           fprime-util generate --ut
           cd Wsts/Core && fprime-util check -j"$(nproc)"
 
-      - name: Build the simulated LinuxDemo
-        working-directory: examples/linux-demo/wsts/LinuxDemo
-        run: |
-          fprime-util generate
-          fprime-util build -j"$(nproc)"
-
-      - name: End-to-end tests, LinuxDemo
-        run: |
-          D=examples/linux-demo/wsts/LinuxDemo
-          pytest tests/e2e/test_linux_demo.py -p fprime_wsts.pytest_plugin \
-            --wsts-deployment "$D" --wsts-gds \
-            --dictionary "$D/build-artifacts/Linux/LinuxDemo/dict/LinuxDemoTopologyDictionary.json"
-
-      - name: Build the simulated VxDemo (VxWorks deployment, no VxWorks toolchain)
-        working-directory: examples/vx-demo/wsts/VxDemo
-        run: |
-          fprime-util generate
-          fprime-util build -j"$(nproc)"
-
-      - name: End-to-end tests, VxDemo
-        run: |
-          D=examples/vx-demo/wsts/VxDemo
-          pytest tests/e2e/test_vx_demo.py -p fprime_wsts.pytest_plugin \
-            --wsts-deployment "$D" --wsts-gds \
-            --dictionary "$D/build-artifacts/Linux/VxDemo/dict/VxDemoTopologyDictionary.json"
-
-      - name: Build the simulated SubtopDemo (driver inside a library subtopology)
-        working-directory: examples/subtop-demo/wsts/SubtopDemo
-        run: |
-          fprime-util generate
-          fprime-util build -j"$(nproc)"
-
-      - name: End-to-end tests, SubtopDemo
-        run: |
-          D=examples/subtop-demo/wsts/SubtopDemo
-          pytest tests/e2e/test_subtop_demo.py -p fprime_wsts.pytest_plugin \
-            --wsts-deployment "$D" --wsts-gds \
-            --dictionary "$D/build-artifacts/Linux/SubtopDemo/dict/SubtopDemoTopologyDictionary.json"
-
-      - name: Build the simulated SubtopDemo with a simulator written as an F Prime component
-        working-directory: examples/subtop-demo-sim/wsts/SubtopDemo
-        run: |
-          fprime-util generate
-          fprime-util build -j"$(nproc)"
-
-      - name: End-to-end tests, SubtopDemo with the simulator component
-        run: |
-          D=examples/subtop-demo-sim/wsts/SubtopDemo
-          pytest tests/e2e/test_subtop_demo_sim.py -p fprime_wsts.pytest_plugin \
-            --wsts-deployment "$D" --wsts-gds \
-            --dictionary "$D/build-artifacts/Linux/SubtopDemo/dict/SubtopDemoTopologyDictionary.json"
-
-      - name: Generate and build the standalone simulation project (overlay not checked in)
-        run: |
-          fprime-wsts generate examples/linux-demo-sim/wsts.yaml
-          cd examples/linux-demo-sim/wsts/LinuxDemo
-          fprime-util generate
-          fprime-util build -j"$(nproc)"
-
-      - name: End-to-end tests, LinuxDemo from the simulation project
-        run: |
-          D=examples/linux-demo-sim/wsts/LinuxDemo
-          pytest tests/e2e/test_linux_demo_sim.py -p fprime_wsts.pytest_plugin \
-            --wsts-deployment "$D" --wsts-gds \
-            --dictionary "$D/build-artifacts/Linux/LinuxDemo/dict/LinuxDemoTopologyDictionary.json"
-
-      - name: Build the simulated HubDemo system (two elements joined by a hub)
+      - name: Build the simulated Mission system (a VxWorks and a Linux computer joined by a hub)
         run: |
           for element in cdh payload; do
-            (cd examples/hub-demo/wsts/HubDemo/$element && fprime-util generate && fprime-util build -j"$(nproc)")
+            (cd examples/mission-sim/wsts/Mission/$element && fprime-util generate && fprime-util build -j"$(nproc)")
           done
 
-      - name: End-to-end tests, HubDemo system
+      - name: End-to-end tests, Mission system
         run: |
-          D=examples/hub-demo/wsts/HubDemo
-          pytest tests/e2e/test_hub_demo.py -p fprime_wsts.pytest_plugin \
+          D=examples/mission-sim/wsts/Mission
+          pytest tests/e2e -p fprime_wsts.pytest_plugin \
             --wsts-system "$D" --wsts-gds \
-            --dictionary "$D/wsts-logs/HubDemoDictionary.json"
+            --dictionary "$D/wsts-logs/MissionDictionary.json"
 
       - name: Keep simulation logs when something fails
         if: failure()
@@ -124,5 +53,5 @@ jobs:
         with:
           name: wsts-logs
           path: |
-            examples/*/wsts/*/wsts-logs
-            !examples/*/wsts/*/wsts-logs/*Dictionary*.json
+            examples/mission-sim/wsts/Mission/wsts-logs
+            !examples/mission-sim/wsts/Mission/wsts-logs/*Dictionary*.json

@@ -13,25 +13,22 @@ from fprime_wsts.fpp import WstsError
 from fprime_wsts.generate import generate
 from fprime_wsts.manifest import parse_manifest
 
-REPO = Path(__file__).resolve().parents[2]
-FLIGHT = REPO / "examples" / "subtop-demo"
-SIM = REPO / "examples" / "subtop-demo-sim"
+from mission import CDH_MAIN, REPO, SIM, flight_manifest, needs_fpp
+from mission import MISSION as FLIGHT
 
-needs_fpp = pytest.mark.skipif(
-    shutil.which("fpp-to-json") is None or not (REPO / "lib" / "fprime" / "cmake").is_dir(),
-    reason="needs the FPP tools on PATH and the lib/fprime submodule",
-)
+#: The element of the example system with simulator components
+ELEMENT = "cdh.yaml"
 
 
 def manifest_of(sim_project: Path = SIM, **changes):
-    data = yaml.safe_load((sim_project / "wsts.yaml").read_text())
+    data = yaml.safe_load((sim_project / ELEMENT).read_text())
     data["project"] = str(FLIGHT)
     for key, value in changes.items():
         if value is None:
             data.pop(key, None)
         else:
             data[key] = value
-    return parse_manifest(data, sim_project / "wsts.yaml")
+    return parse_manifest(data, sim_project / ELEMENT)
 
 
 def run(sim_project: Path, out: Path, **changes):
@@ -64,11 +61,11 @@ def analyze_overlay(out: Path, tmp: Path, sim_project: Path = SIM) -> fpp.Topolo
     overrides, _ = fpp.find_config_overrides(roots)
     copies = sorted((out / "SensorLib").rglob("*.fpp"))
     originals = {FLIGHT / "lib" / "sensor-lib" / c.relative_to(out) for c in copies}
-    top = sorted((out / "SubtopDemo" / "Top").glob("*.fpp"))
+    top = sorted((out / "Cdh" / "Top").glob("*.fpp"))
     candidates = [c for c in fpp.select_candidates(fpp.find_fpp_files(roots), settings.framework_path, overrides)
-                  if FLIGHT / "SubtopDemo" not in c.parents and c not in originals]
+                  if FLIGHT / "Cdh" not in c.parents and c not in originals]
     fpp.locate_defs(tmp, candidates + copies)
-    return fpp.analyze(tmp, fpp.depend(tmp, top) + top).topologies["SubtopDemo.SubtopDemo"]
+    return fpp.analyze(tmp, fpp.depend(tmp, top) + top).topologies["Cdh.Cdh"]
 
 
 # ----------------------------------------------------------------------
@@ -135,8 +132,8 @@ def test_fpp_names_are_escaped_and_relative_to_the_topology():
 
 @needs_fpp
 def test_added_instances_are_in_the_patched_topology(default):
-    topology = (default.output / "SubtopDemo" / "Top" / "topology.fpp").read_text()
-    flight = (FLIGHT / "SubtopDemo" / "Top" / "topology.fpp").read_text()
+    topology = (default.output / "Cdh" / "Top" / "topology.fpp").read_text()
+    flight = (FLIGHT / "Cdh" / "Top" / "topology.fpp").read_text()
     assert "    instance SensorSim.Simulator\n" in topology
     assert "      rateGroup1Hz.RateGroupMemberOut[5] -> SensorSim.Simulator.schedIn\n" in topology
     assert "      rateGroup1Hz.RateGroupMemberOut[6] -> SensorSim.txBuffers.schedIn\n" in topology
@@ -145,20 +142,19 @@ def test_added_instances_are_in_the_patched_topology(default):
     for line in flight.splitlines():
         if "->" in line:
             assert line in topology
-    setup = (default.output / "SubtopDemo" / "Top" / "WstsSetup.cpp").read_text()
+    setup = (default.output / "Cdh" / "Top" / "WstsSetup.cpp").read_text()
     assert setup.index('::SensorLink::uart.wstsBind("uart", "");') < setup.index('::SensorSim::sensorPort.wstsServe("uart", "");')
-    compat = (default.output / "SubtopDemo" / "Top" / "WstsCompat.hpp").read_text()
+    compat = (default.output / "Cdh" / "Top" / "WstsCompat.hpp").read_text()
     assert "#include <SensorSim/Top/SubtopologyTopologyDefs.hpp>" in compat
     settings = (default.output / "settings.ini").read_text()
-    assert settings.splitlines()[4].endswith("subtop-demo-sim"), "the simulation project is a library of the overlay"
+    assert settings.splitlines()[4].endswith("mission-sim"), "the simulation project is a library of the overlay"
 
 
 @needs_fpp
 def test_flight_numbering_is_unchanged(default, tmp_path):
     """Rate group ports, ping ports and every other flight connection keep their numbers,
     and flight base IDs do not move"""
-    flight_out = generate(FLIGHT, parse_manifest(yaml.safe_load((FLIGHT / "SubtopDemo" / "wsts.yaml").read_text())),
-                          tmp_path / "flight")
+    flight_out = generate(FLIGHT, flight_manifest("Cdh", keep=["comDriver"], main=CDH_MAIN), tmp_path / "flight")
     (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()
     before = analyze_overlay(flight_out.output, tmp_path / "a")
@@ -167,13 +163,15 @@ def test_flight_numbering_is_unchanged(default, tmp_path):
     def numbers(topology, port):
         return {(n.from_instance, n.from_index, n.to_instance) for n in topology.numbered if n.from_port == port}
 
+    # Ping ports are numbered by instance name. SensorSim.prmDb has ping ports too, and is
+    # kept out of the health pattern, so the flight numbers do not depend on where it sorts.
     assert numbers(before, "PingSend") == numbers(after, "PingSend") == {
-        ("CdhCore.health", 0, "CdhCore.cmdDisp"), ("CdhCore.health", 1, "CdhCore.events"),
-        ("CdhCore.health", 2, "CdhCore.tlmSend"), ("CdhCore.health", 3, "SubtopDemo.rateGroup10Hz"),
-        ("CdhCore.health", 4, "SubtopDemo.rateGroup1Hz")}, "SensorSim.prmDb has ping ports and sorts between them"
+        ("CdhCore.health", 0, "Cdh.rateGroup10Hz"), ("CdhCore.health", 1, "Cdh.rateGroup1Hz"),
+        ("CdhCore.health", 2, "CdhCore.cmdDisp"), ("CdhCore.health", 3, "CdhCore.events"),
+        ("CdhCore.health", 4, "CdhCore.tlmSend")}
     assert numbers(before, "RateGroupMemberOut") < numbers(after, "RateGroupMemberOut")
     assert numbers(after, "RateGroupMemberOut") - numbers(before, "RateGroupMemberOut") == {
-        ("SubtopDemo.rateGroup1Hz", 5, "SensorSim.sensorSim"), ("SubtopDemo.rateGroup1Hz", 6, "SensorSim.txBuffers"),
+        ("Cdh.rateGroup1Hz", 5, "SensorSim.sensorSim"), ("Cdh.rateGroup1Hz", 6, "SensorSim.txBuffers"),
         ("SensorSim.fastGroup", 0, "SensorSim.gyroSim")}, "the simulation's own rate group, and two flight ports"
     # Everything else the flight topology connects explicitly (pattern-made command,
     # event and telemetry connections aside) is where it was
@@ -182,13 +180,13 @@ def test_flight_numbering_is_unchanged(default, tmp_path):
     assert explicit and explicit <= set(after.numbered)
     ids = {s["instance"]: s["base_id"] for s in default.report["substitutions"]}
     assert all(ids[s["instance"]] == s["base_id"] for s in flight_out.report["substitutions"])
-    assert ids["SubtopDemo.chronoTime"] == 0x20010000, "an instance substituted only here keeps its flight ID too"
+    assert ids["Cdh.chronoTime"] == 0x10010000, "an instance substituted only here keeps its flight ID too"
     # The WSTS instances go above every ID in use, which now includes the simulators'
-    assert flight_out.report["control"]["setup_base_id"] == 0x20022000
-    assert default.report["control"]["setup_base_id"] == 0x70007000
+    assert flight_out.report["control"]["setup_base_id"] == 0x10023000
+    assert default.report["control"]["setup_base_id"] == 0x18007000
     assert default.report["dictionary"]["flight_ids_unchanged"]
 
-    listed = (default.output / "SubtopDemo" / "Top" / "topology.fpp").read_text()
+    listed = (default.output / "Cdh" / "Top" / "topology.fpp").read_text()
     assert "health connections instance CdhCore.$health {" in listed and "      rateGroup1Hz\n    }" in listed
 
 
@@ -205,12 +203,12 @@ def test_simulator_items_are_reported(default):
         ("SensorSim.fastGroup", "Svc.PassiveRateGroup", "SensorSim.Simulator"),
         ("SensorSim.gyroSim", "SensorSim.GyroSim", "SensorSim.Simulator"),
     ]
-    assert simulators["instances"][0]["base_id"] == 0x70000000
+    assert simulators["instances"][0]["base_id"] == 0x18000000
     assert simulators["devices"] == [{"instance": "SensorSim.sensorPort", "component": "Wsts.BusByteStreamDevice",
                                       "endpoint": "uart", "kind": "bytestream"}]
     assert simulators["scheduling"] == [
-        {"instance": "SensorSim.sensorSim", "port": "schedIn", "driven_by": "SubtopDemo.rateGroup1Hz.RateGroupMemberOut[5]"},
-        {"instance": "SensorSim.txBuffers", "port": "schedIn", "driven_by": "SubtopDemo.rateGroup1Hz.RateGroupMemberOut[6]"},
+        {"instance": "SensorSim.sensorSim", "port": "schedIn", "driven_by": "Cdh.rateGroup1Hz.RateGroupMemberOut[5]"},
+        {"instance": "SensorSim.txBuffers", "port": "schedIn", "driven_by": "Cdh.rateGroup1Hz.RateGroupMemberOut[6]"},
     ]
     assert simulators["health"]["not_pinged"] == ["SensorSim.prmDb"]
     added = report["dictionary"]["added_by_simulators"]
@@ -245,7 +243,7 @@ def test_instances_without_a_subtopology(project, tmp_path):
             "sensorSim.bufferReturnOut -> txBuffers.bufferSendIn",
         ],
     })
-    topology = (result.output / "SubtopDemo" / "Top" / "topology.fpp").read_text()
+    topology = (result.output / "Cdh" / "Top" / "topology.fpp").read_text()
     assert "    instance SensorSim.sensorSim\n    instance SensorSim.txBuffers\n    instance SensorSim.sensorPort\n" in topology
     assert "      rateGroup10Hz.RateGroupMemberOut[4] -> SensorSim.sensorSim.schedIn\n" in topology
     assert "      SensorSim.sensorPort.$recv -> SensorSim.sensorSim.drvReceiveIn\n" in topology
@@ -257,7 +255,7 @@ def test_instances_without_a_subtopology(project, tmp_path):
 @needs_fpp
 def test_connection_to_a_port_exported_by_a_flight_subtopology(project, tmp_path):
     """A simulator output drives an input that a flight subtopology exports"""
-    simulators = yaml.safe_load((SIM / "wsts.yaml").read_text())["simulators"]
+    simulators = yaml.safe_load((SIM / ELEMENT).read_text())["simulators"]
     simulators["connections"].append("SensorSim.sensorSim.bufferReturnOut -> ComCcsds.Subtopology.commsBufferSendIn")
     with pytest.raises(WstsError, match=r"already connected, and an output port drives one input"):
         run(project, tmp_path / "out", simulators=simulators)
@@ -276,7 +274,7 @@ def test_connection_to_a_port_exported_by_a_flight_subtopology(project, tmp_path
 
 @needs_fpp
 def test_id_collision_names_both_instances(project, tmp_path):
-    replace_in(project / "SensorSim" / "Top" / "SensorSim.fpp", "base id 0x70000000", "base id 0x06000001")
+    replace_in(project / "SensorSim" / "Top" / "SensorSim.fpp", "base id 0x18000000", "base id 0x06000001")
     with pytest.raises(WstsError) as error:
         run(project, tmp_path / "out")
     message = str(error.value)
@@ -287,18 +285,18 @@ def test_id_collision_names_both_instances(project, tmp_path):
 
 @needs_fpp
 def test_id_collision_with_the_wsts_instances(project, tmp_path):
-    with pytest.raises(WstsError, match=r"(?s)SensorSim.sensorSim.*WSTS instance SubtopDemo.wstsControl.*control.base_id"):
-        run(project, tmp_path / "out", control={"base_id": 0x6FFFF000})
+    with pytest.raises(WstsError, match=r"(?s)SensorSim.sensorSim.*WSTS instance Cdh.wstsControl.*control.base_id"):
+        run(project, tmp_path / "out", control={"base_id": 0x17FFF000})
 
 
 @needs_fpp
 def test_rate_group_out_of_ports(project, tmp_path):
-    simulators = yaml.safe_load((SIM / "wsts.yaml").read_text())["simulators"]
+    simulators = yaml.safe_load((SIM / ELEMENT).read_text())["simulators"]
     simulators["connections"] += ["rateGroup1Hz.RateGroupMemberOut -> SensorSim.txBuffers.schedIn"] * 4
     with pytest.raises(WstsError) as error:
         run(project, tmp_path / "out", simulators=simulators)
     message = str(error.value)
-    assert "SubtopDemo.rateGroup1Hz (Svc.ActiveRateGroup) has no free RateGroupMemberOut port: all 10 are connected" in message
+    assert "Cdh.rateGroup1Hz (Svc.ActiveRateGroup) has no free RateGroupMemberOut port: all 10 are connected" in message
     assert "ActiveRateGroupOutputPorts" in message and "another rate group" in message
 
 
@@ -307,7 +305,7 @@ def test_rate_group_out_of_ports(project, tmp_path):
     ([{"instance": "SensorSim.sensorPort", "endpoint": "radio"}], None,
      r"no surrogate is bound to endpoint 'radio'. Endpoints: uart, vxTimer"),
     ([{"instance": "SensorSim.sensorPort", "endpoint": "vxTimer"}], None,
-     r"endpoint 'vxTimer' \(SubtopDemo.vxTimer\) is not a byte stream"),
+     r"endpoint 'vxTimer' \(Cdh.vxTimer\) is not a byte stream"),
     ([{"instance": "SensorSim.sensorPort", "endpoint": "uart"}],
      [{"name": "scripted", "class": "Wsts::ScriptedByteStream", "endpoint": "uart", "kind": "bytestream"}],
      r"endpoint 'uart' already has the model 'scripted'"),
@@ -337,7 +335,7 @@ def test_unknown_or_duplicate_simulator_names(tmp_path):
         run(SIM, tmp_path / "out", simulators={
             "topologies": ["SensorSim.Simulator"],
             "connections": ["rateGroup10Hz.RateGroupMemberOut -> SensorLink.Subtopology.uartRun"]})
-    with pytest.raises(WstsError, match=r"SubtopDemo.rateGroup1Hz \(Svc.ActiveRateGroup\) has no port 'Out'. Its ports:"):
+    with pytest.raises(WstsError, match=r"Cdh.rateGroup1Hz \(Svc.ActiveRateGroup\) has no port 'Out'. Its ports:"):
         run(SIM, tmp_path / "out", simulators={
             "topologies": ["SensorSim.Simulator"], "connections": ["rateGroup1Hz.Out -> SensorSim.Simulator.schedIn"]})
     with pytest.raises(WstsError, match=r"RateGroupMemberOut\[3\] is already connected"):
@@ -437,7 +435,7 @@ def test_port_mapping_renames_and_removes_connections_in_a_subtopology(uart_proj
     assert "      uart.linkUp                 -> sensor.drvConnected\n" in patched
     # Exported by the subtopology and connected in the deployment: renamed where it is exported
     assert "    port uartRun = uart.tick\n" in patched
-    top = (result.output / "SubtopDemo" / "Top" / "topology.fpp").read_text()
+    top = (result.output / "Cdh" / "Top" / "topology.fpp").read_text()
     assert "rateGroup1Hz.RateGroupMemberOut[3] -> SensorLink.Subtopology.uartRun" in top
     # No counterpart: commented out, line for line
     assert "      # removed by fprime-wsts (Sim.SimUart has no counterpart of allocate): " \
@@ -457,7 +455,7 @@ def test_removing_an_exported_port_removes_its_connections(uart_project, tmp_pat
     ports = {"ready": "linkUp", "run": None, "allocate": None, "deallocate": None}
     result = run(uart_project, tmp_path / "out", substitute=substitute(ports=ports, queue_size=4))
     patched = (result.output / "SensorLib" / "SensorLink" / "SensorLink.fpp").read_text()
-    top = (result.output / "SubtopDemo" / "Top" / "topology.fpp").read_text()
+    top = (result.output / "Cdh" / "Top" / "topology.fpp").read_text()
     assert "    # removed by fprime-wsts (Sim.SimUart has no counterpart of run): port uartRun = uart.run\n" in patched
     assert "# removed by fprime-wsts (Sim.SimUart has no counterpart of run): " \
            "rateGroup1Hz.RateGroupMemberOut[3] -> SensorLink.Subtopology.uartRun\n" in top
@@ -513,22 +511,16 @@ def test_attribute_clauses_are_written_in_fpp_order():
 @needs_fpp
 def test_cache_variables_reach_the_overlay(default, tmp_path):
     root = (default.output / "CMakeLists.txt").read_text()
-    line = ('set(SENSOR_SIM_COMPONENTS "SerialSensorSim;GyroSim;SimTime;Top" CACHE STRING '
+    line = ('set(MISSION_SIM_MODULES "SensorSim/SerialSensorSim;SensorSim/GyroSim;SensorSim/SimTime;SensorSim/Top" CACHE STRING '
             '"Set by fprime-wsts from cmake.cache in the manifest")')
     assert line in root and root.index(line) < root.index("find_package(FPrime")
     assert "FORCE" not in root, "a -D on the command line still wins"
     # The simulation project's library.cmake reads the variable: that is what builds the simulator
-    assert "foreach (SENSOR_SIM_COMPONENT IN LISTS SENSOR_SIM_COMPONENTS)" in (SIM / "library.cmake").read_text()
+    assert "foreach (MISSION_SIM_MODULE IN LISTS MISSION_SIM_MODULES)" in (SIM / "library.cmake").read_text()
 
     # A variable the flight settings.ini also sets: the manifest's value is the one used
-    result = run(SIM, tmp_path / "out", cmake={"cache": {"SENSOR_SIM_COMPONENTS": ["SerialSensorSim", "Top"],
+    result = run(SIM, tmp_path / "out", cmake={"cache": {"MISSION_SIM_MODULES": ["SensorSim/SerialSensorSim", "SensorSim/Top"],
                                                          "FPRIME_ENABLE_AUTOCODER_UTS": True}})
     assert "FPRIME_ENABLE_AUTOCODER_UTS" not in (result.output / "settings.ini").read_text()
     assert "FPRIME_ENABLE_FRAMEWORK_UTS=OFF" in (result.output / "settings.ini").read_text()
     assert 'set(FPRIME_ENABLE_AUTOCODER_UTS "ON" CACHE STRING' in (result.output / "CMakeLists.txt").read_text()
-
-
-@needs_fpp
-def test_checked_in_example_is_current():
-    result = generate(FLIGHT, parse_manifest(yaml.safe_load((SIM / "wsts.yaml").read_text()), SIM / "wsts.yaml"), check=True)
-    assert result.changed == [], f"regenerate: fprime-wsts generate {SIM / 'wsts.yaml'}"

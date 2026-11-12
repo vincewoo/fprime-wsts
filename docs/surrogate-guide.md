@@ -78,10 +78,11 @@ simulation project is then an F´ library of its own:
 - `catalogs` and `output` are relative to the manifest; flight paths (`deployment`,
   `sources`, ...) stay relative to the flight project.
 
-[`examples/linux-demo-sim`](../examples/linux-demo-sim) is a complete one for the LinuxDemo
-flight project: a mirror surrogate for the GPIO driver and a device model for the IMU.
-Simulation code can also live inside the flight project, as in `examples/linux-demo`; then
-it is built like any other project module.
+[`examples/mission-sim`](../examples/mission-sim) is a complete one for the flight project
+`examples/mission`: among other things a mirror surrogate for the GPIO driver and a device
+model for the IMU. Simulation code can also live inside the flight project, with the
+manifest next to the deployment (no `project` key); then it is built like any other project
+module, and the generated deployment goes to `wsts/<deployment>` in the flight project.
 
 ## Device models
 
@@ -227,9 +228,9 @@ endpoint, so faults, recording, replay and the bridge work the same either way.
      - {instance: SensorSim.sensorPort, endpoint: uart}
    ```
 
-[`examples/subtop-demo-sim`](../examples/subtop-demo-sim) is a complete one, for the
-`subtop-demo` flight project. The keys are described in
-[reference.md](reference.md#simulator-components).
+[`examples/mission-sim`](../examples/mission-sim) has a complete one, for the `Cdh`
+element of the flight project `examples/mission` (`cdh.yaml`, `SensorSim/`). The keys are
+described in [reference.md](reference.md#simulator-components).
 
 **Base IDs.** Give the simulator instances a block of IDs that the flight software does
 not use and is unlikely to grow into. Flight IDs never move; a collision is an error.
@@ -572,7 +573,7 @@ tick in the same way. The time unit driver then runs as in flight.
 ### Mirror surrogates
 
 ```bash
-fprime-wsts scaffold Drv.LinuxGpioDriver --project examples/linux-demo --output examples/linux-demo-sim/Surrogates/SimLinuxGpio --name Sim.SimLinuxGpio
+fprime-wsts scaffold Drv.LinuxGpioDriver --project examples/mission --output examples/mission-sim/Surrogates/SimLinuxGpio --name Sim.SimLinuxGpio
 ```
 
 This copies the component's model, with its included event and telemetry definitions,
@@ -581,5 +582,5 @@ remaining steps (`fprime-util impl` for the implementation templates, then the b
 hook and bus calls). The scaffold does not write the C++ implementation. A model copied
 into a different module keeps its names as written, so names relative to the old module
 must be qualified (`import Gpio` becomes `import Drv.Gpio`); fpp-check reports them.
-`examples/linux-demo-sim/Surrogates/SimLinuxGpio` is the finished result of the command
+`examples/mission-sim/Surrogates/SimLinuxGpio` is the finished result of the command
 above.

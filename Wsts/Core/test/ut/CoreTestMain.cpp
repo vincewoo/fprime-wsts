@@ -374,6 +374,38 @@ TEST_F(CoreTest, RecordingReplaysAsStimulusAndAsResponses) {
     std::remove(path.c_str());
 }
 
+// Two devices on one I2C bus are polled at different rates, so a replay that starts at
+// another point of the schedule interleaves them differently: each address is served its
+// own responses
+TEST_F(CoreTest, ReplayedResponsesAreKeptApartByI2cAddress) {
+    Wsts::RegisterMapI2c power;
+    Bus::get().attachI2c("i2c", 0x40, &power);
+    ASSERT_TRUE(imu.set("0", "0x11"));
+    ASSERT_TRUE(power.set("0", "0x22"));
+    auto read = [](std::uint32_t addr) {
+        Bytes data(1, 0);
+        EXPECT_EQ(Bus::get().i2cTransact("i2c", addr, Bytes{0}, data), 0);
+        return data[0];
+    };
+    const std::string path = tempFile("two-devices.jsonl");
+    ASSERT_TRUE(run(R"({"op": "record_start", "path": ")" + path + R"("})"));
+    read(0x68);
+    read(0x68);
+    read(0x40);
+    ASSERT_TRUE(run(R"({"op": "record_stop"})"));
+
+    ASSERT_TRUE(imu.set("0", "0x99"));
+    ASSERT_TRUE(power.set("0", "0x88"));
+    ASSERT_TRUE(run(R"({"op": "scenario_load", "path": ")" + path + R"(", "mode": "responses"})"));
+    ASSERT_TRUE(run(R"({"op": "scenario_start"})"));
+    EXPECT_EQ(read(0x40), 0x22);
+    EXPECT_EQ(read(0x68), 0x11);
+    EXPECT_EQ(read(0x68), 0x11);
+    ASSERT_TRUE(run(R"({"op": "scenario_stop"})"));
+    EXPECT_EQ(read(0x40), 0x88);
+    std::remove(path.c_str());
+}
+
 }  // namespace
 
 // ----------------------------------------------------------------------

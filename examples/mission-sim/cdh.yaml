@@ -1,0 +1,84 @@
+# WSTS manifest for Cdh, the ground-facing VxWorks computer of the Mission system.
+#
+# `project` makes this directory a standalone simulation project: the flight project is
+# read, never written. Paths to flight things (deployment, sources) are relative to the
+# flight project; paths to simulation things (catalogs, cmake files, libraries) are
+# relative to this file.
+#
+# Nothing here names the hardware drivers. The watchdog timer is replaced from the
+# surrogate catalog; so is the UART driver, although it is inside the SensorLink
+# subtopology of the flight project's library lib/sensor-lib. Its qualified name is
+# SensorLink.uart; the base name `uart` is enough wherever it is unambiguous, as below.
+# The Ethernet driver to the payload computer is replaced because wsts-system.yaml ends a
+# link at it.
+project: ../mission
+deployment: Cdh
+
+# The ground link stays a real TCP client so the GDS connects exactly as in flight
+keep:
+  - comDriver
+
+# A downloadable kernel module has no main(): the flight entry points are called by the
+# VxWorks start-up script. The generated main() calls them, with the flight hub port.
+main:
+  generate: true
+  declarations: |
+    extern "C" int cdhStart(const char* hostname, int port, int hubPort);
+    extern "C" void cdhStop();
+  start: cdhStart(hostname, port, 50050)
+  stop: cdhStop()
+
+# The flight time source is replaced by a component of this project that has the same
+# port and talks to nothing else: no bus endpoint.
+substitute:
+  - instance: chronoTime
+    with: SensorSim.SimTime
+    endpoint: none
+
+# Instances this project adds to the simulated topology. SensorSim.Simulator is a
+# subtopology (SensorSim/Top/SensorSim.fpp): the serial sensor simulator, its buffer
+# manager, the adapter that puts it on the bus, and a gyro model on a clock of its own.
+simulators:
+  topologies:
+    - SensorSim.Simulator
+  # Included for the phase code of those instances
+  headers:
+    - SensorSim/Top/SubtopologyTopologyDefs.hpp
+  # Connections between the added instances and flight ones. No port numbers: a free
+  # rate group port is chosen, and the flight connections keep theirs.
+  connections:
+    - rateGroup1Hz.RateGroupMemberOut -> SensorSim.Simulator.schedIn
+    - rateGroup1Hz.RateGroupMemberOut -> SensorSim.txBuffers.schedIn
+
+# The adapter instance is the device on the endpoint of the flight UART: the serial sensor
+# is an F Prime component, not a C++ model
+devices:
+  - instance: SensorSim.sensorPort
+    endpoint: uart
+
+# SensorSim.simClock cycles the simulation's own rate group, which steps the gyro model.
+# 125 Hz is faster than any flight rate group and not a multiple of the 10 Hz flight tick.
+clocks:
+  - instance: SensorSim.simClock
+    hz: 125
+
+# A library vendored in this project, with its own library.cmake and module names
+libraries:
+  sim:
+    - lib/sim-common
+
+cmake:
+  # This project's library.cmake builds only the modules this element uses
+  cache:
+    MISSION_SIM_MODULES: [SensorSim/SerialSensorSim, SensorSim/GyroSim, SensorSim/SimTime, SensorSim/Top]
+  # CMake this simulation needs around the flight modules: an alias for one of them
+  include:
+    - sim.cmake
+
+# Environment of the simulated deployment. A value that starts with ./ or ../ is a path
+# relative to this file.
+run:
+  env:
+    SENSOR_SIM_PROFILE: ./profiles/calm.txt
+
+bridge: tcp:50100
