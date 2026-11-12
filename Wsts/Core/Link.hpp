@@ -40,6 +40,7 @@ class LinkByteStream : public Model, public ByteStreamDevice {
 
     bool set(const std::string& key, const std::string& value) override;
     void onBytes(const Bytes& tx, ByteSink& reply) override;
+    bool peer() const override { return true; }
 
     //! Start connecting. Without an address (WSTS_LINK_DIR unset and none given) the link
     //! stays down, so that an element can still be run on its own.

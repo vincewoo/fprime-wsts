@@ -199,7 +199,9 @@ def test_record_then_replay_reproduces_the_run(gds, payload, tmp_path, quiet_sen
     recording = tmp_path / "run.jsonl"
 
     payload.record_start(recording)
-    payload.advance(4)
+    # Over a second of undisturbed readings first: Payload's telemetry reaches the ground
+    # once a second, latest value only, and the response replay below has to be seen
+    payload.advance(30)
     payload.inject_text("sensorUart", "$TEMP,33.0\n")
     payload.advance(6)
     payload.fault_set("i2cBus", "error", arg=3, count=3)
@@ -277,6 +279,6 @@ def test_spi_faults_then_a_device_model_in_python(gds, payload):
         model.serve_spi("spiBus", adc)
         gds.assert_telemetry("Payload.adc.DetectorCounts", value=0x2A5, timeout=T)
     assert commands and all(command == bytes([0x01, 0x80, 0x00]) for command in commands)
-    # The external model has gone away: the bus reports that nothing answers
-    gds.clear_histories()
-    gds.assert_event("Payload.adc.SampleError", timeout=T)
+    # The external model has gone away. Unlike I2C, nothing reports it: with no device on
+    # the bus MISO floats, and the transfer reads zeros
+    gds.assert_telemetry("Payload.adc.DetectorCounts", value=0, timeout=T)

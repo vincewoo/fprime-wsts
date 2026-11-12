@@ -75,6 +75,10 @@ class ByteStreamDevice {
     virtual ~ByteStreamDevice() = default;
     //! Flight software transmitted `tx`. Reply (if any) through `reply`.
     virtual void onBytes(const Bytes& tx, ByteSink& reply) = 0;
+    //! Whether this is the end of a link to another element of a system rather than a
+    //! model. While recorded responses are replayed, models are bypassed, but what flight
+    //! software sends still reaches a peer: that element is running live.
+    virtual bool peer() const { return false; }
 };
 
 class I2cDevice {

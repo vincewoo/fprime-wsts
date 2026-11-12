@@ -499,6 +499,33 @@ TEST_F(CoreTest, LinkTrafficIsReplacedByTheRecordingDuringReplay) {
     EXPECT_EQ(received.size(), 2u);
 }
 
+// The other end of a link is a live element, not a model: while recorded responses are
+// replayed, what flight software sends still reaches it
+TEST_F(CoreTest, FlightOutputReachesALinkPeerDuringReplay) {
+    class Counter : public Wsts::ByteStreamDevice {
+      public:
+        explicit Counter(bool peer) : m_peer(peer) {}
+        void onBytes(const Bytes&, Wsts::ByteSink&) override { seen++; }
+        bool peer() const override { return m_peer; }
+        int seen = 0;
+
+      private:
+        bool m_peer;
+    };
+    Counter model(false);
+    Counter link(true);
+    Bus::get().attachByteStream("modelPort", &model);
+    Bus::get().attachByteStream("linkPort", &link);
+    Bus::get().setReplay(true);
+    EXPECT_EQ(Bus::get().byteStreamSend("modelPort", text("x")), 0);
+    EXPECT_EQ(Bus::get().byteStreamSend("linkPort", text("x")), 0);
+    Bus::get().setReplay(false);
+    EXPECT_EQ(model.seen, 0);
+    EXPECT_EQ(link.seen, 1);
+    Bus::get().detach("modelPort");
+    Bus::get().detach("linkPort");
+}
+
 TEST_F(CoreTest, LinkWithoutAnAddressStaysDown) {
     ::unsetenv("WSTS_LINK_DIR");
     Wsts::LinkByteStream link;

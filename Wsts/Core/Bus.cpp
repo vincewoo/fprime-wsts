@@ -333,7 +333,8 @@ int Bus::byteStreamSend(const std::string& endpoint, const Bytes& data) {
         std::lock_guard<std::mutex> lock(m_mutex);
         device = this->endpointLocked(endpoint).byteStream;
     }
-    if (device != nullptr && !m_replay.load()) {
+    // While responses are replayed a model is bypassed; the other end of a link is not
+    if (device != nullptr && (!m_replay.load() || device->peer())) {
         ReplySink sink(*this, endpoint);
         device->onBytes(record.data, sink);
         if (effects.duplicate) {
