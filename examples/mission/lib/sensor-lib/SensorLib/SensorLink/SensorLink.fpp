@@ -8,7 +8,7 @@ module SensorLink {
   {
     phase Fpp.ToCpp.Phases.startTasks """
     // The sensor is on the second on-board serial port
-    if (!SensorLink::uart.open("/tyCo/1", VxWorksDrv::VxWorksUartDriver::BAUD_19200,
+    if (!SensorLink::uart.open("/tyCo/1", state.sensorLink.baud,
                                VxWorksDrv::VxWorksUartDriver::NO_FLOW,
                                VxWorksDrv::VxWorksUartDriver::PARITY_NONE,
                                SensorLinkConfig::UART_BUFFER_SIZE)) {

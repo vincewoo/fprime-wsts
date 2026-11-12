@@ -77,10 +77,15 @@ def test_vxworks_deployment_converts_without_its_toolchain(tmp_path):
         "VxWorksSvc.VxWatchDogTimer", "VxWorksDrv.VxWorksUartDriver"}
     timer = next(s for s in report["substitutions"] if s["surrogate"] == "Wsts.SimTick")
     assert "mode=thread" in timer["options"]
-    assert any("fprime-vxworks" in library for library in report["libraries"]["dropped"])
+    # The platform library stays, for one file: the project's configuration module overrides
+    # the VxWorksCfg.hpp it supplies, and F Prime rejects an override of nothing. Nothing else
+    # of the library is built on the host (test_flight_shapes.py has the details).
+    assert not report["libraries"]["dropped"]
+    assert any("fprime-vxworks" in library for library in report["libraries"]["kept"])
+    assert [entry["supplies"] for entry in report["libraries"]["kept_for_configuration"]] == ["VxWorksCfg.hpp"]
     assert report["dropped_cmake_options"] == ["VX_TARGET_TYPE=DKM", "FPRIME_PLATFORM=VxWorks"]
     settings = (result.output / "settings.ini").read_text()
-    assert "vxworks" not in settings.lower() and "default_toolchain: native" in settings
+    assert "default_toolchain: native" in settings and "FPRIME_PLATFORM" not in settings
     assert "cdhStart(hostname, port, 50050);" in (result.output / "Cdh" / "WstsMain.cpp").read_text()
 
 

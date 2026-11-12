@@ -6,6 +6,7 @@
 #include <Fw/Logger/Logger.hpp>
 #include <Fw/Types/MallocAllocator.hpp>
 #include <Svc/BufferManager/BufferManager.hpp>
+#include <VxWorks/Drv/VxWorksUartDriver/VxWorksUartDriver.hpp>
 #include "SensorLib/SensorLink/SensorLinkConfig/FppConstantsAc.hpp"
 
 namespace SensorLink {
@@ -19,7 +20,8 @@ inline Fw::MemAllocator& memAllocator() {
 }  // namespace Allocation
 
 struct SubtopologyState {
-    // Empty: the SensorLink subtopology needs no external state
+    //! Line speed of the sensor's serial port. The deployment may set another before set-up.
+    VxWorksDrv::VxWorksUartDriver::UartBaudRate baud = VxWorksDrv::VxWorksUartDriver::BAUD_19200;
 };
 
 }  // namespace SensorLink

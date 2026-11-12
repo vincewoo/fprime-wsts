@@ -6,9 +6,16 @@ cmake_minimum_required(VERSION 3.26)
 project(PayloadSim VERSION 1.0.0 LANGUAGES C CXX)
 
 add_compile_definitions(WSTS_SIM=1)
+# Carried over from the flight project's CMakeLists.txt
+add_compile_definitions(MISSION_VEHICLE_ID=2)
+# Headers that stand in for those of replaced flight drivers: found before the originals
+include_directories(BEFORE "${CMAKE_CURRENT_LIST_DIR}/wsts-include")
 # From `cmake.cache` in the manifest. Set before F Prime reads the libraries; a value given on the
 # command line (-D) takes precedence.
 set(MISSION_SIM_MODULES "Models;Surrogates/SimLinuxGpio" CACHE STRING "Set by fprime-wsts from cmake.cache in the manifest")
+# Carried over from the flight project's CMakeLists.txt, which sets them before F Prime is read.
+# `cmake.cache` in the manifest takes precedence, and so does -D on the command line.
+set(SENSOR_LIB_BOARD "cdh-rev-b" CACHE STRING "Carried over by fprime-wsts from the flight project's CMakeLists.txt")
 # The framework's and the libraries' modules are added below, once the redirection is set up
 set(FPRIME_INCLUDE_FRAMEWORK_CODE OFF)
 find_package(FPrime REQUIRED PATHS "${CMAKE_CURRENT_LIST_DIR}/../../../../../lib/fprime/cmake")
@@ -40,6 +47,13 @@ function(add_fprime_subdirectory FP_SOURCE_DIR)
             endif()
         endforeach()
     endif()
+    # A directory is added once: a module that another module adds itself is not added again
+    get_property(WSTS_ADDED GLOBAL PROPERTY WSTS_ADDED_DIRECTORIES)
+    if (WSTS_REQUESTED IN_LIST WSTS_ADDED)
+        message(STATUS "[WSTS] ${WSTS_REQUESTED} is already part of the build: not added again")
+        return()
+    endif()
+    set_property(GLOBAL APPEND PROPERTY WSTS_ADDED_DIRECTORIES "${WSTS_REQUESTED}")
     get_filename_component(WSTS_HERE "${CMAKE_CURRENT_SOURCE_DIR}" REALPATH)
     set(WSTS_SOURCE "")
     set(WSTS_INDEX 0)
@@ -87,4 +101,15 @@ add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/Components/PowerMonitor")
 # where both replace a file the simulation's is the one built
 set(WSTS_ADDING_DEFERRED ON)
 add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../../config")
+
+# Headers of replaced flight drivers resolve to stand-ins (wsts-include/). A driver module that is
+# still part of this build compiles against its own header.
+foreach (WSTS_MODULE IN ITEMS Drv_LinuxGpioDriver Drv_LinuxI2cDriver Drv_LinuxSpiDriver Drv_PosixUartDriver Drv_TcpClient Svc_LinuxTimer)
+    if (TARGET ${WSTS_MODULE})
+        get_target_property(WSTS_MODULE_TYPE ${WSTS_MODULE} TYPE)
+        if (NOT WSTS_MODULE_TYPE STREQUAL "INTERFACE_LIBRARY")
+            target_compile_definitions(${WSTS_MODULE} PRIVATE WSTS_FLIGHT_DRIVER_BUILD)
+        endif()
+    endif()
+endforeach()
 add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Payload")

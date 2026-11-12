@@ -160,7 +160,8 @@ def test_patched_subtopology_takes_the_place_of_the_original(default):
     assert "instance uart: Wsts.SimByteStream base id SensorLinkConfig.BASE_ID + 0x1000" in patched
     assert patched == original.replace("VxWorksDrv.VxWorksUartDriver base id", "Wsts.SimByteStream base id"), \
         "only the component type changes: the phase code still names the flight driver"
-    assert "VxWorksDrv::VxWorksUartDriver::BAUD_19200" in patched
+    # The baud rate is a field of the subtopology's state, of the flight driver's type
+    assert "VxWorksDrv::VxWorksUartDriver::NO_FLOW" in patched and "state.sensorLink.baud" in patched
     assert original == (MISSION / "lib/sensor-lib/SensorLib/SensorLink/SensorLink.fpp").read_text()
 
     module = (out / "SensorLib" / "SensorLink" / "CMakeLists.txt").read_text()
@@ -216,8 +217,11 @@ def test_report_lists_the_qualified_instance(default):
     text = (default.output / "wsts-report.md").read_text()
     assert "| `SensorLink.uart` | `VxWorksDrv.VxWorksUartDriver` | `Wsts.SimByteStream` | catalog | `uart` |" in text
     assert "## Modules built from a patched copy" in text and "`SensorLib_SensorLink`" in text
-    assert any("fprime-vxworks" in library for library in report["libraries"]["dropped"])
+    # sensor-lib because the model uses it; fprime-vxworks only because the project overrides
+    # a configuration header it supplies, which the report says
     assert any(library.endswith("lib/sensor-lib") for library in report["libraries"]["kept"])
+    assert any("fprime-vxworks" in library for library in report["libraries"]["kept"])
+    assert [entry["library"].rsplit("/", 1)[-1] for entry in report["libraries"]["kept_for_configuration"]] == ["fprime-vxworks"]
 
 
 # ----------------------------------------------------------------------

@@ -1,7 +1,7 @@
 module SensorLinkConfig {
 
   @ Project override: SensorLink sits at 0x06000000 on this vehicle (library default 0x30000000)
-  constant BASE_ID = 0x06000000
+  constant BASE_ID = MissionIds.SENSOR_LINK
 
   @ Priority of the UART receive task
   constant UART_PRIORITY = 31

@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+from . import flight_cmake
 from . import fpp
 from . import simulators as sims
 from .fpp import WstsError
@@ -78,6 +79,15 @@ class Plan:
     sim: sims.SimulatorPlan = field(default_factory=sims.SimulatorPlan)
 
 
+def _host_restriction(text: str) -> Optional[re.Match]:
+    """The first restrict_platforms() call in CMake text that leaves a Linux host out"""
+    for match in re.finditer(r"restrict_platforms\(([^)]*)\)", text):
+        platforms = {p.strip().strip('"').lower() for p in match.group(1).split() if p.strip()}
+        if platforms and not (platforms & HOST_PLATFORMS):
+            return match
+    return None
+
+
 def _restricted_from_host(component: fpp.Component, stop_at: List[Path]) -> Optional[str]:
     """If the component's module is platform-restricted away from Linux, say how"""
     directory = component.file.parent
@@ -87,10 +97,9 @@ def _restricted_from_host(component: fpp.Component, stop_at: List[Path]) -> Opti
             candidate = directory / name
             if not candidate.is_file():
                 continue
-            for match in re.finditer(r"restrict_platforms\(([^)]*)\)", candidate.read_text(errors="replace")):
-                platforms = {p.strip().strip('"').lower() for p in match.group(1).split() if p.strip()}
-                if platforms and not (platforms & HOST_PLATFORMS):
-                    return f"restrict_platforms({match.group(1).strip()}) in {candidate}"
+            match = _host_restriction(candidate.read_text(errors="replace"))
+            if match:
+                return f"restrict_platforms({match.group(1).strip()}) in {candidate}"
         if directory in roots or directory.parent == directory:
             return None
         directory = directory.parent
@@ -880,6 +889,33 @@ DEFERRED_CHECK = """
         endforeach()
     endif()"""
 
+EXCLUDED_SETS = """
+# From `cmake.exclude_subdirectories` in the manifest: modules that a library, the framework or
+# another module adds, and that are left out of the simulated build.
+set(WSTS_EXCLUDED_MODULES
+{modules}
+)"""
+
+EXCLUDED_CHECK = """
+    foreach (WSTS_MODULE IN LISTS WSTS_EXCLUDED_MODULES)
+        get_filename_component(WSTS_MODULE "${WSTS_MODULE}" REALPATH)
+        if (WSTS_MODULE STREQUAL WSTS_REQUESTED)
+            message(STATUS "[WSTS] ${WSTS_REQUESTED} is left out (cmake.exclude_subdirectories)")
+            return()
+        endif()
+    endforeach()"""
+
+# A backstop for what the generator could not read from the flight project's CMake files: it
+# leaves a module that another module adds out of its own list, where it can see that.
+DUPLICATE_CHECK = """
+    # A directory is added once: a module that another module adds itself is not added again
+    get_property(WSTS_ADDED GLOBAL PROPERTY WSTS_ADDED_DIRECTORIES)
+    if (WSTS_REQUESTED IN_LIST WSTS_ADDED)
+        message(STATUS "[WSTS] ${WSTS_REQUESTED} is already part of the build: not added again")
+        return()
+    endif()
+    set_property(GLOBAL APPEND PROPERTY WSTS_ADDED_DIRECTORIES "${WSTS_REQUESTED}")"""
+
 REDIRECT_TEMPLATE = """
 # Modules whose FPP is patched: the copy in this project is built in place of the original.
 # The framework and the libraries add their own modules, so the redirection has to be in
@@ -889,12 +925,12 @@ set(WSTS_REPLACED_MODULES
 )
 set(WSTS_REPLACEMENTS
 {copies}
-){deferred_sets}
+){deferred_sets}{excluded_sets}
 if (COMMAND _add_fprime_subdirectory)
     message(FATAL_ERROR "add_fprime_subdirectory() is already overridden: fprime-wsts cannot redirect modules")
 endif()
 function(add_fprime_subdirectory FP_SOURCE_DIR)
-    get_filename_component(WSTS_REQUESTED "${{FP_SOURCE_DIR}}" REALPATH){deferred_check}
+    get_filename_component(WSTS_REQUESTED "${{FP_SOURCE_DIR}}" REALPATH){deferred_check}{excluded_check}{duplicate_check}
     get_filename_component(WSTS_HERE "${{CMAKE_CURRENT_SOURCE_DIR}}" REALPATH)
     set(WSTS_SOURCE "")
     set(WSTS_INDEX 0)
@@ -983,6 +1019,93 @@ def render_instances(plan: Plan, manifest: Manifest) -> str:
     return "\n".join(lines) + "\n"
 
 
+def alias_declaration(sub: PlannedSubstitution) -> str:
+    """The C++ that gives the surrogate the flight component's class name. The one place
+    this text comes from: WstsCompat.hpp and the stand-in headers both use it."""
+    namespace, _, cls = sub.original.name.rpartition(".")
+    alias = f"using {cls} = {sub.catalog.cpp_name};"
+    return f"namespace {namespace.replace('.', '::')} {{ {alias} }}" if namespace else alias
+
+
+#: Where the overlay keeps headers that stand in for those of replaced flight drivers. It is
+#: the first include directory of the simulated build.
+STANDIN_DIR = "wsts-include"
+#: Defined for a flight driver's own module where that module is still part of the build
+FLIGHT_DRIVER_MACRO = "WSTS_FLIGHT_DRIVER_BUILD"
+
+
+def driver_header_names(component: fpp.Component) -> List[str]:
+    """File names of the hand-written headers that declare a component's class: `<Name>.hpp`
+    by convention, and any other header next to the FPP file that includes
+    `<Name>ComponentAc.hpp` (`<Name>ComponentImpl.hpp` in older code)"""
+    cls = component.name.rpartition(".")[2]
+    directory = component.file.parent
+    autocoded = re.compile(r'#\s*include\s*[<"][^">\n]*\b' + re.escape(cls) + r'ComponentAc\.hpp[">]')
+    names = [f"{cls}.hpp"] if (directory / f"{cls}.hpp").is_file() else []
+    for header in sorted(directory.iterdir()) if directory.is_dir() else []:
+        if header.suffix in (".hpp", ".h", ".hh") and header.name not in names and header.is_file() \
+                and autocoded.search(header.read_text(errors="replace")):
+            names.append(header.name)
+    return names or [f"{cls}.hpp"]
+
+
+def _guard(text: str) -> str:
+    return re.sub(r"\W", "_", text).upper()
+
+
+def render_driver_header(include_path: str, sub: PlannedSubstitution, surrogate_header: str) -> str:
+    """A header at a replaced flight driver's include path: flight code that includes the
+    driver's header gets the surrogate under the driver's name"""
+    lines = [
+        "// Generated by fprime-wsts. Do not edit: regenerate with `fprime-wsts generate`.",
+        "//",
+        f"// Stands in for the header of {sub.original.name}, which {sub.surrogate.name} replaces in the",
+        "// simulated build. Flight code that includes the driver's header compiles against the",
+        "// surrogate under the driver's name.",
+        f"#ifndef WSTS_STANDIN_{_guard(include_path)}",
+        f"#define WSTS_STANDIN_{_guard(include_path)}",
+        f"#ifdef {FLIGHT_DRIVER_MACRO}",
+        "// The flight driver's own module, where it is still built: the real header",
+        f"#include_next <{include_path}>",
+        "#else",
+        "",
+        f"#include <{surrogate_header}>",
+        "",
+        alias_declaration(sub),
+    ]
+    if sub.catalog.compat:
+        # WstsCompat.hpp declares the same for the topology module, where it is included first
+        macro = f"WSTS_COMPAT_{_guard(sub.catalog.name)}"
+        lines += [
+            "",
+            f"#if !defined(WSTS_GENERATED_COMPAT_HPP) && !defined({macro})",
+            f"#define {macro}",
+            sub.catalog.compat.rstrip(),
+            "#endif",
+        ]
+    lines += ["", f"#endif  // {FLIGHT_DRIVER_MACRO}", "#endif"]
+    return "\n".join(lines) + "\n"
+
+
+def render_driver_autocoded_header(include_path: str, sub: PlannedSubstitution, standin: str) -> str:
+    """The same for `<Name>ComponentAc.hpp`, which the build no longer generates"""
+    return "\n".join([
+        "// Generated by fprime-wsts. Do not edit: regenerate with `fprime-wsts generate`.",
+        "//",
+        f"// {sub.original.name} is replaced by {sub.surrogate.name}: its autocoded header is not generated in",
+        f"// the simulated build. The class name {sub.original.name.rpartition('.')[2]} resolves to the surrogate; the autocoded base class",
+        "// has no counterpart under the flight name.",
+        f"#ifndef WSTS_STANDIN_{_guard(include_path)}",
+        f"#define WSTS_STANDIN_{_guard(include_path)}",
+        f"#ifdef {FLIGHT_DRIVER_MACRO}",
+        f"#include_next <{include_path}>",
+        "#else",
+        f"#include <{standin}>",
+        "#endif",
+        "#endif",
+    ]) + "\n"
+
+
 def render_compat(plan: Plan, model: fpp.Model, manifest: Manifest, header_of) -> str:
     # An instance that is not substituted keeps its real class, so no alias may shadow it
     kept_components = {
@@ -1016,9 +1139,7 @@ def render_compat(plan: Plan, model: fpp.Model, manifest: Manifest, header_of) -
         if original in kept_components:
             lines.append(f"// {original}: no alias, another instance still uses the flight component")
             continue
-        namespace, _, cls = original.rpartition(".")
-        alias = f"using {cls} = {sub.catalog.cpp_name};"
-        lines.append(f"namespace {namespace.replace('.', '::')} {{ {alias} }}" if namespace else alias)
+        lines.append(alias_declaration(sub))
     lines.append("")
     seen_compat: Set[str] = set()
     for sub in plan.substitutions:
@@ -1338,6 +1459,55 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
     }
 
 
+def sdk_warnings(model: fpp.Model, plan: Plan, topology: fpp.Topology, files: List[Path], owner, project_root: Path,
+                 kept_libraries: Set[Path], cache: Dict[str, List[str]], excluded: Set[Path]) -> List[str]:
+    """Warnings for modules of the simulated build that link a file of the target's SDK.
+    F Prime takes a DEPENDS entry it cannot find as a file for a target name, and stops
+    while configuring: said here first, with the instances that need the module."""
+    substituted = {sub.instance.name for sub in plan.substitutions}
+    modules: Dict[Path, List[str]] = {}
+    for f in files:
+        root = owner(f)
+        if root != project_root and root not in kept_libraries:
+            continue
+        directory = module_dir(f, root)
+        if directory is not None and directory not in excluded:
+            modules.setdefault(directory, [])
+    for name in topology.instances:
+        component = model.components.get(model.instances[name].component)
+        if name in substituted or component is None:
+            continue
+        root = owner(component.file)
+        directory = module_dir(component.file, root) if root is not None else None
+        if directory in modules:
+            modules[directory].append(f"{name} ({component.name})")
+    warnings = []
+    for directory, users in modules.items():
+        for dependency in flight_cmake.sdk_dependencies(directory, cache):
+            root = owner(directory / "CMakeLists.txt")
+            shown = _rel(directory, project_root)
+            needed = ("The topology needs the module for " + ", ".join(users) if users
+                      else "No instance of the topology is of a component in it, but the model uses its FPP")
+            options = [
+                "substitute " + ("those instances" if len(users) != 1 else "that instance")
+                + " (a 'substitute' entry in the manifest: the deployment then no longer depends on the module)"
+            ] if users else []
+            if root != project_root:
+                options.append(f"drop the library if nothing else in it is needed (libraries: {{drop: [{_rel(root, project_root)}]}})")
+            options.append(
+                f"leave the module out (cmake: {{exclude_subdirectories: [{shown}]}}) and give its target name to a "
+                "stand-in of the simulation (add_library(<target> ALIAS <stand-in>) in a file named under cmake.include)")
+            if dependency.variables:
+                options.append(f"point {dependency.variables[0]} at a host build of the SDK "
+                               f"(cmake: {{cache: {{{dependency.variables[0]}: <path>}}}})")
+            warnings.append(
+                f"module {shown} links '{dependency.entry}': {dependency.problem}. F Prime takes an entry it cannot "
+                f"find as a file for a target name and stops while configuring ('target ... not available to "
+                f"deployment'). {needed}. Either " + "; or ".join(options) + "."
+            )
+    return warnings
+
+
 def render_report(report: dict) -> str:
     lines = [
         f"# WSTS report: {report['topology']}",
@@ -1353,6 +1523,8 @@ def render_report(report: dict) -> str:
           if report.get("dropped_cmake_options") else []),
         *([f"- Libraries not built for simulation: {', '.join('`' + l + '`' for l in report['libraries']['dropped'])}"]
           if report["libraries"]["dropped"] else []),
+        *[f"- Library built only for its configuration: `{entry['library']}` (supplies `{entry['supplies']}`, "
+          f"overridden by `{entry['overridden_by']}`)" for entry in report["libraries"].get("kept_for_configuration", [])],
         f"- Dictionary identical to flight: **{'yes' if report['dictionary']['identical_to_flight'] else 'no'}**; "
         "flight IDs unchanged: **yes**",
         "",
@@ -1446,6 +1618,32 @@ def render_report(report: dict) -> str:
                   "takes the copy in this overlay in place of the original module.", ""]
         for module in report["replaced_modules"]:
             lines.append(f"- `{module['module']}` (`{module['original']}`): {', '.join('`' + f + '`' for f in module['files'])}")
+    if report.get("driver_headers"):
+        headers = report["driver_headers"]
+        lines += ["", "## Headers of replaced drivers", "",
+                  f"Flight code that includes the header of a replaced driver gets a stand-in from `{headers['directory']}/`, "
+                  "the first include directory of the simulated build: it includes the surrogate's header and gives "
+                  "the surrogate the driver's class name.", ""]
+        for entry in headers["components"]:
+            lines.append(f"- `{entry['component']}` (now `{entry['surrogate']}`): "
+                         + ", ".join(f"`{h}`" for h in entry["headers"]))
+    if report.get("nested_modules") or report.get("excluded_modules"):
+        lines += ["", "## Project modules", ""]
+        for entry in report.get("nested_modules", []):
+            lines.append(f"- `{entry['module']}` is added by `{entry['added_by']}` (`{entry['in']}`), so the generated "
+                         "project does not add it a second time")
+        for module in report.get("excluded_modules", []):
+            lines.append(f"- `{module}` is left out where a library, the framework or another module adds it "
+                         "(`cmake.exclude_subdirectories`)")
+    if report.get("flight_cmake"):
+        flight = report["flight_cmake"]
+        lines += ["", "## Flight root CMakeLists.txt", "",
+                  f"What `{flight['file']}` does besides including F´, and what the simulated build takes over.", ""]
+        for entry in flight["carried_over"]:
+            lines.append(f"- Carried over, line {entry['line']}: `{entry['statement']}` ({entry['as']})")
+        for entry in flight["not_carried_over"]:
+            lines.append(f"- Not carried over, line {entry['line']}: `{entry['statement']}` ({entry['why']}; "
+                         f"`{entry['key']}` in the manifest reproduces it)")
     if report.get("config_overrides"):
         lines += ["", "## Configuration overrides applied", "",
                   "FPP configuration replaced through `CONFIGURATION_OVERRIDES`, as the build does.", ""]
@@ -1804,16 +2002,88 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
                 topology, patched_model.topologies[topology.name],
                 {sub.instance.name for sub in plan.substitutions if sub.port_map})
 
-    # ---- Libraries and project modules the simulated deployment builds ----
+    # ---- Project modules the simulated deployment builds ----
     # A file belongs to the deepest root that contains it: the framework is often checked
     # out inside the project, and a project may itself live inside a library's repository.
+    excluded = {manifest.resolve(d, project_root) for d in manifest.exclude_subdirectories}
+    found_modules: Dict[Path, None] = {}
+    for f in closure:
+        if owner(f) != project_root or output in f.parents or final_output in f.parents:
+            continue
+        directory = module_dir(f, project_root)
+        if directory is None:
+            plan.warnings.append(f"{f} is not inside a module directory; it will not be built")
+        elif directory != top_dir and directory not in excluded:
+            found_modules[directory] = None
+    extra_dirs = [manifest.resolve(extra, project_root) for extra in manifest.extra_subdirectories]
+    # Every configuration file that is overridden, whatever its kind, and which directory
+    # registers it
+    all_overrides, _ = fpp.find_config_overrides(config_roots, ("",))
+    supplies: Dict[Path, Set[str]] = {}
+    overrides_of: Dict[Path, Set[str]] = {}
+    for override in all_overrides:
+        for cmake, _ in override.suppliers:
+            supplies.setdefault(cmake.parent, set()).add(override.name)
+        for cmake, _ in override.overriders:
+            overrides_of.setdefault(cmake.parent, set()).add(override.name)
+    # A module with CONFIGURATION_OVERRIDES has to be registered after the configuration
+    # it replaces, which may itself be a project module. A module that another one adds
+    # itself is registered with that one, and is not added here.
+    overriding_dirs = {o.winner.parent for o in config_overrides}
+    order = flight_cmake.order_modules(
+        [*found_modules, *[d for d in extra_dirs if d not in found_modules]], overriding_dirs,
+        supplies, overrides_of, project_root, excluded, last=[d for d in extra_dirs if d not in found_modules])
+    module_dirs: Dict[Path, None] = {d: None for d in order.roots}
+    built_project_dirs = {member for members in order.members.values() for member in members} | {top_dir, deployment_dir}
+
+    # ---- Libraries the simulated deployment builds ----
+    # A library is kept when the patched model uses one of its files, or when it supplies a
+    # configuration file that a module of this build overrides: F Prime rejects an override
+    # of a file that no configuration module supplies.
     libraries = {"kept": [], "dropped": []}
+    flight_libraries = list(dict.fromkeys(settings.library_locations))
+    named_keep = {lib for lib in flight_libraries if any(manifest.resolve(k, project_root) == lib for k in manifest.keep_libraries)}
+    named_drop = {lib for lib in flight_libraries if any(manifest.resolve(k, project_root) == lib for k in manifest.drop_libraries)}
+    used_libraries = {lib for lib in flight_libraries if any(owner(f) == lib for f in closure)}
+    kept_libraries = {lib for lib in flight_libraries if (lib in used_libraries or lib in named_keep) and lib not in named_drop}
+    kept_for_config: Dict[Path, List[Tuple[fpp.ConfigOverride, Path, Path]]] = {}  # library -> (override, supplied file, overriding module)
+
+    def registered(cmake: Path) -> bool:
+        """Whether a CMake file that registers configuration is read by the simulated build"""
+        root = owner(cmake)
+        if root == project_root:
+            return cmake.parent in built_project_dirs
+        return root in kept_libraries or root not in flight_libraries
+
+    while True:
+        added = False
+        for override in all_overrides:
+            overriders = [cmake for cmake, _ in override.overriders if registered(cmake)]
+            if not overriders or any(registered(cmake) for cmake, _ in override.suppliers):
+                continue
+            for cmake, supplied in override.suppliers:
+                library = owner(cmake)
+                if library not in flight_libraries:
+                    continue
+                if library in named_drop:
+                    raise WstsError(
+                        f"libraries.drop names {library}, but that library supplies the configuration file "
+                        f"{override.name} ({supplied}), which {overriders[0].parent} overrides with "
+                        "CONFIGURATION_OVERRIDES. F Prime stops when an override replaces a file that no "
+                        "configuration module supplies, so the simulated build needs the library. Remove it from "
+                        "libraries.drop: a platform library's library.cmake usually registers its configuration "
+                        "and then stops on a host (restrict_platforms). To build without it, leave the overriding "
+                        f"module out as well, with\n  cmake:\n    exclude_subdirectories: [{_rel(overriders[0].parent, project_root)}]"
+                    )
+                kept_for_config.setdefault(library, []).append((override, supplied, overriders[0].parent))
+                if library not in kept_libraries:
+                    kept_libraries.add(library)
+                    added = True
+        if not added:
+            break
     library_paths: List[Path] = [TOOLKIT_ROOT]
-    for library in settings.library_locations:
-        used = any(owner(f) == library for f in closure)
-        named_keep = any(manifest.resolve(k, project_root) == library for k in manifest.keep_libraries)
-        named_drop = any(manifest.resolve(k, project_root) == library for k in manifest.drop_libraries)
-        if (used or named_keep) and not named_drop:
+    for library in flight_libraries:
+        if library in kept_libraries:
             libraries["kept"].append(str(library))
             if library not in library_paths:
                 library_paths.append(library)
@@ -1832,23 +2102,47 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
             )
         if sim_library is not None:
             library_paths.append(sim_library)
-
-    excluded = {manifest.resolve(d, project_root) for d in manifest.exclude_subdirectories}
-    module_dirs: Dict[Path, None] = {}
-    for f in closure:
-        if owner(f) != project_root or output in f.parents or final_output in f.parents:
+    # A library that is kept for its configuration alone is read whole by F Prime
+    for library in kept_for_config:
+        if library in used_libraries:
             continue
-        directory = module_dir(f, project_root)
-        if directory is None:
-            plan.warnings.append(f"{f} is not inside a module directory; it will not be built")
-        elif directory != top_dir and directory not in excluded:
-            module_dirs[directory] = None
-    # A module with CONFIGURATION_OVERRIDES has to be registered after the configuration
-    # it replaces, which may itself be a project module
-    overriding_dirs = {o.winner.parent for o in config_overrides}
-    module_dirs = {d: None for d in sorted(module_dirs, key=lambda d: d in overriding_dirs)}
-    for extra in manifest.extra_subdirectories:
-        module_dirs[manifest.resolve(extra, project_root)] = None
+        manifest_file = next((f for f in (library / "library.cmake", library / f"{library.name}.cmake") if f.is_file()), None)
+        if manifest_file is None:
+            continue
+        text = manifest_file.read_text(errors="replace")
+        # F Prime includes the file, and restrict_platforms() returns from it on another platform:
+        # only what comes before such a call is added on the host
+        text = re.sub(r"#[^\n]*", "", text)
+        guard = _host_restriction(text)
+        supplying = {cmake.parent for override, _, _ in kept_for_config[library] for cmake, _ in override.suppliers}
+        unguarded: List[Path] = []
+        for match in re.finditer(r"add_fprime_subdirectory\s*\(\s*\"?([^\s\")]+)", text if guard is None else text[:guard.start()]):
+            target = match.group(1).replace("${CMAKE_CURRENT_LIST_DIR}", str(library))
+            if "${" in target:
+                continue
+            directory = (library / target).resolve()
+            if directory in supplying or any(directory in s.parents for s in supplying) or directory in excluded:
+                continue
+            module_cmake = directory / "CMakeLists.txt"
+            if module_cmake.is_file() and _host_restriction(module_cmake.read_text(errors="replace")):
+                continue
+            unguarded.append(directory)
+        if unguarded:
+            listing = ", ".join(_rel(d, project_root) for d in unguarded)
+            plan.warnings.append(
+                f"{_rel(library, final_output)} is built only for the configuration it supplies, and its "
+                f"{manifest_file.name} also adds modules that are not restricted to another platform: "
+                f"{', '.join(_rel(d, library) for d in unguarded)}. They are configured on the host with the rest. "
+                "If they do not configure or build there, leave them out with\n  cmake:\n    exclude_subdirectories: ["
+                f"{listing}]\nin the manifest (paths relative to the flight project)."
+            )
+
+    # Directories the manifest excludes that the overlay does not add itself: a library, the
+    # framework or another module adds them, so the overlay's add_fprime_subdirectory() skips them
+    skipped_dirs = sorted(
+        d for d in excluded
+        if d.is_dir() and (owner(d / "CMakeLists.txt") != project_root
+                           or any(d in flight_cmake.added_directories(root) for root in order.roots)))
 
     # ---- Hand-written sources ----
     if manifest.topology_sources is not None:
@@ -1865,6 +2159,45 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
     for sub in plan.substitutions:
         if sub.original.name not in still_used:
             substituted_modules.add(module_name(sub.original.file.parent, [settings.framework_path, *settings.library_locations, project_root]))
+    def include_path(path: Path) -> str:
+        """How C++ includes a file: relative to the deepest build root that holds it"""
+        for root in sorted([TOOLKIT_ROOT, *settings.library_locations, project_root, settings.framework_path, *sim_roots], key=lambda r: -len(r.parts)):
+            if root in path.parents:
+                return path.relative_to(root).as_posix()
+        return path.name
+
+    def header_of(component: fpp.Component) -> str:
+        return include_path(component.file.with_suffix(".hpp"))
+
+    # Flight code includes the headers of the drivers it configures: a subtopology's
+    # SubtopologyTopologyDefs.hpp for a type it needs, Main.cpp through the TopologyDefs. For
+    # every replaced component no instance still uses, a header at the same include path
+    # gives the surrogate instead. Not when the component is still used: that would shadow
+    # the real header.
+    driver_headers: List[dict] = []
+    standin_files: Dict[str, str] = {}
+    standin_modules: List[str] = []
+    for sub in plan.substitutions:
+        if sub.original.name in still_used or any(h["component"] == sub.original.name for h in driver_headers):
+            continue
+        component_dir = sub.original.file.parent
+        include_dir = include_path(component_dir / "x").rpartition("/")[0]
+        if not include_dir:
+            continue  # the component is at a build root: no include path to stand at
+        surrogate_include = header_of(sub.surrogate)
+        names = driver_header_names(sub.original)
+        for name in names:
+            standin_files[f"{include_dir}/{name}"] = render_driver_header(f"{include_dir}/{name}", sub, surrogate_include)
+        autocoded = f"{include_dir}/{sub.original.name.rpartition('.')[2]}ComponentAc.hpp"
+        standin_files[autocoded] = render_driver_autocoded_header(autocoded, sub, f"{include_dir}/{names[0]}")
+        standin_modules.append(module_name(component_dir, [settings.framework_path, *settings.library_locations, project_root]))
+        driver_headers.append({"component": sub.original.name, "surrogate": sub.surrogate.name,
+                               "headers": [f"{include_dir}/{name}" for name in names] + [autocoded]})
+    for relative, text in standin_files.items():
+        target = output / STANDIN_DIR / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+
     top_depends = [d for d in top_registration.get("DEPENDS", []) if d not in substituted_modules and "${" not in d]
     top_depends += [d for d in manifest.extra_depends if d not in top_depends]
     if "Wsts_Core" not in top_depends:
@@ -1886,13 +2219,6 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
     for source in topology_sources + main_sources:
         if not source.is_file():
             raise WstsError(f"source file not found: {source}")
-
-    def header_of(component: fpp.Component) -> str:
-        base = component.file.with_suffix(".hpp")
-        for root in sorted([TOOLKIT_ROOT, *settings.library_locations, project_root, settings.framework_path, *sim_roots], key=lambda r: -len(r.parts)):
-            if root in base.parents:
-                return base.relative_to(root).as_posix()
-        return base.name
 
     # ---- Emit build files and generated code ----
     (out_top / "WstsCompat.hpp").write_text(render_compat(plan, model, manifest, header_of))
@@ -1965,21 +2291,38 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
     def cmake_file(path: Path) -> str:
         return '"${CMAKE_CURRENT_LIST_DIR}/' + rel(path) + '"'
 
+    # ---- The flight project's own root CMakeLists.txt ----
+    flight_root = flight_cmake.read_root(
+        project_root, settings.framework_path, manifest.cmake_cache, manifest.defines,
+        sim_root or project_root, rel(project_root / "CMakeLists.txt"))
+    plan.warnings += flight_root.warnings
+
     redirect: List[str] = []
     if includes["early"]:
         redirect += ["", "# From `cmake.include_early` in the manifest: before any framework or library module exists",
                      *[f"include({cmake_file(file)})" for file in includes["early"]]]
-    if replaced or deferred_modules:
+    if replaced or deferred_modules or skipped_dirs:
         redirect += REDIRECT_TEMPLATE.format(
             originals="\n".join(f'    "${{CMAKE_CURRENT_LIST_DIR}}/{rel(m.original)}"' for m in replaced.values()),
             copies="\n".join(f'    "${{CMAKE_CURRENT_LIST_DIR}}/{m.relative}"' for m in replaced.values()),
             deferred_sets=DEFERRED_SETS.format(
                 modules="\n".join(f"    {cmake_file(d)}" for d in deferred_modules)) if deferred_modules else "",
             deferred_check=DEFERRED_CHECK if deferred_modules else "",
+            excluded_sets=EXCLUDED_SETS.format(
+                modules="\n".join(f"    {cmake_file(d)}" for d in skipped_dirs)) if skipped_dirs else "",
+            excluded_check=EXCLUDED_CHECK if skipped_dirs else "",
+            duplicate_check=DUPLICATE_CHECK,
         ).rstrip("\n").split("\n")
     elif includes["early"]:
         redirect.append("fprime_setup_included_code()")
-    own_setup = bool(replaced or deferred_modules or includes["early"])
+    own_setup = bool(replaced or deferred_modules or skipped_dirs or includes["early"])
+    if flight_root.defines_late:
+        redirect += [
+            "",
+            "# Carried over from the flight project's CMakeLists.txt, which makes these definitions after F Prime is",
+            "# read: they reach the modules added from here on, as in flight",
+            f"add_compile_definitions({' '.join(flight_root.defines_late)})",
+        ]
     after_modules: List[str] = []
     if deferred_modules:
         after_modules += [
@@ -1988,6 +2331,20 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
             "# where both replace a file the simulation's is the one built",
             "set(WSTS_ADDING_DEFERRED ON)",
             *[f"add_fprime_subdirectory({cmake_file(d)})" for d in deferred_modules],
+        ]
+    if standin_modules:
+        after_modules += [
+            "",
+            f"# Headers of replaced flight drivers resolve to stand-ins ({STANDIN_DIR}/). A driver module that is",
+            "# still part of this build compiles against its own header.",
+            f"foreach (WSTS_MODULE IN ITEMS {' '.join(sorted(set(standin_modules)))})",
+            "    if (TARGET ${WSTS_MODULE})",
+            "        get_target_property(WSTS_MODULE_TYPE ${WSTS_MODULE} TYPE)",
+            '        if (NOT WSTS_MODULE_TYPE STREQUAL "INTERFACE_LIBRARY")',
+            f"            target_compile_definitions(${{WSTS_MODULE}} PRIVATE {FLIGHT_DRIVER_MACRO})",
+            "        endif()",
+            "    endif()",
+            "endforeach()",
         ]
     if includes["late"]:
         after_modules += [
@@ -2007,10 +2364,18 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         f"project({deployment}Sim VERSION 1.0.0 LANGUAGES C CXX)",
         "",
         f"add_compile_definitions({' '.join(defines)})",
+        *(["# Carried over from the flight project's CMakeLists.txt",
+           f"add_compile_definitions({' '.join(flight_root.defines_early)})"] if flight_root.defines_early else []),
+        *(["# Headers that stand in for those of replaced flight drivers: found before the originals",
+           f'include_directories(BEFORE "${{CMAKE_CURRENT_LIST_DIR}}/{STANDIN_DIR}")'] if standin_files else []),
         *(["# From `cmake.cache` in the manifest. Set before F Prime reads the libraries; a value given on the",
            "# command line (-D) takes precedence.",
            *[f'set({name} "{";".join(values)}" CACHE STRING "Set by fprime-wsts from cmake.cache in the manifest")'
              for name, values in manifest.cmake_cache.items()]] if manifest.cmake_cache else []),
+        *(["# Carried over from the flight project's CMakeLists.txt, which sets them before F Prime is read.",
+           "# `cmake.cache` in the manifest takes precedence, and so does -D on the command line.",
+           *[f'set({name} "{";".join(values)}" CACHE STRING "{flight_cmake.CACHE_HELP}")'
+             for name, values in flight_root.cache.items()]] if flight_root.cache else []),
         *(["# The framework's and the libraries' modules are added below, once the redirection is set up",
            "set(FPRIME_INCLUDE_FRAMEWORK_CODE OFF)"] if own_setup else []),
         f'find_package(FPrime REQUIRED PATHS "${{CMAKE_CURRENT_LIST_DIR}}/{rel(settings.framework_path)}/cmake")',
@@ -2040,6 +2405,7 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         "default_toolchain: native",
     ]
     dropped_options: List[str] = []
+    settings_variables: Set[str] = set()
     if options:
         # Options that select the flight toolchain or platform do not apply to a host build
         kept_options = []
@@ -2047,6 +2413,7 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
             name = option.split("=", 1)[0]
             if name in manifest.cmake_cache:
                 continue  # the manifest's cmake.cache sets it for the simulated build
+            settings_variables.add(name)
             if (name.startswith("FPRIME_") and name != "FPRIME_PLATFORM") or name == "CMAKE_BUILD_TYPE":
                 kept_options.append(option)
             else:
@@ -2062,6 +2429,32 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
     report = build_report(plan, model, manifest, libraries, [_rel(d, project_root) for d in module_dirs], settings, reused)
     # The report is part of the checked-in output: keep machine-specific paths out of it
     report["libraries"] = {k: [rel(Path(p)) for p in v] for k, v in libraries.items()}
+    # The keys below appear only when used, so that other reports are unchanged
+    configuration_only = [
+        {"library": rel(library), "supplies": override.name, "file": rel(supplied),
+         "overridden_by": _rel(module, project_root) if owner(module / "CMakeLists.txt") == project_root else rel(module)}
+        for library, entries in kept_for_config.items() if library not in used_libraries
+        for override, supplied, module in entries
+    ]
+    if configuration_only:
+        report["libraries"]["kept_for_configuration"] = configuration_only
+    if order.nested:
+        report["nested_modules"] = [
+            {"module": _rel(child, project_root), "added_by": _rel(parent, project_root), "in": _rel(cmake, project_root)}
+            for child, (parent, cmake) in order.nested.items()
+        ]
+    if driver_headers:
+        report["driver_headers"] = {"directory": STANDIN_DIR, "components": driver_headers}
+    if flight_root:
+        report["flight_cmake"] = {
+            "file": rel(flight_root.file), "carried_over": flight_root.carried, "not_carried_over": flight_root.not_carried}
+    if skipped_dirs:
+        report["excluded_modules"] = [rel(d) for d in skipped_dirs]
+    plan.warnings += sdk_warnings(
+        model, plan, topology, [*closure, *[f for module in replaced.values() for f in module.files]], owner,
+        project_root, kept_libraries,
+        {**{name: [] for name in settings_variables}, **flight_root.cache, **manifest.cmake_cache}, excluded)
+    report["warnings"] = plan.warnings
     report["dropped_cmake_options"] = dropped_options
     if sim_root is not None:
         report["simulation_project"] = rel(sim_root)

@@ -10,7 +10,7 @@ Start with [README.md](README.md); the design is in [docs/design.md](docs/design
 | `Wsts/Core/` | Plain C++: bus, faults, control core, cycle clocks, scenario player, recorder, bridge, reference models, links between elements. No F´ dependencies |
 | `Wsts/Drv/`, `Wsts/Svc/` | F´ components: surrogates, `BusByteStreamDevice` (adapter that puts an F´ simulator on a bus endpoint), `SimCycle` (cycle source with its own rate), `SimControl` (commands/events/telemetry), `SimSetup` (anchor) |
 | `catalog/wsts-catalog.yaml` | Which flight components each surrogate replaces |
-| `python/fprime_wsts/` | `generate.py` (transform), `fpp.py` (model loading), `manifest.py`, `simulators.py` (added F´ instances, bus devices), `system.py` (multi-element systems), `bridge.py`, `runner.py`, `scaffold.py`, `cli.py` |
+| `python/fprime_wsts/` | `generate.py` (transform), `fpp.py` (model loading), `flight_cmake.py` (flight CMake read as text: root `CMakeLists.txt`, nested modules, SDK links), `manifest.py`, `simulators.py` (added F´ instances, bus devices), `system.py` (multi-element systems), `bridge.py`, `runner.py`, `scaffold.py`, `cli.py` |
 | `examples/mission/` | The example's flight project: `Cdh` (VxWorks, no `main()`, UART inside the `SensorLink` subtopology of `lib/sensor-lib`, `CONFIGURATION_OVERRIDES`, `system.fpp`) and `Payload` (Linux: I2C, SPI, UART, GPIO), joined by a `GenericHub`. Only read by the toolkit |
 | `examples/mission-sim/` | The example's simulation project: `wsts-system.yaml`, `cdh.yaml`, `payload.yaml`, simulators written as F´ components, a 125 Hz clock, a bus-less surrogate, a mirror surrogate, a device model, a vendored library, configuration overrides. Its `wsts/Mission/` is **generated** and checked in. `examples/README.md` maps each feature to where it is |
 | `tests/e2e/` | End-to-end tests against the running Mission system and a GDS (`test_system.py`, `test_cdh.py`, `test_payload.py`) |
@@ -60,6 +60,14 @@ version, unset `JAVA_HOME` so the bundled JRE is used.
 - F´ lets the last registration of a configuration file win. Libraries are read before the
   overlay adds flight modules, so the overlay holds the simulation's override modules back
   (`WSTS_DEFERRED_MODULES`) and adds them last. The analysis root order must match.
+- A flight library is kept when the model uses it or when it supplies configuration that a
+  built module overrides (`kept_for_config` in `generate.py`). The example keeps
+  `fprime-vxworks` for `VxWorksCfg.hpp` alone.
+- `wsts-include/` is first on every module's include path. A header there must pass a
+  flight driver's own module on to the real header (`WSTS_FLIGHT_DRIVER_BUILD`,
+  `#include_next`): framework drivers are still compiled on the host.
+- Flight CMake is never evaluated, only read (`flight_cmake.py`). Carry over literal values
+  and report the rest; a reported statement names the manifest key that reproduces it.
 - A tick source declares its period (`Control::setTickPeriod`): cycle clocks are granted
   their cycles from it on each tick. `tick` always counts flight ticks.
 - A component with parameters asserts in `loadParameters()` if `prmGetOut` is unconnected.
@@ -77,7 +85,8 @@ fprime-wsts run <generated dir> --gds --duration 30 --json
 
 starts the deployment and a headless GDS, runs for 30 seconds, and prints a JSON summary
 (exit code, final tick, bus counters, log directory). Exit status is non-zero if the
-deployment exits on its own. Logs: `<generated dir>/wsts-logs/sim.log` and `gds.log`.
+deployment exits on its own; if it stopped on an F´ assert, the summary has
+`assert: {file, line, instances}` and the kept instance to substitute is named. Logs: `<generated dir>/wsts-logs/sim.log` and `gds.log`.
 
 For a GDS you can open in a browser (a human, or a browser-automation agent), use
 `--gds-gui` instead of `--gds`: fprime-gds then serves its web UI on `--gds-gui-port`
