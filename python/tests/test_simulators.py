@@ -187,7 +187,7 @@ def test_flight_numbering_is_unchanged(default, tmp_path):
     assert default.report["dictionary"]["flight_ids_unchanged"]
 
     listed = (default.output / "Cdh" / "Top" / "topology.fpp").read_text()
-    assert "health connections instance CdhCore.$health {" in listed and "      rateGroup1Hz\n    }" in listed
+    assert "health connections instance CdhCore.$health {" in listed and "      CdhCore.tlmSend\n    }" in listed
 
 
 @needs_fpp

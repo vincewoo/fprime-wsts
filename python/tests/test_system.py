@@ -210,7 +210,7 @@ def test_link_and_model_cannot_share_an_endpoint(tmp_path):
     data = {
         "system": "Serial",
         # Payload's own manifest attaches the temperature sensor model to sensorUart
-        "elements": {"linux": str(SIM / "payload.yaml"), "vx": standalone(tmp_path, "vx", "Cdh")},
+        "elements": {"linux": str(SIM / "payload.yaml"), "vx": standalone(tmp_path, "vx", "Cdh", bridge="tcp:50107")},
         "links": [{"name": "crosslink", "a": "vx.uart", "b": "linux.sensorUart"}],
     }
     (tmp_path / "wsts-system.yaml").write_text(yaml.safe_dump(data))
