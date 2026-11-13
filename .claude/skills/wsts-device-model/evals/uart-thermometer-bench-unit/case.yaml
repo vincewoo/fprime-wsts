@@ -1,9 +1,11 @@
 schema_version: "1.1"
 name: uart-thermometer-bench-unit
 expected_outcome: |
-  A C++ Wsts::ByteStreamDevice model of the TS-200 in examples/mission-sim/Models, with a
-  manifest entry on endpoint tsUart. Only read-only queries are sent to the bench unit
-  (the user cannot approve anything). The model follows the unit where it differs from
+  A C++ Wsts::ByteStreamDevice model of the TS-200 in examples/mission-sim/Models. Its
+  manifest entry on endpoint tsUart is ready but not live, because the flight topology has
+  no tsUart driver yet and a live entry would break generation. Only read-only queries are sent to the bench unit
+  (the user cannot approve anything), with no stress probes such as
+  oversized lines or floods. The model follows the unit where it differs from
   the datasheet (errors are "?E02", not "ERR"; identity ACME,TS-200,0042,2.1), reports the
   discrepancy, takes the temperature as a parameter in deg C, and is shown to reproduce
   the captured responses. Commands that could not be tried are marked unverified.

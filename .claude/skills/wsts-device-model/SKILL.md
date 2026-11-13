@@ -49,7 +49,10 @@ Find out, before reading the datasheet:
 - **The seam and endpoint.** Which surrogate replaces the driver decides the interface
   kind (`bytestream`, `i2c`, `spi`, `gpio`, `register`) and the endpoint name, which is the
   instance's base name unless the manifest says otherwise. `wsts-report.md` in a generated
-  deployment lists the substitutions.
+  deployment lists the substitutions. **Check that the endpoint exists.** A model can only
+  be attached where a flight driver instance is replaced by a surrogate. A device that
+  is new to the mission often has no driver in the flight topology yet: its model can still
+  be written and checked, but not attached (step 8).
 - **The hardware.** Where is the device connected (`/dev/ttyUSB0`, `/dev/i2c-1`,
   `/dev/spidev0.0`, `gpiochip0` line 17), with what line settings, and is it on this
   machine? A cloud session has no hardware. Then write the plan, give the user the
@@ -83,6 +86,14 @@ Classify every step by what it does to the **device**:
 - `hazardous`: resets, erases, writes flash or EEPROM, moves or heats anything,
   calibrates, changes the baud rate or address (you would lose the device), or anything
   whose effect you do not know.
+
+A few short malformed or unknown commands are reads: they show the device's error
+handling, which the model needs. **Stress is not a read.** Lines far longer than any
+documented command, floods, rapid bursts, random bytes and out-of-spec framing test the
+firmware's robustness, not its protocol. They can hang or crash a unit, and nobody asked
+for a robustness test. Class them `hazardous`, or leave them out. `probe.py` refuses a
+`read` step that sends more than `max_command_len` bytes (default 64), which is longer
+than any documented command.
 
 When unsure, choose the more dangerous class. The device may be flight hardware, a shared
 engineering unit or something that can hurt someone. A wrong `read` label is the only way
@@ -162,7 +173,8 @@ python3 <skill>/scripts/conform.py --manifest <element>.yaml --model <name> devi
 before the manifest entry exists). It compiles the model with `Wsts/Core` only (seconds,
 with no F´ build), replays every flight-side record of the captures through the bus, and
 compares what the model returns with what the device returned. Exit 0 means every
-comparison passed.
+comparison passed. Each capture file is replayed on a fresh model, as its own session
+with the device, so keep one session per file.
 
 The device's physical state (temperature, attitude, counters) differs from the model's
 defaults. Put it in the plan step's `model_params`, so the model is set to the same
@@ -177,11 +189,31 @@ Iterate until it passes. A failure means the model is wrong, the capture is unus
 
 ### 8. Integrate and run with flight software
 
-1. Add the `models:` entry to the element manifest (kind, endpoint, `address` for I2C,
+1. **Does the endpoint exist?** `fprime-wsts generate` rejects a model on an endpoint
+   that no surrogate is bound to. If the flight topology has no driver instance for this
+   device yet, do not add a live entry: it would break generation of the whole element.
+   Put the entry in the manifest commented out, with a line saying what it waits for,
+   and tell the user. Then skip to step 4 of this list.
+2. Add the `models:` entry to the element manifest (kind, endpoint, `address` for I2C,
    `params`). Make sure the module is built (`library.cmake` / `cmake.cache`) and linked
    (`cmake.depends`).
-2. `fprime-wsts generate <manifest>`, then build. After a regeneration, run only
-   `fprime-util build` if the build directory exists.
+3. **Regenerate.** `fprime-wsts generate <manifest or system manifest>`. A generated tree
+   that is checked in, as `examples/mission-sim/wsts/` is, has to be committed along with
+   the manifest change: CI runs `fprime-wsts generate --check` on it. Never edit the
+   generated files by hand. If the generator cannot run here (FPP tools or `lib/fprime`
+   missing), say plainly that the change is incomplete until someone regenerates, and give
+   the command. Then build: after a regeneration, run only `fprime-util build` if the build
+   directory exists.
+4. `fprime-wsts run <generated dir> --gds --duration 30 --json`. Check that the run shows
+   no assert, that the bus `errors` counter stayed at 0 for this endpoint, and that
+   `wsts-logs/sim.log` shows the flight device manager's events and telemetry with
+   plausible values (initialised, no timeouts, no checksum errors).
+5. If the project has e2e tests (`tests/e2e/`), add one that sets a model parameter and
+   sees the value in flight telemetry, as `test_payload.py::test_project_model_takes_engineering_units`
+   does.
+
+If steps 3–4 cannot run here (no toolchain or time), say so. Do not claim the
+integration works without having run it.
 3. `fprime-wsts run <generated dir> --gds --duration 30 --json`. Check that the run shows
    no assert, that the bus `errors` counter stayed at 0 for this endpoint, and that
    `wsts-logs/sim.log` shows the flight device manager's events and telemetry with
@@ -202,6 +234,8 @@ Tell the user, briefly:
   document only, and what is not modelled;
 - the discrepancy table, and every relaxed compare mode with its reason;
 - any step that was not run because it was not approved;
+- whether the manifest entry is live or waiting for a flight driver, and whether a
+  regeneration is still owed before CI passes;
 - how to re-probe and re-check (the two commands).
 
 ## Without hardware

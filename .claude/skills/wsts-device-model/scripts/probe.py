@@ -91,11 +91,17 @@ def step_class(step: dict) -> str:
     return cls
 
 
-def check_step(step: dict, interface: str) -> List[str]:
+def check_step(step: dict, interface: str, max_len: int = 64) -> List[str]:
     """Errors for a step that is classified as read but cannot be one"""
     errors = []
     name = step.get("name", "?")
     cls = step_class(step)
+    if cls == "read":
+        sent = to_bytes(step.get("tx") if interface == "uart" else step.get("write"), name)
+        if len(sent) > max_len:
+            errors.append(f"{name}: sends {len(sent)} bytes, more than max_command_len ({max_len}); a probe that "
+                          "long stresses the device rather than reading it: class it hazardous, or raise "
+                          "max_command_len if the device really has commands that long")
     if interface == "gpio" and "set" in step and cls == "read":
         errors.append(f"{name}: driving a pin is not a read; class it write or hazardous")
     if interface == "i2c" and cls == "read":
@@ -584,7 +590,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         unknown = [n for n in args.only + args.allow if n not in names]
         if unknown:
             raise PlanError(f"no such steps: {unknown}")
-        errors = [e for s in steps for e in check_step(s, interface)]
+        max_len = int(plan.get("max_command_len", cfg.get("max_command_len", 64)))
+        errors = [e for s in steps for e in check_step(s, interface, max_len)]
         if errors:
             raise PlanError("plan refused:\n  " + "\n  ".join(errors))
         selected = [s for s in steps if not args.only or s["name"] in args.only]

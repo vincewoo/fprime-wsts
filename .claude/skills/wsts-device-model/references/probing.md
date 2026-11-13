@@ -69,10 +69,16 @@ I2C, SPI and GPIO steps:
   - {name: release_reset, class: hazardous, line: 18, set: 1, hold_ms: 200}
 ```
 
-`probe.py` refuses a plan where a step cannot be what its class says: driving a pin
-classed `read`, or an I2C write with nothing read classed `read` (set `pointer_only` if
-it only moves the register pointer). It cannot detect any other mislabel, so classify
-carefully.
+`probe.py` refuses a plan where a step cannot be what its class says:
+- driving a pin classed `read`;
+- an I2C write with nothing read classed `read` (set `pointer_only` if it only moves the
+  register pointer);
+- a `read` step that sends more than `max_command_len` bytes (a top-level plan key, default
+  64).
+
+It cannot detect any other mislabel, so classify carefully. Short malformed commands (an
+unknown word, wrong case, a missing terminator) are reads. Oversized lines, floods,
+bursts and random bytes are stress tests: `hazardous`, and only with the user's go-ahead.
 
 ## Per interface
 
