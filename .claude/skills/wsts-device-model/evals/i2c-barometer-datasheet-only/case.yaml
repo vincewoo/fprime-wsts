@@ -1,0 +1,11 @@
+schema_version: "1.1"
+name: i2c-barometer-datasheet-only
+expected_outcome: |
+  A C++ Wsts::I2cDevice model of the PX-310 at 0x5D on i2cBus, written from the datasheet
+  alone and compiled: WHO_AM_I 0xB3, pressure settable in hPa and encoded as 24-bit
+  hPa*4096, temperature as degC*100, pointer auto-increment, STATUS bits that clear on
+  reading, a non-blocking one-shot conversion. The model is reported as unverified on
+  hardware and a probe plan is ready for the engineering unit, with register writes not
+  classed as reads.
+context:
+  scaffold_script: place-files.sh

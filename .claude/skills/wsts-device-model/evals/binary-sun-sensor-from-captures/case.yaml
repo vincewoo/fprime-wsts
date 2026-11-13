@@ -1,0 +1,10 @@
+schema_version: "1.1"
+name: binary-sun-sensor-from-captures
+expected_outcome: |
+  A C++ Wsts::ByteStreamDevice model of the SS-4 with sync/length/CRC framing that matches
+  every response in the capture file: angles big-endian as the unit sent them (the ICD
+  says little-endian), command 0x12 answered with error 7F 02 as on this firmware, bad CRC
+  answered with 7F 01, resynchronisation after leading garbage. Sun angles are parameters
+  in degrees. Both deviations from the ICD are reported, and the conformance result is shown.
+context:
+  scaffold_script: place-files.sh
