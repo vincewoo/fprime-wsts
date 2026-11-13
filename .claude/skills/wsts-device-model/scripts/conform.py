@@ -432,10 +432,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         core_key = hashlib.sha1(str(wsts_root).encode()).hexdigest()[:12]
         core_dir = (args.build_dir or cache / "wsts-conform") / f"core-{core_key}"
         exe = build_runner(model, sources, includes, wsts_root, build_dir, core_dir.resolve(), args.verbose)
-        records = read_captures(args.captures)
-        if not records:
-            raise UsageError("no capture records found")
-        results = conform(exe, model, records, plan_overrides(args.plan), args.capture_endpoint)
+        # Each capture file is its own session on the device, so each gets a fresh model:
+        # state left by one (a half-received command, a mode) must not leak into the next
+        results = []
+        overrides = plan_overrides(args.plan)
+        for path in args.captures:
+            records = read_captures([path])
+            if not records:
+                raise UsageError(f"no capture records in {path}")
+            results += conform(exe, model, records, overrides, args.capture_endpoint)
     except UsageError as exc:
         print(f"conform: {exc}", file=sys.stderr)
         return 2
