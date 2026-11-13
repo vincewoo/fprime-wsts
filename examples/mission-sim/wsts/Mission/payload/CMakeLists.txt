@@ -12,7 +12,7 @@ add_compile_definitions(MISSION_VEHICLE_ID=2)
 include_directories(BEFORE "${CMAKE_CURRENT_LIST_DIR}/wsts-include")
 # From `cmake.cache` in the manifest. Set before F Prime reads the libraries; a value given on the
 # command line (-D) takes precedence.
-set(MISSION_SIM_MODULES "Models;Surrogates/SimLinuxGpio" CACHE STRING "Set by fprime-wsts from cmake.cache in the manifest")
+set(MISSION_SIM_MODULES "Models;Surrogates/SimLinuxGpio;Surrogates/SimRegisterInterface" CACHE STRING "Set by fprime-wsts from cmake.cache in the manifest")
 # Carried over from the flight project's CMakeLists.txt, which sets them before F Prime is read.
 # `cmake.cache` in the manifest takes precedence, and so does -D on the command line.
 set(SENSOR_LIB_BOARD "cdh-rev-b" CACHE STRING "Carried over by fprime-wsts from the flight project's CMakeLists.txt")
@@ -128,8 +128,12 @@ function(add_fprime_subdirectory FP_SOURCE_DIR)
 endfunction()
 fprime_setup_included_code()
 
+
+# Wsts.SimRegister with the port names and types of the flight components it stands in for
+add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/WstsAdapted/SensorLib_RegisterInterface")
 set(WSTS_FLIGHT_PROJECT "${CMAKE_CURRENT_LIST_DIR}/../../../../mission")
 add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/Components/Adc")
+add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/Components/FpgaMonitor")
 add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/Components/HeaterControl")
 add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/Components/Imager")
 add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/Components/ImuManager")
@@ -166,7 +170,7 @@ endif()
 
 # Headers of replaced flight drivers resolve to stand-ins (wsts-include/). A driver module that is
 # still part of this build compiles against its own header.
-foreach (WSTS_MODULE IN ITEMS Drv_LinuxGpioDriver Drv_LinuxI2cDriver Drv_LinuxSpiDriver Drv_PosixUartDriver Drv_TcpClient Svc_LinuxTimer)
+foreach (WSTS_MODULE IN ITEMS Drv_LinuxGpioDriver Drv_LinuxI2cDriver Drv_LinuxSpiDriver Drv_PosixUartDriver Drv_TcpClient SensorLib_RegisterInterface Svc_LinuxTimer)
     if (TARGET ${WSTS_MODULE})
         get_target_property(WSTS_MODULE_TYPE ${WSTS_MODULE} TYPE)
         if (NOT WSTS_MODULE_TYPE STREQUAL "INTERFACE_LIBRARY")

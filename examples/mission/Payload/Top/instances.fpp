@@ -27,6 +27,11 @@ module Payload {
     stack size Default.STACK_SIZE \
     priority 41
 
+  instance fpga: Components.FpgaMonitor base id 0x20004000 \
+    queue size Default.QUEUE_SIZE \
+    stack size Default.STACK_SIZE \
+    priority 40
+
   # ----------------------------------------------------------------------
   # Passive component instances
   # ----------------------------------------------------------------------
@@ -83,5 +88,8 @@ module Payload {
 
   @ SPI bus with the instrument's converter
   instance spiBus: Drv.LinuxSpiDriver base id 0x20036000
+
+  @ Registers of the FPGA's housekeeping block, and its interrupt
+  instance fpgaRegs: SensorLib.RegisterInterface base id 0x20037000
 
 }

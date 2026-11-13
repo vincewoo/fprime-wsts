@@ -184,7 +184,7 @@ class ModelSpec:
     cls: str  # C++ class, e.g. Wsts::RegisterMapI2c
     header: str
     endpoint: str
-    kind: str  # bytestream, i2c, spi, gpio, none
+    kind: str  # bytestream, i2c, spi, gpio, register, none
     address: int = 0
     params: Dict[str, str] = field(default_factory=dict)
 
@@ -198,6 +198,17 @@ class LinkEnd:
     instance: str  # the byte stream driver instance the link ends at
     role: str  # listen or connect
     peer: str  # the far end, "<element>.<instance>", for the report
+
+
+@dataclass
+class SetupSpec:
+    """C++ the generated set-up runs once the surrogates are bound and the models attached,
+    before the runtime starts"""
+    code: str = ""
+    headers: List[str] = field(default_factory=list)
+
+    def __bool__(self) -> bool:
+        return bool(self.code.strip() or self.headers)
 
 
 @dataclass
@@ -229,6 +240,7 @@ class Manifest:
     topology_fpp: Optional[List[str]] = None
     topology_sources: Optional[List[str]] = None
     main: MainSpec = field(default_factory=MainSpec)
+    setup: SetupSpec = field(default_factory=SetupSpec)
     extra_subdirectories: List[str] = field(default_factory=list)
     exclude_subdirectories: List[str] = field(default_factory=list)
     extra_depends: List[str] = field(default_factory=list)
@@ -286,8 +298,9 @@ class Manifest:
 KNOWN_KEYS = {
     "project", "deployment", "topology", "output", "substitute", "keep", "models", "control", "bridge", "tick_hz",
     "catalogs", "sources", "main", "cmake", "libraries", "fpp_exclude", "defines", "simulators", "devices",
-    "clocks", "run", "host",
+    "clocks", "run", "host", "setup",
 }
+SETUP_KEYS = {"code", "headers"}
 HOST_KEYS = {"ignore"}
 #: Key of `Manifest.cxx_flags` for flags that apply to every module
 ALL_MODULES = ""
@@ -318,7 +331,7 @@ def parse_connection(text: str, where: str) -> ConnectionSpec:
         source=source.replace("$", ""), source_index=int(source_index) if source_index is not None else None,
         target=target.replace("$", ""), target_index=int(target_index) if target_index is not None else None,
     )
-MODEL_KINDS = {"bytestream", "i2c", "spi", "gpio", "none"}
+MODEL_KINDS = {"bytestream", "i2c", "spi", "gpio", "register", "none"}
 
 
 def _cxx_flags(value, where: str) -> Dict[str, List[str]]:
@@ -457,6 +470,21 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
     )
     if manifest.main.generate and not manifest.main.start:
         raise WstsError(f"{where}: main.generate needs main.start (the C++ expression that starts the deployment)")
+
+    setup = data.get("setup")
+    if isinstance(setup, str):
+        setup = {"code": setup}
+    setup = setup or {}
+    unknown = set(setup) - SETUP_KEYS if isinstance(setup, dict) else {"(neither C++ text nor a mapping)"}
+    if unknown:
+        raise WstsError(f"{where}: setup: unknown key(s): {', '.join(sorted(unknown))}. 'setup' is C++ text, or a "
+                        f"mapping with {' and '.join(sorted(SETUP_KEYS))}")
+    headers = setup.get("headers") or []
+    if not isinstance(headers, list) or not all(isinstance(h, str) and h.strip() for h in headers):
+        raise WstsError(f"{where}: setup.headers must be a list of header names, as they are written in #include <...>")
+    manifest.setup = SetupSpec(code=str(setup.get("code") or ""), headers=[h.strip() for h in headers])
+    if manifest.setup.headers and not manifest.setup.code.strip():
+        raise WstsError(f"{where}: setup.headers is given without setup.code: the headers are for that code")
 
     for entry in data.get("clocks") or []:
         if not isinstance(entry, dict) or "instance" not in entry or "hz" not in entry:

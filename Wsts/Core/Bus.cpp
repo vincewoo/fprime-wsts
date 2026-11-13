@@ -29,6 +29,19 @@ void corrupt(Bytes& data, std::uint8_t mask) {
     }
 }
 
+//! Little-endian bytes of a register value, as many as the access is wide
+Bytes registerBytes(std::uint64_t value, unsigned width) {
+    Bytes bytes(width, 0);
+    for (unsigned i = 0; i < width && i < 8; i++) {
+        bytes[i] = static_cast<std::uint8_t>(value >> (8 * i));
+    }
+    return bytes;
+}
+
+std::uint64_t widthMask(unsigned width) {
+    return (width >= 8) ? ~0ull : ((1ull << (8 * width)) - 1);
+}
+
 void delay(std::uint32_t ms) {
     if (ms > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(ms));
@@ -73,9 +86,19 @@ JsonObj Record::toJson() const {
     if (type == "bs_tx" || type == "bs_rx") {
         obj.set("data", toHex(data));
     } else if (type == "i2c") {
-        obj.setNum("addr", addr).set("write", toHex(data)).set("read", toHex(rdata)).setNum("status", status);
+        obj.setNum("addr", static_cast<std::int64_t>(addr)).set("write", toHex(data)).set("read", toHex(rdata));
+        obj.setNum("status", status);
     } else if (type == "spi") {
         obj.set("write", toHex(data)).set("read", toHex(rdata)).setNum("status", status);
+    } else if (type == "reg_rd") {
+        // The offset is a quoted hex string: it may use all 64 bits
+        obj.setHex("offset", addr).setNum("width", static_cast<std::int64_t>(rdata.size()));
+        obj.set("read", toHex(rdata)).setNum("status", status);
+    } else if (type == "reg_wr") {
+        obj.setHex("offset", addr).setNum("width", static_cast<std::int64_t>(data.size()));
+        obj.set("write", toHex(data)).setNum("status", status);
+    } else if (type == "reg_irq") {
+        obj.setNum("number", static_cast<std::int64_t>(addr));
     } else {
         obj.setBool("level", level);
     }
@@ -112,12 +135,18 @@ void Bus::bindGpio(const std::string& endpoint, EdgeHandler handler) {
     this->endpointLocked(endpoint).edge = std::move(handler);
 }
 
+void Bus::bindRegister(const std::string& endpoint, InterruptHandler handler) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    this->endpointLocked(endpoint).irq = std::move(handler);
+}
+
 void Bus::unbind(const std::string& endpoint) {
     std::lock_guard<std::mutex> lock(m_mutex);
     const auto it = m_endpoints.find(endpoint);
     if (it != m_endpoints.end()) {
         it->second.rx = nullptr;
         it->second.edge = nullptr;
+        it->second.irq = nullptr;
     }
 }
 
@@ -141,6 +170,22 @@ void Bus::attachGpio(const std::string& endpoint, GpioDevice* device) {
     this->endpointLocked(endpoint).gpio = device;
 }
 
+RegisterDevice* Bus::attachRegister(const std::string& endpoint, RegisterDevice* device) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    Endpoint& ep = this->endpointLocked(endpoint);
+    RegisterDevice* previous = ep.reg;
+    ep.reg = device;
+    return previous;
+}
+
+void Bus::replaceRegister(const std::string& endpoint, RegisterDevice* device, RegisterDevice* replacement) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto it = m_endpoints.find(endpoint);
+    if (it != m_endpoints.end() && it->second.reg == device) {
+        it->second.reg = replacement;
+    }
+}
+
 void Bus::detach(const std::string& endpoint) {
     std::lock_guard<std::mutex> lock(m_mutex);
     const auto it = m_endpoints.find(endpoint);
@@ -149,6 +194,7 @@ void Bus::detach(const std::string& endpoint) {
         it->second.i2c.clear();
         it->second.spi = nullptr;
         it->second.gpio = nullptr;
+        it->second.reg = nullptr;
     }
 }
 
@@ -248,6 +294,7 @@ Bus::Effects Bus::applyFaults(const std::string& endpoint, FaultDir dir) {
                 case FaultKind::CORRUPT:
                     effects.corrupt = true;
                     effects.mask = static_cast<std::uint8_t>(effects.mask ^ (fault.arg & 0xFF));
+                    effects.wideMask ^= fault.arg;
                     break;
                 case FaultKind::DELAY:
                     effects.delayMs += fault.arg;
@@ -515,6 +562,7 @@ void Bus::setReplay(bool enabled) {
         std::lock_guard<std::mutex> lock(m_mutex);
         for (auto& entry : m_endpoints) {
             entry.second.replayResponses.clear();
+            entry.second.registerReplay.clear();
         }
     }
 }
@@ -531,6 +579,143 @@ bool Bus::i2cPoke(const std::string& endpoint, std::uint32_t addr, std::uint8_t 
         device = (it == ep->second.i2c.end()) ? nullptr : it->second;
     }
     return (device != nullptr) && device->pokeRegister(reg, value);
+}
+
+// ----------------------------------------------------------------------
+// Registers
+// ----------------------------------------------------------------------
+
+int Bus::registerRead(const std::string& endpoint, std::uint64_t offset, unsigned width, std::uint64_t& value) {
+    const Effects effects = this->applyFaults(endpoint, FaultDir::TO_FLIGHT);
+    delay(effects.delayMs);
+
+    Record record;
+    record.type = "reg_rd";
+    record.endpoint = endpoint;
+    record.src = "flight";
+    record.addr = offset;
+    value = 0;
+
+    if (width != 4 && width != 8) {
+        record.status = RegisterStatus::WIDTH_ERR;
+        width = (width > 8 || width == 0) ? 4 : width;
+    } else if (effects.error || effects.drop) {
+        record.status = effects.error ? effects.status : RegisterStatus::READ_ERR;
+    } else if (effects.stuck) {
+        value = effects.stuckValue;  // the register is not reached
+    } else if (m_replay.load()) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        auto& recorded = this->endpointLocked(endpoint).registerReplay[offset];
+        if (recorded.empty()) {
+            record.status = RegisterStatus::OTHER_ERR;  // recording exhausted
+        } else {
+            record.status = recorded.front().first;
+            value = recorded.front().second;
+            recorded.pop_front();
+        }
+        record.src = "replay";
+    } else {
+        RegisterDevice* device = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            device = this->endpointLocked(endpoint).reg;
+        }
+        // The device is called without the bus lock: it may raise an interrupt from here
+        record.status = (device == nullptr) ? static_cast<int>(RegisterStatus::NO_DEVICE) : device->read(offset, width, value);
+    }
+    if (record.status == 0 && effects.corrupt) {
+        value ^= effects.wideMask;
+    }
+    // The port flight software reads through has no status: a failed read is all ones,
+    // which is what a bus that nothing answers on usually gives
+    value = (record.status == 0) ? (value & widthMask(width)) : widthMask(width);
+    record.rdata = registerBytes(value, width);
+    this->emit(record);
+    return record.status;
+}
+
+int Bus::registerWrite(const std::string& endpoint, std::uint64_t offset, unsigned width, std::uint64_t value) {
+    const Effects effects = this->applyFaults(endpoint, FaultDir::TO_DEVICE);
+    delay(effects.delayMs);
+
+    Record record;
+    record.type = "reg_wr";
+    record.endpoint = endpoint;
+    record.src = "flight";
+    record.addr = offset;
+
+    const bool badWidth = (width != 4 && width != 8);
+    if (badWidth) {
+        width = (width > 8 || width == 0) ? 4 : width;
+    }
+    if (effects.corrupt) {
+        value ^= effects.wideMask;
+    }
+    value &= widthMask(width);
+    record.data = registerBytes(value, width);
+    if (badWidth) {
+        record.status = RegisterStatus::WIDTH_ERR;
+    } else if (effects.error) {
+        record.status = effects.status;
+    } else if (effects.drop || effects.stuck || m_replay.load()) {
+        // Lost on the way, ignored by a stuck register, or the model is bypassed by a
+        // replay: flight software cannot tell any of these from a write that arrived
+    } else {
+        RegisterDevice* device = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            device = this->endpointLocked(endpoint).reg;
+        }
+        record.status = (device == nullptr) ? static_cast<int>(RegisterStatus::NO_DEVICE) : device->write(offset, width, value);
+    }
+    this->emit(record);
+    return record.status;
+}
+
+void Bus::registerInterrupt(const std::string& endpoint, std::uint32_t number, const char* src) {
+    // While responses are replayed the interrupts come from the recording
+    if (m_replay.load() && std::string(src) == "model") {
+        return;
+    }
+    const Effects effects = this->applyFaults(interruptTarget(endpoint), FaultDir::TO_FLIGHT);
+    delay(effects.delayMs);
+    if (effects.drop || effects.error || effects.stuck) {
+        return;
+    }
+    if (effects.corrupt) {
+        number ^= effects.wideMask;
+    }
+    InterruptHandler handler;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        handler = this->endpointLocked(endpoint).irq;
+    }
+    for (int delivery = 0; delivery < (effects.duplicate ? 2 : 1); delivery++) {
+        Record record;
+        record.type = "reg_irq";
+        record.endpoint = endpoint;
+        record.src = src;
+        record.addr = number;
+        this->emit(record);
+        if (handler) {
+            handler(number);
+        }
+    }
+}
+
+bool Bus::registerPoke(const std::string& endpoint, std::uint64_t offset, std::uint64_t value) {
+    RegisterDevice* device = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        const auto it = m_endpoints.find(endpoint);
+        device = (it == m_endpoints.end()) ? nullptr : it->second.reg;
+    }
+    return (device != nullptr) && device->poke(offset, value);
+}
+
+void Bus::queueRegisterReplay(const std::string& endpoint, std::uint64_t offset, int status, std::uint64_t value) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    this->endpointLocked(endpoint).registerReplay[offset].emplace_back(status, value);
 }
 
 // ----------------------------------------------------------------------

@@ -281,7 +281,7 @@ def test_opcode_table_of_the_flight_project_is_too_small(project, tmp_path):
     with pytest.raises(WstsError) as error:
         run(project, tmp_path / "out")
     message = str(error.value)
-    assert "registers 40 opcodes" in message and "table holds 36" in message
+    assert "registers 42 opcodes" in message and "table holds 36" in message
     assert "mission/config/project/CommandDispatcherImplCfg.hpp" in message
     assert '"${CMAKE_CURRENT_LIST_DIR}/CommandDispatcherImplCfg.hpp"' in message
 

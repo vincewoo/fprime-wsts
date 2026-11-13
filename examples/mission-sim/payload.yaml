@@ -14,6 +14,17 @@ deployment: Payload
 catalogs:
   - wsts-catalog.yaml
 
+# The register interface the FPGA driver (Components.FpgaMonitor) reads and writes through
+# is a component of sensor-lib, which no catalog knows: it is named here. Wsts.SimRegister
+# is written for it with its port names and types, and the driver above runs as in flight.
+#
+# Surrogates/SimRegisterInterface is a mirror of the same component, written by hand: it
+# keeps the flight component's REG_READ and REG_WRITE commands and their events in the
+# dictionary. To use it, name Sim.SimRegisterInterface here instead.
+substitute:
+  - instance: fpgaRegs
+    with: Wsts.SimRegister
+
 models:
   # IMU at I2C address 0x68: a model of this project (Models/), set in g
   - name: imu
@@ -40,6 +51,26 @@ models:
     endpoint: spiBus
     kind: spi
 
+  # The FPGA's housekeeping block behind fpgaRegs: the toolkit's register file, with the
+  # block's registers and its frame interrupt once a second (20 ticks at 20 Hz)
+  - name: fpga
+    class: Wsts::RegisterFile
+    endpoint: fpgaRegs
+    kind: register
+    params:
+      "reg.0x00": "0xF00D0001"   # identity, read only
+      "mask.0x00": "0"
+      "reg.0x04": "0"            # interrupt status, write 1 to clear
+      "w1c.0x04": "1"
+      "reg.0x08": "0"            # frame count
+      "reg.0x0C": "215"          # temperature: 21.5 degrees Celsius
+      "reg.0x10": "0"            # heartbeat
+      "reg.0x14": "0"            # LEDs
+      "irq.number": "1"
+      "irq.period": "20"
+      "irq.status": "0x04"
+      "irq.bits": "0x1"          # frame ready
+
   # Serial temperature sensor reporting once a second (20 ticks at 20 Hz)
   - name: tempSensor
     class: Wsts::ScriptedByteStream
@@ -63,7 +94,7 @@ cmake:
   include_early: [host.cmake]
   # This project's library.cmake builds only the modules this element uses
   cache:
-    MISSION_SIM_MODULES: [Models, Surrogates/SimLinuxGpio]
+    MISSION_SIM_MODULES: [Models, Surrogates/SimLinuxGpio, Surrogates/SimRegisterInterface]
   # The model's module, for the generated set-up that creates it
   depends: [Models]
 

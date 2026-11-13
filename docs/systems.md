@@ -156,6 +156,11 @@ the bus:
 
 An endpoint has either a device model or a link, not both.
 
+Links join byte streams only. A register block is not linked between elements: a register
+interface component is replaced inside its own element, and the model behind it lives
+there (in-process, or attached through that element's bridge). Two computers that share a
+dual-port memory or an FPGA need one external model attached to both elements' bridges.
+
 The surrogate accepts the set-up calls topology code makes on the socket drivers
 (`configure`, `configureSend`, `configureRecv`, `start`, `stop`, `join`), so that code
 compiles unchanged. It reports ready when `start` (or a UART's `open`) is called.

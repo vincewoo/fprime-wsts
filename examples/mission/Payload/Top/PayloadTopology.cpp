@@ -62,6 +62,8 @@ void configureDevices() {
     if (!spiBus.open(0, 0, Drv::SPI_FREQUENCY_1MHZ)) {
         Fw::Logger::log("[ERROR] Failed to open SPI bus\n");
     }
+    // Registers of the FPGA's housekeeping block
+    fpgaRegs.configure("/dev/uio0");
 }
 
 }  // namespace

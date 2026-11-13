@@ -93,6 +93,57 @@ def test_serving_an_i2c_device(sim, bridge):
     assert sim.replies[1]["status"] == 5, "no handler for that address"
 
 
+def test_serving_a_register_block(sim, bridge):
+    registers = {0x10: 0x1234, 0xFFFFFFFF00000000: 7}
+    writes = []
+
+    def read(offset, width):
+        if offset not in registers:
+            return 1, 0
+        return registers[offset]
+
+    bridge.serve_register("fpga", read, lambda offset, width, value: writes.append((offset, width, value)))
+    assert sim.requests[-1] == {"id": 1, "op": "attach", "endpoint": "fpga", "kind": "register"}
+    sim.push({"ev": "reg_req", "rid": 1, "endpoint": "fpga", "access": "read", "offset": "0x10", "width": 4, "rlen": 4})
+    sim.push({"ev": "reg_req", "rid": 2, "endpoint": "fpga", "access": "read", "offset": "0xffffffff00000000",
+              "width": 8, "rlen": 8})
+    sim.push({"ev": "reg_req", "rid": 3, "endpoint": "fpga", "access": "read", "offset": "0x20", "width": 4, "rlen": 4})
+    sim.push({"ev": "reg_req", "rid": 4, "endpoint": "fpga", "access": "write", "offset": "0x14", "width": 4,
+              "value": "0xfeedf00d", "rlen": 0})
+    sim.push({"ev": "reg_req", "rid": 5, "endpoint": "other", "access": "read", "offset": "0x0", "width": 4, "rlen": 4})
+    deadline = time.monotonic() + 2
+    while len(sim.replies) < 5 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert sim.replies[0] == {"op": "reply", "rid": 1, "status": 0, "data": "34120000"}
+    assert sim.replies[1] == {"op": "reply", "rid": 2, "status": 0, "data": "0700000000000000"}
+    assert sim.replies[2]["status"] == 1, "the handler's own status"
+    assert sim.replies[3] == {"op": "reply", "rid": 4, "status": 0, "data": ""}
+    assert writes == [(0x14, 4, 0xFEEDF00D)]
+    assert sim.replies[4]["status"] == 5, "no handler for that endpoint"
+
+
+def test_register_actions_and_records(sim, bridge):
+    bridge.reg_set("fpga", 0x10, 0xFFFFFFFF00000001)
+    assert sim.requests[-1] == {"id": 1, "op": "reg_set", "endpoint": "fpga", "offset": "0x10",
+                                "value": "0xffffffff00000001"}
+    bridge.raise_irq("fpga", 3)
+    assert sim.requests[-1] == {"id": 2, "op": "irq_raise", "endpoint": "fpga", "number": 3}
+    bridge.subscribe()
+    sim.push({"ev": "rec", "rec": "reg_rd", "endpoint": "fpga", "offset": "0x10", "width": 4, "read": "78563412",
+              "status": 0, "src": "flight", "tick": 4})
+    sim.push({"ev": "rec", "rec": "reg_wr", "endpoint": "fpga", "offset": "0x14", "width": 4, "write": "01000000",
+              "status": 0, "src": "flight", "tick": 4})
+    sim.push({"ev": "rec", "rec": "reg_irq", "endpoint": "fpga", "number": 3, "src": "inject", "tick": 5})
+    sim.push({"ev": "rec", "rec": "reg_rd", "endpoint": "elsewhere", "offset": "0x0", "width": 4, "read": "00000000",
+              "status": 0, "src": "flight", "tick": 5})
+    bridge.wait_for(lambda m: m.get("endpoint") == "elsewhere", timeout=2)
+    assert bridge.register_accesses("fpga") == [
+        {"rec": "reg_rd", "tick": 4, "src": "flight", "offset": 0x10, "status": 0, "value": 0x12345678},
+        {"rec": "reg_wr", "tick": 4, "src": "flight", "offset": 0x14, "status": 0, "value": 1},
+        {"rec": "reg_irq", "tick": 5, "src": "inject", "number": 3},
+    ]
+
+
 def test_unreachable_bridge():
     with pytest.raises(BridgeError, match="cannot connect"):
         WstsBridge("tcp:1", connect_timeout=0.3)

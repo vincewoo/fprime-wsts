@@ -15,6 +15,8 @@
 //   inject_bytes    endpoint (data: hex | text: string)
 //   gpio_force      endpoint level
 //   i2c_reg_set     endpoint addr reg value
+//   reg_set         endpoint offset value
+//   irq_raise       endpoint [number]
 //   model_set       model key value
 //   record_start    path | record_stop
 //   scenario_load   path [mode: stimulus|responses] | scenario_start | scenario_stop

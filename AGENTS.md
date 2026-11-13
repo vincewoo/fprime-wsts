@@ -7,12 +7,12 @@ Start with [README.md](README.md); the design is in [docs/design.md](docs/design
 
 | Path | Contents |
 |---|---|
-| `Wsts/Core/` | Plain C++: bus, faults, control core, cycle clocks, scenario player, recorder, bridge, reference models, links between elements. No F´ dependencies |
-| `Wsts/Drv/`, `Wsts/Svc/` | F´ components: surrogates, `BusByteStreamDevice` (adapter that puts an F´ simulator on a bus endpoint), `SimCycle` (cycle source with its own rate), `SimControl` (commands/events/telemetry), `SimSetup` (anchor) |
+| `Wsts/Core/` | Plain C++: bus (byte stream, I2C, SPI, GPIO, registers), faults, control core, cycle clocks, scenario player, recorder, bridge, reference models, links between elements, `RegisterSurrogate` (the bus side of a register interface surrogate), `Dma` (address translation a project registers). No F´ dependencies |
+| `Wsts/Drv/`, `Wsts/Svc/` | F´ components: surrogates (`SimRegister` is the one for register interface components), `BusByteStreamDevice` (adapter that puts an F´ simulator on a bus endpoint), `SimCycle` (cycle source with its own rate), `SimControl` (commands/events/telemetry), `SimSetup` (anchor) |
 | `catalog/wsts-catalog.yaml` | Which flight components each surrogate replaces |
-| `python/fprime_wsts/` | `generate.py` (transform), `fpp.py` (model loading), `flight_cmake.py` (flight CMake read as text: root `CMakeLists.txt`, nested modules, SDK links, `BUILD_TESTING` branches, the build tree), `hostcheck.py` (what the build takes from the host, and `check-host`), `manifest.py`, `simulators.py` (added F´ instances, bus devices), `system.py` (multi-element systems), `bridge.py`, `runner.py`, `scaffold.py`, `cli.py` |
-| `examples/mission/` | The example's flight project: `Cdh` (VxWorks, no `main()`, UART inside the `SensorLink` subtopology of `lib/sensor-lib`, `CONFIGURATION_OVERRIDES`, `system.fpp`) and `Payload` (Linux: I2C, SPI, UART, GPIO, and `Components/Imager`, which links a camera SDK and has a stub under `if (BUILD_TESTING)`), joined by a `GenericHub`. Only read by the toolkit |
-| `examples/mission-sim/` | The example's simulation project: `wsts-system.yaml`, `cdh.yaml`, `payload.yaml`, simulators written as F´ components, a 125 Hz clock, a bus-less surrogate, a mirror surrogate, a device model, a vendored library, configuration overrides. Its `wsts/Mission/` is **generated** and checked in. `examples/README.md` maps each feature to where it is |
+| `python/fprime_wsts/` | `generate.py` (transform), `fpp.py` (model loading), `flight_cmake.py` (flight CMake read as text: root `CMakeLists.txt`, nested modules, SDK links, `BUILD_TESTING` branches, the build tree), `hostcheck.py` (what the build takes from the host, and `check-host`), `manifest.py`, `simulators.py` (added F´ instances, bus devices), `registers.py` (`Wsts.SimRegister` written for a flight register interface component), `system.py` (multi-element systems), `bridge.py`, `runner.py`, `scaffold.py`, `cli.py` |
+| `examples/mission/` | The example's flight project: `Cdh` (VxWorks, no `main()`, UART inside the `SensorLink` subtopology of `lib/sensor-lib`, `CONFIGURATION_OVERRIDES`, `system.fpp`) and `Payload` (Linux: I2C, SPI, UART, GPIO, an FPGA driver on the register interface component of `lib/sensor-lib`, and `Components/Imager`, which links a camera SDK and has a stub under `if (BUILD_TESTING)`), joined by a `GenericHub`. Only read by the toolkit |
+| `examples/mission-sim/` | The example's simulation project: `wsts-system.yaml`, `cdh.yaml`, `payload.yaml`, simulators written as F´ components, a 125 Hz clock, a bus-less surrogate, mirror surrogates, a device model, a register block with an interrupt, a vendored library, configuration overrides. Its `wsts/Mission/` is **generated** and checked in. `examples/README.md` maps each feature to where it is |
 | `tests/e2e/` | End-to-end tests against the running Mission system and a GDS (`test_system.py`, `test_cdh.py`, `test_payload.py`) |
 | `lib/` | Pinned submodules: `fprime` (v4.4.2), `fprime-vxworks` |
 
@@ -91,6 +91,15 @@ version, unset `JAVA_HOME` so the bundled JRE is used.
 - Autocoded handlers take enum and string arguments by `const&`.
 - `fprime-util generate` fails if the build directory already exists: after regenerating
   an overlay, run only `fprime-util build`.
+- Port types are nominal in FPP: a toolkit component cannot be connected where a project's
+  port type is expected. `Wsts.SimRegister` is therefore written again per flight component
+  (`registers.py`, into `WstsAdapted/` of the overlay), its ports found by signature. Nothing
+  in the toolkit names a project's register interface component.
+- A failed register read returns all ones to flight (the ports have no status) and counts in
+  `BusErrors`. Interrupts of a register endpoint are the fault target `<endpoint>:irq`.
+- `set(... CACHE ...)` in an overlay does not change a value an existing build directory has
+  cached: after changing `cmake.cache` in a manifest, pass the value with `cmake -D` to the
+  build directory or regenerate it with `fprime-util generate -f`.
 - A new action goes in `Control::dispatch`, then `SimControl.fpp`/`.cpp`, `bridge.py`,
   `docs/reference.md`, and a test at each level.
 

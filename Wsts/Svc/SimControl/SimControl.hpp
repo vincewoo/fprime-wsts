@@ -54,6 +54,12 @@ class SimControl final : public SimControlComponentBase {
                                 U32 addr,
                                 U8 reg,
                                 U8 value) override;
+    void REG_SET_cmdHandler(FwOpcodeType opCode,
+                            U32 cmdSeq,
+                            const Fw::CmdStringArg& endpoint,
+                            U64 offset,
+                            U64 value) override;
+    void IRQ_RAISE_cmdHandler(FwOpcodeType opCode, U32 cmdSeq, const Fw::CmdStringArg& endpoint, U32 number) override;
     void MODEL_SET_cmdHandler(FwOpcodeType opCode,
                               U32 cmdSeq,
                               const Fw::CmdStringArg& model,

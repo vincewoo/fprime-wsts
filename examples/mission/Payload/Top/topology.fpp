@@ -14,6 +14,7 @@ module Payload {
     instance rateGroup10Hz
     instance rateGroup1Hz
     instance cmdDisp
+    instance fpga
     instance posixTime
     instance rateGroupDriver
     instance textLogger
@@ -34,6 +35,7 @@ module Payload {
     instance heaterPin
     instance switchPin
     instance spiBus
+    instance fpgaRegs
 
     # ----------------------------------------------------------------------
     # Pattern graph specifiers
@@ -56,6 +58,7 @@ module Payload {
 
       rateGroupDriver.CycleOut[Ports_RateGroups.rateGroup10Hz] -> rateGroup10Hz.CycleIn
       rateGroup10Hz.RateGroupMemberOut[0] -> imu.run
+      rateGroup10Hz.RateGroupMemberOut[1] -> fpga.run
 
       rateGroupDriver.CycleOut[Ports_RateGroups.rateGroup1Hz] -> rateGroup1Hz.CycleIn
       rateGroup1Hz.RateGroupMemberOut[0] -> instrument.run
@@ -110,6 +113,11 @@ module Payload {
 
       # Converter on the SPI bus
       adc.spiWriteRead -> spiBus.SpiWriteRead
+
+      # FPGA housekeeping block: memory-mapped registers and an interrupt
+      fpga.regRead       -> fpgaRegs.read32In
+      fpga.regWrite      -> fpgaRegs.write32In
+      fpgaRegs.interrupt -> fpga.interruptIn
     }
 
   }

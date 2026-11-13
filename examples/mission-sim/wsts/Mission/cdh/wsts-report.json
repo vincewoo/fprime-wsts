@@ -410,9 +410,11 @@
         "Cdh.wstsControl.I2C_REG_SET",
         "Cdh.wstsControl.INJECT_BYTES",
         "Cdh.wstsControl.INJECT_TEXT",
+        "Cdh.wstsControl.IRQ_RAISE",
         "Cdh.wstsControl.MODEL_SET",
         "Cdh.wstsControl.RECORD_START",
         "Cdh.wstsControl.RECORD_STOP",
+        "Cdh.wstsControl.REG_SET",
         "Cdh.wstsControl.SCENARIO_LOAD",
         "Cdh.wstsControl.SCENARIO_START",
         "Cdh.wstsControl.SCENARIO_STOP",
@@ -655,6 +657,10 @@
         "instances": []
       },
       {
+        "module": "lib/sensor-lib/SensorLib/RegisterInterface",
+        "instances": []
+      },
+      {
         "module": "lib/sensor-lib/SensorLib/SerialSensor",
         "instances": [
           "SensorLink.sensor (SensorLib.SerialSensor)"
@@ -698,7 +704,29 @@
         "instances": []
       }
     ],
-    "system_headers": {},
+    "system_headers": {
+      "fcntl.h": [
+        {
+          "module": "lib/sensor-lib/SensorLib/RegisterInterface",
+          "file": "../../../../mission/lib/sensor-lib/SensorLib/RegisterInterface/RegisterInterface.cpp",
+          "line": 3
+        }
+      ],
+      "sys/mman.h": [
+        {
+          "module": "lib/sensor-lib/SensorLib/RegisterInterface",
+          "file": "../../../../mission/lib/sensor-lib/SensorLib/RegisterInterface/RegisterInterface.cpp",
+          "line": 4
+        }
+      ],
+      "unistd.h": [
+        {
+          "module": "lib/sensor-lib/SensorLib/RegisterInterface",
+          "file": "../../../../mission/lib/sensor-lib/SensorLib/RegisterInterface/RegisterInterface.cpp",
+          "line": 5
+        }
+      ]
+    },
     "libraries": {},
     "packages": {},
     "sdk_paths": [],
@@ -742,7 +770,7 @@
       "constant": "CmdDispatcherComponentCommandPorts"
     },
     "command_table": {
-      "used": 40,
+      "used": 42,
       "size": 80,
       "source": "../../../config/CommandDispatcherImplCfg.hpp"
     },

@@ -45,6 +45,13 @@ surrogates:
     replaces:
       - Drv.LinuxGpioDriver
 
+  # For register interface components: what flight device drivers read and write
+  # memory-mapped registers through. Those are components of a project or its libraries, so
+  # none is listed here: the manifest names the one to replace
+  # (`substitute: - {component: <module>.<Component>, with: Wsts.SimRegister}`).
+  - surrogate: Wsts.SimRegister
+    replaces: []
+
   - surrogate: Wsts.SimTick
     replaces:
       - Svc.LinuxTimer

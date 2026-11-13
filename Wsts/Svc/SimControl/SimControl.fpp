@@ -2,10 +2,10 @@ module Wsts {
 
   @ Kind of fault applied to transactions on a WSTS bus endpoint
   enum SimFaultKind : U8 {
-    DROP = 0      @< Discard the data or write; I2C and SPI transactions fail
-    CORRUPT = 1   @< XOR every byte with the low 8 bits of arg
+    DROP = 0      @< Discard the data or write; I2C and SPI transactions and register reads fail
+    CORRUPT = 1   @< XOR every byte with the low 8 bits of arg; a register value with all of arg
     DELAY = 2     @< Hold the transaction for arg milliseconds
-    DUPLICATE = 3 @< Deliver byte stream data twice
+    DUPLICATE = 3 @< Deliver byte stream data, or a register interrupt, twice
     ERROR = 4     @< Return driver status arg to flight software
     STUCK = 5     @< Reads return arg; writes are ignored
   }
@@ -123,6 +123,19 @@ module Wsts {
       $reg: U8
       value: U8
     ) opcode 0x23
+
+    @ Set a register of a simulated register block, without a flight write
+    async command REG_SET(
+      endpoint: string size 40
+      offset: U64 @< Byte offset of the register in the block
+      value: U64
+    ) opcode 0x25
+
+    @ Raise an interrupt of a simulated register block
+    async command IRQ_RAISE(
+      endpoint: string size 40
+      number: U32 @< Interrupt number handed to flight software
+    ) opcode 0x26
 
     @ Set a parameter of a device model
     async command MODEL_SET(

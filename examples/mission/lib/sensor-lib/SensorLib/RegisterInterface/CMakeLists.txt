@@ -1,0 +1,9 @@
+register_fprime_library(
+    AUTOCODER_INPUTS
+        "${CMAKE_CURRENT_LIST_DIR}/RegisterInterface.fpp"
+    SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/RegisterInterface.cpp"
+    DEPENDS
+        Fw_Logger
+        Os
+)

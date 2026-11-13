@@ -60,7 +60,7 @@ F´ components that the simulation adds to the topology. They are not in the fli
 **Capacity used by the simulated topology:**
 
 - Command registration ports: 10 of 30 (`CmdDispatcherComponentCommandPorts`)
-- Opcodes: 40 of 80 (`CMD_DISPATCHER_DISPATCH_TABLE_SIZE` in `../../../config/CommandDispatcherImplCfg.hpp`)
+- Opcodes: 42 of 80 (`CMD_DISPATCHER_DISPATCH_TABLE_SIZE` in `../../../config/CommandDispatcherImplCfg.hpp`)
 - Parameters: 1 of 25 (`PRMDB_NUM_DB_ENTRIES` in `../../../../../lib/fprime/default/config/PrmDbImplCfg.hpp`)
 
 ## Device models
@@ -80,16 +80,18 @@ F´ components that the simulation adds to the topology. They are not in the fli
 - `SensorLink.uart.BytesRecv`
 - `SensorLink.uart.BytesSent`
 
-**Added (WSTS):** 44
+**Added (WSTS):** 46
 - `Cdh.wstsControl.FAULT_CLEAR`
 - `Cdh.wstsControl.FAULT_SET`
 - `Cdh.wstsControl.GPIO_FORCE`
 - `Cdh.wstsControl.I2C_REG_SET`
 - `Cdh.wstsControl.INJECT_BYTES`
 - `Cdh.wstsControl.INJECT_TEXT`
+- `Cdh.wstsControl.IRQ_RAISE`
 - `Cdh.wstsControl.MODEL_SET`
 - `Cdh.wstsControl.RECORD_START`
 - `Cdh.wstsControl.RECORD_STOP`
+- `Cdh.wstsControl.REG_SET`
 - `Cdh.wstsControl.SCENARIO_LOAD`
 - `Cdh.wstsControl.SCENARIO_START`
 - `Cdh.wstsControl.SCENARIO_STOP`
@@ -246,7 +248,7 @@ From `cmake.cxx_flags` in the manifest, for C++ sources.
 Read from the sources and CMake files of the modules of this build (the kept flight modules, the libraries and the simulation's own). `fprime-wsts check-host` asks a machine whether it has them, and records its compiler in `wsts-host.md`.
 
 - Flight toolchain `vxworks`: its compiler is not named by a plain set() (`../../../../../lib/fprime-vxworks/cmake/toolchain/vxworks.cmake`). The host compiler is another one: standard library headers include one another differently between compilers and versions, so code that relies on an indirect include may not compile here.
-- System headers: none
+- System headers: `fcntl.h`, `sys/mman.h`, `unistd.h`
 - Libraries (`-l`): none
 - Packages (`find_package`): none
 - Files of an SDK: none
