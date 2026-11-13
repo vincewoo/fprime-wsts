@@ -129,6 +129,9 @@ Notes:
 
 - Model methods are called from flight threads (inside the port call), from the tick thread
   and from bridge threads. Guard shared state.
+- The interfaces are `ByteStreamDevice`, `I2cDevice`, `SpiDevice`, `GpioDevice` and
+  `RegisterDevice` (memory-mapped registers, see [A register block](#a-register-block)).
+  The stock models are in `Wsts/Core/Models.hpp`.
 - A byte stream model replies through the `ByteSink` it is handed, or at any time with
   `Wsts::Bus::get().byteStreamInject(endpoint, bytes)`. It is told its endpoint through
   `set("endpoint", …)` at start-up.
@@ -146,6 +149,18 @@ sim.serve_i2c("thermoBus", 0x48, lambda write, length: (0, bytes([42] * length))
 The handler runs for each transaction; if it does not answer within two seconds flight
 software gets an error status. When the client disconnects the device disappears from the
 bus (I2C then reports an address error).
+
+A register block is served the same way, and its interrupts are raised with `raise_irq`:
+
+```python
+registers = {0x00: 0xF00D0001, 0x0C: 215}
+sim.serve_register("fpgaRegs",
+                   lambda offset, width: registers.get(offset, (1, 0)),      # a value, or (status, value)
+                   lambda offset, width, value: registers.update({offset: value}))
+sim.raise_irq("fpgaRegs", 1)
+```
+
+When this client disconnects, the model that was on the endpoint before answers again.
 
 ## Device simulators as F´ components
 
@@ -587,9 +602,276 @@ substitute:
   - {instance: timeUnit, with: Fc.SimTimeUnit}
 ```
 
-If only the interrupt is missing, a narrower cut also works: substitute the register
-interface component the interrupt arrives on, and raise its interrupt output from the
-tick in the same way. The time unit driver then runs as in flight.
+If the time unit driver reaches its hardware through a register interface component, a
+narrower cut keeps the driver itself: replace the register interface, and model the time
+unit's registers and interrupt ([A time unit](#a-time-unit), below). The driver then runs
+as in flight, and no surrogate for it is written.
+
+### A register block
+
+On many flight computers the devices are FPGA blocks or SoC peripherals. Their drivers
+are project components that read and write 32-bit registers through one **register
+interface component**, which also delivers the hardware's interrupts. Off the target that
+component is usually a stub already: its registers are an array that nothing fills, and
+no interrupt arrives. The drivers above it then read zeros, and either do nothing or
+assert.
+
+Do not replace those drivers. Replace the register interface component, and put a model
+of the register block behind it: the drivers then run as in flight, with their register
+sequences, their interrupt handling and their own events.
+
+```yaml
+substitute:
+  - component: Board.RegisterInterface   # a component of the project or one of its libraries
+    with: Wsts.SimRegister
+models:
+  - name: fpga
+    class: Sim::FpgaModel                # or the stock Wsts::RegisterFile, with params
+    header: Models/FpgaModel.hpp
+    endpoint: fpgaRegs                   # the instance's base name
+    kind: register
+```
+
+`Wsts.SimRegister` is written for the named component with its own port names and port
+types: nothing has to be mapped
+([reference](reference.md#register-blocks) has the port shapes it recognises). Each
+instance of the component is one endpoint with one block behind it.
+
+**The model** implements `Wsts::RegisterDevice`. Start from `Wsts::RegisterFile`, which
+has the common register behaviour, and add what the block does:
+
+```cpp
+#include <Wsts/Core/Models.hpp>
+
+class FpgaModel : public Wsts::RegisterFile {
+  public:
+    enum : std::uint64_t { ID = 0x00, STATUS = 0x04, CONTROL = 0x08, COUNT = 0x0C };
+
+    FpgaModel() {
+        this->define(ID, 0xF00D0001, 0);                              // read only
+        this->define(STATUS, 0, 0xFFFFFFFF, WRITE_1_TO_CLEAR);
+        this->define(CONTROL, 0);
+        this->define(COUNT, 0, 0);
+        // Runs after flight software wrote the register, outside the model's lock
+        this->onWrite(CONTROL, [this](std::uint64_t, std::uint32_t value) {
+            if (value & 0x1) {                                        // "start"
+                this->setBits(STATUS, 0x1);                           // "done", as the hardware sets it
+                this->raise(3);                                       // interrupt 3, towards flight
+            }
+        });
+    }
+    void onTick(std::uint64_t tick) override {                         // the simulation's tick thread
+        this->poke(COUNT, tick);
+    }
+};
+```
+
+What to know:
+
+- **Threads.** `read` and `write` (and the hooks) run on the flight thread that made the
+  port call. `onTick` runs on the simulation's tick thread, and `poke` on the thread of
+  whoever sent the action. `RegisterFile` guards its registers; guard what you add.
+- **Interrupts arrive on another thread.** `raise()` calls the flight handler on the
+  thread that raised it: the tick thread from `onTick`, the flight thread from a write
+  hook. In flight an interrupt handler never runs on the thread that reads and writes the
+  registers either, and it must not block: a handler that posts a message to its
+  component's queue and returns is right in both worlds. Check that this is what the
+  flight handler does. The surrogate delivers one interrupt at a time, so the handler is
+  not re-entered; a handler that takes a lock the register-accessing thread holds while it
+  writes the register that raises the interrupt would deadlock, as it would on the target.
+- **A read that fails gives flight all ones**, because the port has no status: an offset
+  the model did not define, a fault, no model at all. `BusErrors` counts them. A
+  `RegisterFile` with `strict` set to `0` is plain memory instead, like the flight stub.
+- **64-bit accesses** reach the model with width 8. `RegisterFile` serves them as two
+  registers (low half at the offset). A model of your own that has none returns
+  `Wsts::RegisterStatus::WIDTH_ERR`, and flight reads all ones.
+- **Faults.** On the endpoint: `drop`, `error`, `stuck`, `corrupt`, `delay`, per direction
+  (a write goes `to_device`, a read `to_flight`). On `<endpoint>:irq`: `drop` loses an
+  interrupt, `duplicate` delivers it twice.
+- **From outside:** `reg_set` sets a register without a flight write, `irq_raise` raises
+  an interrupt, and `model_set fpga reg.0x0C 215` reaches `RegisterFile`'s parameters. In
+  Python, `WstsBridge.serve_register(endpoint, read, write)` takes the block over and
+  `raise_irq` raises its interrupts.
+
+`examples/mission` has the pieces: `SensorLib.RegisterInterface` in `lib/sensor-lib`, the
+driver `Components.FpgaMonitor` on top of it, and in `examples/mission-sim/payload.yaml`
+the substitution and a `Wsts::RegisterFile` with one interrupt.
+
+#### A time unit
+
+A time unit that is both the tick and the clock (see [A project timer](#a-project-timer))
+is a register block too, when its driver reaches it through a register interface: the
+driver's interrupt handler posts to its queue, the queued handler reads an interrupt
+status register and calls the cycle output, and the time getter reads seconds and
+sub-seconds registers. Keep that driver. Model the block, and make the model the
+simulation's tick source: it advances simulation time, then updates its registers, then
+raises the interrupt that cycles the flight rate groups.
+
+```cpp
+class TimeUnitModel : public Wsts::RegisterFile {
+  public:
+    enum : std::uint64_t { REVISION = 0x00, IRQ_STATUS = 0x08, SECONDS = 0x10, SUBSECONDS = 0x14 };
+    enum : std::uint32_t { IRQ_CYCLE = 0x1, IRQ_PPS = 0x2, IRQ_NUMBER = 0 };
+
+    explicit TimeUnitModel(std::uint64_t periodNs = 15625000) : m_periodNs(periodNs) {   // 64 Hz
+        this->define(REVISION, 0x00010002, 0);
+        this->define(IRQ_STATUS, 0, 0xFFFFFFFF, WRITE_1_TO_CLEAR);
+        this->define(SECONDS, 0, 0);
+        this->define(SUBSECONDS, 0, 0);
+        // Before the runtime starts: this model is the tick source, no internal ticker is needed
+        Wsts::Control::get().registerTickSource();
+        Wsts::Control::get().setTickPeriod(periodNs);
+    }
+
+    //! One flight cycle: simulation time first, then the registers, then the interrupt
+    void cycle() {
+        Wsts::Control& control = Wsts::Control::get();
+        control.onTick();                                  // models, scenarios, faults, clocks
+        const std::uint64_t now = control.tick() * m_periodNs;
+        this->poke(SECONDS, now / 1000000000ull);
+        this->poke(SUBSECONDS, now % 1000000000ull);
+        const bool pps = (now / 1000000000ull) != ((now - m_periodNs) / 1000000000ull);
+        this->setBits(IRQ_STATUS, IRQ_CYCLE | (pps ? static_cast<std::uint32_t>(IRQ_PPS) : 0u));
+        this->raise(IRQ_NUMBER);                           // the flight driver cycles the rate groups
+    }
+
+    void start() {
+        m_thread = std::thread([this]() {
+            Wsts::Control& control = Wsts::Control::get();
+            auto next = std::chrono::steady_clock::now();
+            while (!m_quit.load()) {
+                const double rate = std::max(0.001, control.rate());
+                next += std::chrono::nanoseconds(static_cast<std::int64_t>(static_cast<double>(m_periodNs) / rate));
+                const auto now = std::chrono::steady_clock::now();
+                if (next < now) {
+                    next = now;                            // fell behind: do not burst to catch up
+                }
+                std::this_thread::sleep_until(next);
+                if (control.paused()) {
+                    control.onIdle();                      // bridge and scenario listeners keep running
+                } else if (!m_quit.load()) {
+                    this->cycle();
+                }
+            }
+        });
+    }
+    void stop() { m_quit.store(true); if (m_thread.joinable()) m_thread.join(); }
+    ~TimeUnitModel() { this->stop(); }
+
+  private:
+    std::uint64_t m_periodNs;
+    std::atomic<bool> m_quit{false};
+    std::thread m_thread;
+};
+```
+
+Start the thread from `setup` in the manifest, which runs once the model is attached and
+the surrogates are bound:
+
+```yaml
+models:
+  - {name: timeUnit, class: Sim::TimeUnitModel, header: Models/TimeUnitModel.hpp, endpoint: timeRegs, kind: register}
+setup: |
+  model_timeUnit.start();
+```
+
+(`model_<name>` is the model's variable in the generated set-up.) Pause, resume and the
+time scale then act on the flight rate groups, because the interrupt stops and stretches
+with the tick. The seconds registers follow simulated time, so flight time stamps stop
+while the simulation is paused. `fprime-wsts generate` reports that the kept driver's
+interrupt arrives from a simulated register endpoint, and warns only if no model is
+attached there. The unit tests of the toolkit's core hold this model
+(`Wsts/Core/test/ut/CoreTestMain.cpp`), driven by hand and on its thread.
+
+The flight driver's start-up order matters: the first interrupt must not arrive before
+the driver can take it. If its handler asserts when its queue is not there yet, start
+the model from the end of the topology set-up instead of from `setup`.
+
+#### Memory shared with hardware
+
+A driver that receives frames through a DMA ring allocates a buffer, writes the buffer's
+**physical** address into a register, and reads what the hardware put there through the
+buffer's **virtual** address. A model sees the physical address in a register write and
+has to write into the host memory behind it.
+
+The toolkit keeps that translation, and the project fills it in, because only the
+project's allocator knows the regions:
+
+```cpp
+#include <Wsts/Core/Dma.hpp>
+
+Wsts::Dma::addRegion(hostBase, physicalBase, size);          // once per region the allocator maps
+// or, with the flight library's own functions:
+Wsts::Dma::setTranslator(toPhysical, toVirtual);
+```
+
+```yaml
+setup:
+  headers: [Wsts/Core/Dma.hpp, Proj/Dma/DmaAllocator.hpp]
+  code: |
+    Wsts::Dma::addRegion(Proj::Dma::hostBase(), Proj::Dma::physicalBase(), Proj::Dma::size());
+```
+
+and the model, in the hook of the register that takes the address:
+
+```cpp
+this->onWrite(RX_BUFFER_ADDRESS, [this](std::uint64_t, std::uint32_t address) {
+    m_ring = static_cast<std::uint8_t*>(Wsts::Dma::toVirtual(address, m_ringSize));   // nullptr: not in a region
+});
+```
+
+This only works if the flight driver wrote a meaningful address, which is the flight
+libraries' business: their virtual-to-physical function has to translate through the
+allocator's region off the target
+([what to change there](vxworks-conversion.md#what-you-still-have-to-deal-with)). The
+driver's set-up may run before `setup` does; register the regions where the allocator
+creates them if the model needs them that early. A DMA engine that moves data by itself
+is not modelled by any of this: it is a model of its own, which writes into the ring and
+advances the "last written" register on its tick.
+
+#### A mirror of the register interface
+
+`Wsts.SimRegister` has no commands or events, so a register interface component's debug
+commands (read or write a register by offset) and their events leave the dictionary. To
+keep them, write a mirror. `fprime-wsts scaffold` copies the model; the implementation
+derives from `Wsts::RegisterSurrogate`, which has the bus side of every handler, so what
+is left to write is the glue to the flight component's commands and events:
+
+```cpp
+class SimRegisterInterface final : public SimRegisterInterfaceComponentBase, public Wsts::RegisterSurrogate {
+  public:
+    explicit SimRegisterInterface(const char* name) : SimRegisterInterfaceComponentBase(name) {}
+    ~SimRegisterInterface() { this->unbindRegister(); }
+
+    void wstsBind(const char* endpoint, const char* options = "") {
+        this->bindRegister(endpoint, options, [this](std::uint32_t number) { this->interrupt_out(0, number); });
+    }
+    void configure(const char* device) {}                    // what flight topology code calls
+
+  private:
+    U32 read32In_handler(FwIndexType, U64 offset) override { return this->registerRead32(offset); }
+    void write32In_handler(FwIndexType, U64 offset, U32 value) override { this->registerWrite32(offset, value); }
+
+    // The flight command, with the access made on the bus: faults and the recording see it
+    void REG_READ_cmdHandler(FwOpcodeType opCode, U32 cmdSeq, U32 offset) override {
+        std::uint64_t value = 0;
+        if (this->registerRead(offset, 4, value) != 0) {     // the status the port does not carry
+            this->log_WARNING_LO_OffsetOutOfRange(offset);
+            this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::VALIDATION_ERROR);
+            return;
+        }
+        this->log_ACTIVITY_HI_RegisterValue(offset, static_cast<U32>(value));
+        this->cmdResponse_out(opCode, cmdSeq, Fw::CmdResponse::OK);
+    }
+};
+```
+
+`examples/mission-sim/Surrogates/SimRegisterInterface` is the whole of it, for the
+example's `SensorLib.RegisterInterface`; name `Sim.SimRegisterInterface` under
+`substitute` in `payload.yaml` to use it. A mirror is also the answer when the flight
+component has ports that are not register accesses, or when flight topology code calls
+methods of it, or names types and enumerators of it, that `Wsts.SimRegister` does not
+have (it accepts `configure(...)` and `open(...)` and nothing else).
 
 ### Mirror surrogates
 

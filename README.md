@@ -128,6 +128,9 @@ device models. [docs/design.md](docs/design.md) has more detailed diagrams of ea
 - **Surrogate components** for the standard driver interfaces: `Wsts.SimByteStream` (UART),
   `Wsts.SimI2c`, `Wsts.SimSpi`, `Wsts.SimGpio`, `Wsts.SimTick`. They are ordinary F´ components,
   and projects write their own the same way.
+- **Memory-mapped registers**: `Wsts.SimRegister` takes the place of a project's register
+  interface component, so drivers of FPGA blocks and SoC peripherals run as in flight
+  against a model of the registers and their interrupts.
 - **`fprime-wsts generate`**: finds the hardware instances in a topology, retypes them to
   surrogates, wires in the WSTS control component, and writes a buildable overlay project.
   Hand-written topology code is reused unchanged.
@@ -223,7 +226,7 @@ with WstsBridge("tcp:50101") as sim:                   # the Payload computer
 
 From the ground system, with the commands on the `wstsControl` instance: `SIM_PAUSE`,
 `SIM_RESUME`, `SIM_SET_RATE`, `FAULT_SET`, `FAULT_CLEAR`, `INJECT_BYTES`, `INJECT_TEXT`,
-`GPIO_FORCE`, `I2C_REG_SET`, `MODEL_SET`, `SCENARIO_LOAD`, `SCENARIO_START`,
+`GPIO_FORCE`, `I2C_REG_SET`, `REG_SET`, `IRQ_RAISE`, `MODEL_SET`, `SCENARIO_LOAD`, `SCENARIO_START`,
 `SCENARIO_STOP`, `RECORD_START`, `RECORD_STOP`.
 
 From a scenario file, one action per line, keyed on simulation ticks:
