@@ -20,9 +20,10 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from . import flight_cmake
 from . import fpp
+from . import hostcheck
 from . import simulators as sims
 from .fpp import WstsError
-from .manifest import DEFAULT_CATALOG, TOOLKIT_ROOT, LinkEnd, Manifest, ModelSpec, Surrogate, load_catalog
+from .manifest import ALL_MODULES, DEFAULT_CATALOG, TOOLKIT_ROOT, LinkEnd, Manifest, ModelSpec, Surrogate, load_catalog
 
 SETUP_COMPONENT = "Wsts.SimSetup"
 CONTROL_COMPONENT = "Wsts.SimControl"
@@ -905,6 +906,57 @@ EXCLUDED_CHECK = """
         endif()
     endforeach()"""
 
+STUB_SETS = """
+# From `cmake.stub_variants` in the manifest: modules that are read with BUILD_TESTING set, so that
+# they take the variant they have for unit tests (a stub in place of code that needs the target's
+# SDK). Nothing else of a unit-test build comes with it: no unit-test targets, no sanitizers, no
+# coverage flags, and BUILD_UT is not defined.
+set(WSTS_STUB_VARIANT_MODULES
+{modules}
+)"""
+
+STUB_CHECK = """
+    # BUILD_TESTING is a variable of this call: the listed module's CMakeLists.txt sees it, a module
+    # which that one adds gets the build's own value back, and it is gone when the call returns
+    if (DEFINED WSTS_BUILD_TESTING_OUTSIDE)
+        set(BUILD_TESTING "${WSTS_BUILD_TESTING_OUTSIDE}")
+        set(__FPRIME_NO_UT_GEN__ "${WSTS_NO_UT_GEN_OUTSIDE}")
+        set(FPRIME_TESTING_REQUIRED_COMPILE_FLAGS "${WSTS_TESTING_COMPILE_FLAGS_OUTSIDE}")
+        set(FPRIME_TESTING_REQUIRED_LINK_FLAGS "${WSTS_TESTING_LINK_FLAGS_OUTSIDE}")
+        unset(WSTS_BUILD_TESTING_OUTSIDE)
+    endif()
+    foreach (WSTS_MODULE IN LISTS WSTS_STUB_VARIANT_MODULES)
+        get_filename_component(WSTS_MODULE "${WSTS_MODULE}" REALPATH)
+        if (WSTS_MODULE STREQUAL WSTS_REQUESTED)
+            set_property(GLOBAL APPEND PROPERTY WSTS_STUB_VARIANTS_READ "${WSTS_REQUESTED}")
+            if (NOT BUILD_TESTING)
+                message(STATUS "[WSTS] ${WSTS_REQUESTED} is read with BUILD_TESTING set (cmake.stub_variants)")
+                set(WSTS_BUILD_TESTING_OUTSIDE "${BUILD_TESTING}")
+                set(WSTS_NO_UT_GEN_OUTSIDE "${__FPRIME_NO_UT_GEN__}")
+                set(WSTS_TESTING_COMPILE_FLAGS_OUTSIDE "${FPRIME_TESTING_REQUIRED_COMPILE_FLAGS}")
+                set(WSTS_TESTING_LINK_FLAGS_OUTSIDE "${FPRIME_TESTING_REQUIRED_LINK_FLAGS}")
+                set(BUILD_TESTING ON)
+                # register_fprime_ut() returns at once with this set: no unit-test target
+                set(__FPRIME_NO_UT_GEN__ ON)
+                # What F Prime adds to a module's own target when BUILD_TESTING is set (coverage)
+                set(FPRIME_TESTING_REQUIRED_COMPILE_FLAGS "")
+                set(FPRIME_TESTING_REQUIRED_LINK_FLAGS "")
+            endif()
+        endif()
+    endforeach()"""
+
+STUB_VERIFY = """
+# Every module listed under `cmake.stub_variants` has to have been added by now
+get_property(WSTS_STUB_VARIANTS_READ GLOBAL PROPERTY WSTS_STUB_VARIANTS_READ)
+foreach (WSTS_MODULE IN LISTS WSTS_STUB_VARIANT_MODULES)
+    get_filename_component(WSTS_MODULE "${WSTS_MODULE}" REALPATH)
+    if (NOT WSTS_MODULE IN_LIST WSTS_STUB_VARIANTS_READ)
+        message(FATAL_ERROR "[WSTS] cmake.stub_variants in the manifest lists ${WSTS_MODULE}, and nothing in this "
+                            "build adds that directory with add_fprime_subdirectory(): its stub variant is not "
+                            "selected. Remove the entry, or list the directory that is added.")
+    endif()
+endforeach()"""
+
 # A backstop for what the generator could not read from the flight project's CMake files: it
 # leaves a module that another module adds out of its own list, where it can see that.
 DUPLICATE_CHECK = """
@@ -925,12 +977,12 @@ set(WSTS_REPLACED_MODULES
 )
 set(WSTS_REPLACEMENTS
 {copies}
-){deferred_sets}{excluded_sets}
+){deferred_sets}{excluded_sets}{stub_sets}
 if (COMMAND _add_fprime_subdirectory)
     message(FATAL_ERROR "add_fprime_subdirectory() is already overridden: fprime-wsts cannot redirect modules")
 endif()
 function(add_fprime_subdirectory FP_SOURCE_DIR)
-    get_filename_component(WSTS_REQUESTED "${{FP_SOURCE_DIR}}" REALPATH){deferred_check}{excluded_check}{duplicate_check}
+    get_filename_component(WSTS_REQUESTED "${{FP_SOURCE_DIR}}" REALPATH){deferred_check}{excluded_check}{duplicate_check}{stub_check}
     get_filename_component(WSTS_HERE "${{CMAKE_CURRENT_SOURCE_DIR}}" REALPATH)
     set(WSTS_SOURCE "")
     set(WSTS_INDEX 0)
@@ -1459,39 +1511,73 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
     }
 
 
-def sdk_warnings(model: fpp.Model, plan: Plan, topology: fpp.Topology, files: List[Path], owner, project_root: Path,
-                 kept_libraries: Set[Path], cache: Dict[str, List[str]], excluded: Set[Path]) -> List[str]:
-    """Warnings for modules of the simulated build that link a file of the target's SDK.
-    F Prime takes a DEPENDS entry it cannot find as a file for a target name, and stops
-    while configuring: said here first, with the instances that need the module."""
+def module_users(model: fpp.Model, plan: Plan, topology: fpp.Topology, owner) -> Dict[Path, List[str]]:
+    """Which instances of the simulated topology are of a component in each module directory"""
     substituted = {sub.instance.name for sub in plan.substitutions}
-    modules: Dict[Path, List[str]] = {}
-    for f in files:
-        root = owner(f)
-        if root != project_root and root not in kept_libraries:
-            continue
-        directory = module_dir(f, root)
-        if directory is not None and directory not in excluded:
-            modules.setdefault(directory, [])
+    users: Dict[Path, List[str]] = {}
     for name in topology.instances:
         component = model.components.get(model.instances[name].component)
         if name in substituted or component is None:
             continue
         root = owner(component.file)
         directory = module_dir(component.file, root) if root is not None else None
-        if directory in modules:
-            modules[directory].append(f"{name} ({component.name})")
+        if directory is not None:
+            users.setdefault(directory, []).append(f"{name} ({component.name})")
+    return users
+
+
+def stub_note(branches: flight_cmake.TestingBranches, project_root: Path) -> str:
+    """What the variant a module has under BUILD_TESTING builds, and what it leaves out, as far as that can be read"""
+    stub_sources = [s for s in branches.sources(True) if s not in branches.sources(False)]
+    real_sources = [s for s in branches.sources(False) if s not in branches.sources(True)]
+    parts = []
+    if stub_sources:
+        parts.append("it builds " + ", ".join(s.name for s in stub_sources)
+                     + (" in place of " + ", ".join(s.name for s in real_sources) if real_sources else ""))
+    lacks = branches.describe().get("variant_with_build_testing_lacks", {})
+    if lacks.get("functions"):
+        names = lacks["functions"]
+        parts.append("its sources do not define " + ", ".join(names[:6]) + (f" and {len(names) - 6} more" if len(names) > 6 else "")
+                     + ", which the other sources do (read from the text: code that calls them will not link)")
+    if lacks.get("include_directories"):
+        parts.append("it does not have " + "; ".join(lacks["include_directories"])
+                     + " (code that includes headers from there will not compile)")
+    return "; ".join(parts)
+
+
+def sdk_warnings(modules: Dict[Path, List[str]], owner, project_root: Path, cache: Dict[str, List[str]],
+                 stub_dirs: List[Path], found: Optional[List[flight_cmake.SdkDependency]] = None) -> List[str]:
+    """Warnings for modules of the simulated build that link a file of the target's SDK.
+    F Prime takes a DEPENDS entry it cannot find as a file for a target name, and stops
+    while configuring: said here first, with the instances that need the module.
+    `modules` maps a module directory to the instances that use it. A module is read in
+    the variant the build takes: the one under BUILD_TESTING for a directory in
+    `stub_dirs`. Every dependency found is added to `found`."""
     warnings = []
     for directory, users in modules.items():
-        for dependency in flight_cmake.sdk_dependencies(directory, cache):
+        selected = directory in stub_dirs
+        branches = flight_cmake.testing_branches(directory)
+        in_stub = {d.entry for d in flight_cmake.sdk_dependencies(directory, cache, testing=True)} if branches else set()
+        for dependency in flight_cmake.sdk_dependencies(directory, cache, testing=selected):
+            if found is not None:
+                found.append(dependency)
             root = owner(directory / "CMakeLists.txt")
             shown = _rel(directory, project_root)
             needed = ("The topology needs the module for " + ", ".join(users) if users
-                      else "No instance of the topology is of a component in it, but the model uses its FPP")
-            options = [
-                "substitute " + ("those instances" if len(users) != 1 else "that instance")
-                + " (a 'substitute' entry in the manifest: the deployment then no longer depends on the module)"
-            ] if users else []
+                      else "No instance of the topology is of a component in it")
+            options = []
+            if selected:
+                needed += ". This is its stub variant (cmake.stub_variants), which links the file as well"
+            elif branches and dependency.entry not in in_stub:
+                note = stub_note(branches, project_root)
+                options.append(
+                    "take the module's stub variant, the one its CMakeLists.txt has under if (BUILD_TESTING), which "
+                    f"does not link that file (cmake: {{stub_variants: [{shown}]}}; only this module is read with "
+                    "BUILD_TESTING set)" + (f". Of that variant: {note}" if note else ""))
+            if users:
+                options.append(
+                    "substitute " + ("those instances" if len(users) != 1 else "that instance")
+                    + " (a 'substitute' entry in the manifest: the deployment then no longer depends on the module)")
             if root != project_root:
                 options.append(f"drop the library if nothing else in it is needed (libraries: {{drop: [{_rel(root, project_root)}]}})")
             options.append(
@@ -1506,6 +1592,35 @@ def sdk_warnings(model: fpp.Model, plan: Plan, topology: fpp.Topology, files: Li
                 f"deployment'). {needed}. Either " + "; or ".join(options) + "."
             )
     return warnings
+
+
+#: Variables that project() has put in the cache before the overlay's `cmake.cache` lines are read:
+#: a plain set(... CACHE ...) does not change them
+SET_BY_PROJECT = re.compile(
+    r"CMAKE_(C|CXX|ASM)_(FLAGS\w*|COMPILER)|CMAKE_(EXE|SHARED|MODULE|STATIC)_LINKER_FLAGS\w*|CMAKE_BUILD_TYPE|"
+    r"CMAKE_INSTALL_PREFIX|CMAKE_TOOLCHAIN_FILE")
+COMPILER_FLAGS = re.compile(r"CMAKE_(C|CXX)_FLAGS\w*")
+
+
+def _is_on(values: Optional[List[str]]) -> bool:
+    return bool(values) and str(values[0]).strip().upper() in ("ON", "1", "TRUE", "YES", "Y")
+
+
+def testing_warning(source: str, carried: bool, count: int) -> str:
+    """BUILD_TESTING for the whole build is much more than a choice of stubs"""
+    effect = (
+        "In F Prime that is the switch for a unit-test build. For the whole build it turns on: every module's "
+        "unit-test executable; the address, leak and undefined-behaviour sanitizers (every link then needs the "
+        "sanitizer runtime that matches the host compiler); the BUILD_UT definition; and the unit-test variant of "
+        f"every module that has one, stubs included ({count} module(s) of this build do: see 'Modules that change "
+        "under BUILD_TESTING' in the report). A library that picks stubs under BUILD_TESTING then leaves the "
+        "deployment without the symbols and include directories of its real targets."
+    )
+    remedy = ("To take the stub variant of chosen modules only, leave BUILD_TESTING off and list them in the manifest:\n"
+              "  cmake:\n    stub_variants: [<module directory, relative to the flight project>]")
+    if carried:
+        return f"BUILD_TESTING is ON for the whole simulated build: {source}. {effect} {remedy}"
+    return (f"{source}; it is not carried over to the simulated build. {effect} {remedy}")
 
 
 def render_report(report: dict) -> str:
@@ -1667,6 +1782,59 @@ def render_report(report: dict) -> str:
         for name, value in report.get("run", {}).get("env", {}).items():
             lines.append(f"- Environment: `{name}={value}`"
                          + (" (a path relative to this directory)" if name in report["run"]["env_paths"] else ""))
+    if report.get("testing_variants"):
+        lines += ["", "## Modules that change under BUILD_TESTING", "",
+                  "Modules of this build whose `CMakeLists.txt` does something else when `BUILD_TESTING` is set. "
+                  "The simulated build reads a module that way only when the manifest lists it under "
+                  "`cmake.stub_variants`; nothing else of a unit-test build comes with that.", ""]
+        for entry in report["testing_variants"]:
+            users = ", ".join(f"`{u}`" for u in entry["instances"]) or "no instance of the topology"
+            lines.append(f"- `{entry['module']}` (used by {users}): "
+                         + ("**read with `BUILD_TESTING` set**" if entry["selected"] else "read with `BUILD_TESTING` off"))
+            for label, key in (("With `BUILD_TESTING`", "with_build_testing"), ("Without", "without")):
+                for statement in entry[key]:
+                    lines.append(f"  - {label}: `{statement}`")
+            if entry["registers_unit_tests"]:
+                lines.append("  - Its unit tests (`register_fprime_ut`) are not built in either case")
+            lacks = entry.get("variant_with_build_testing_lacks", {})
+            if lacks.get("depends"):
+                lines.append("  - The variant with `BUILD_TESTING` does not depend on: " + ", ".join(f"`{d}`" for d in lacks["depends"]))
+            if lacks.get("include_directories"):
+                lines.append("  - It does not have: " + "; ".join(f"`{d}`" for d in lacks["include_directories"]))
+            if lacks.get("functions"):
+                lines.append("  - Its sources do not define (read from the text): " + ", ".join(f"`{f}`" for f in lacks["functions"]))
+    if report.get("cxx_flags"):
+        lines += ["", "## Compiler flags of the simulation", "", "From `cmake.cxx_flags` in the manifest, for C++ sources.", ""]
+        for where, flags in report["cxx_flags"].items():
+            lines.append(f"- {where if where == 'all modules' else '`' + where + '`'}: " + ", ".join(f"`{f}`" for f in flags))
+    if report.get("host_requirements"):
+        host = report["host_requirements"]
+        lines += ["", "## What the build takes from the host", "",
+                  "Read from the sources and CMake files of the modules of this build (the kept flight modules, the "
+                  "libraries and the simulation's own). `fprime-wsts check-host` asks a machine whether it has them, "
+                  "and records its compiler in `wsts-host.md`.", ""]
+        compiler = host.get("flight_compiler")
+        lines.append(
+            f"- Flight toolchain `{host['flight_toolchain']}`"
+            + ((f": compiler `{compiler['cxx']}`" if compiler.get("cxx") else ": its compiler is not named by a plain set()")
+               + f" (`{compiler['toolchain_file']}`)" if compiler else
+               ": its compiler could not be read from a toolchain file")
+            + ". The host compiler is another one: standard library headers include one another differently "
+            "between compilers and versions, so code that relies on an indirect include may not compile here.")
+        always = [h for h, needs in host["system_headers"].items() if any("condition" not in n for n in needs)]
+        conditional = [h for h in host["system_headers"] if h not in always]
+        lines.append("- System headers: " + (", ".join(f"`{h}`" for h in always) or "none"))
+        if conditional:
+            lines.append("- System headers under a condition that is not decided here: " + ", ".join(f"`{h}`" for h in conditional))
+        lines.append("- Libraries (`-l`): " + (", ".join(f"`{l}`" for l in host["libraries"]) or "none"))
+        lines.append("- Packages (`find_package`): " + (", ".join(
+            f"`{p}`" + ("" if spec["required"] else " (optional)") for p, spec in host["packages"].items()) or "none"))
+        lines.append("- Files of an SDK: " + (", ".join(f"`{d['entry']}` (`{d['module']}`)" for d in host["sdk_paths"]) or "none"))
+        if host["sanitizers"]:
+            lines.append("- Sanitizer runtime for: " + ", ".join(host["sanitizers"]))
+        for statement in host.get("not_read", []):
+            lines.append(f"- Not read: `{statement}` adds directories through a variable, so every module directory "
+                         "below that file is taken to be built")
     if report["warnings"]:
         lines += ["", "## Warnings", ""]
         lines += [f"- {warning}" for warning in report["warnings"]]
@@ -1683,6 +1851,7 @@ class Result:
     output: Path
     report: dict
     changed: List[str] = field(default_factory=list)  # --check: files that differ
+    notices: List[str] = field(default_factory=list)  # about this run, not about the output: not in the report
 
 
 def generate(project_root: Path, manifest: Manifest, output: Optional[Path] = None, check: bool = False) -> Result:
@@ -1694,18 +1863,33 @@ def generate(project_root: Path, manifest: Manifest, output: Optional[Path] = No
             output = manifest.resolve_sim(manifest.output, project_root)
         else:
             output = (manifest.sim_root or project_root) / "wsts" / Path(manifest.deployment).name
+    given = output
     output = output.resolve()
     if output.exists() and any(output.iterdir()) and not (output / fpp.GENERATED_MARKER).exists():
         raise WstsError(f"{output} exists and was not generated by fprime-wsts; refusing to overwrite it")
 
+    notices = [symlink_notice(given, output)] if os.path.abspath(given) != str(output) else []
     if check:
         with tempfile.TemporaryDirectory(prefix="wsts-check-") as scratch:
             target = Path(scratch) / "out"
             result = _generate(project_root, settings, manifest, target, final_output=output)
             result.changed = _diff(target, output)
             result.output = output
+            result.notices = notices
             return result
-    return _generate(project_root, settings, manifest, output, final_output=output)
+    result = _generate(project_root, settings, manifest, output, final_output=output)
+    result.notices = notices
+    return result
+
+
+def symlink_notice(given: Path, output: Path) -> str:
+    """For an output directory that was named through a symbolic link"""
+    return (
+        f"{os.path.abspath(given)} is reached through a symbolic link: the output directory is {output}. "
+        "fprime-util resolves links, and it stops with 'differs from CMake cache' when a build cache was made "
+        f"through one path and is used through the other. Run it from {output} (the commands printed here use "
+        "that path), and regenerate a build cache made through the link with 'fprime-util generate -f'."
+    )
 
 
 def _diff(new: Path, old: Path) -> List[str]:
@@ -1715,7 +1899,7 @@ def _diff(new: Path, old: Path) -> List[str]:
     names = {p.relative_to(new).as_posix() for p in new.rglob("*") if p.is_file()}
     names |= {p.relative_to(old).as_posix() for p in old.rglob("*") if p.is_file()}
     for name in sorted(names):
-        if name.startswith(("build-", "wsts-logs/")) or "/build-" in name:
+        if name.startswith(("build-", "wsts-logs/", hostcheck.HOST_FILE + ".")) or "/build-" in name:
             continue
         a, b = new / name, old / name
         if not a.is_file() or not b.is_file() or not filecmp.cmp(a, b, shallow=False):
@@ -1931,7 +2115,7 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         # ---- Write the overlay ----
         if output.exists():
             for child in output.iterdir():
-                if child.name.startswith("build-") or child.name == "wsts-logs":
+                if child.name.startswith("build-") or child.name == "wsts-logs" or child.name.startswith(hostcheck.HOST_FILE + "."):
                     continue  # keep the build cache (regeneration is incremental) and run logs
                 shutil.rmtree(child) if child.is_dir() else child.unlink()
         out_top = output / deployment / "Top"
@@ -2144,6 +2328,107 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         if d.is_dir() and (owner(d / "CMakeLists.txt") != project_root
                            or any(d in flight_cmake.added_directories(root) for root in order.roots)))
 
+    # ---- The flight project's own root CMakeLists.txt ----
+    flight_root = flight_cmake.read_root(
+        project_root, settings.framework_path, manifest.cmake_cache, manifest.defines,
+        sim_root or project_root, _rel(project_root / "CMakeLists.txt", final_output))
+
+    # ---- Modules read in their stub variant, or compiled with flags of their own ----
+    def build_module(entry: str, key: str) -> Path:
+        """A module directory the manifest names, relative to the flight project"""
+        directory = manifest.resolve(entry, project_root)
+        named = f"{key} in the manifest names '{entry}'"
+        if not (directory / "CMakeLists.txt").is_file():
+            raise WstsError(
+                f"{named} ({directory}), which is not a module directory: there is no CMakeLists.txt in it. Paths "
+                f"are relative to the flight project ({project_root}); a module of a library is named through the "
+                "library's directory."
+            )
+        if directory in (deployment_dir, top_dir):
+            raise WstsError(f"{named}: the generator writes the deployment's own CMakeLists.txt files and does not "
+                            "read the flight ones, so there is nothing to select there")
+        if directory in excluded:
+            raise WstsError(f"{named}, which cmake.exclude_subdirectories leaves out of the build: remove one of the two entries")
+        root = owner(directory / "CMakeLists.txt")
+        if root is None:
+            raise WstsError(f"{named} ({directory}), which is outside the flight project, its libraries, the framework "
+                            "and the simulation project: nothing in the simulated build adds it")
+        if root in flight_libraries and root not in kept_libraries:
+            raise WstsError(f"{named}, a module of {_rel(root, project_root)}, which is not part of the simulated build: "
+                            "the patched model uses nothing of that library. Remove the entry, or keep the library "
+                            f"with libraries: {{keep: [{_rel(root, project_root)}]}}")
+        return directory
+
+    stub_dirs: List[Path] = list(dict.fromkeys(build_module(entry, "cmake.stub_variants") for entry in manifest.stub_variants))
+    name_roots = [settings.framework_path, *settings.library_locations, project_root, *sim_roots]
+    module_flags: Dict[Path, Tuple[str, List[str]]] = {}  # module directory -> (its target, flags)
+    for entry, flags in manifest.cxx_flags.items():
+        if entry != ALL_MODULES:
+            directory = build_module(entry, "cmake.cxx_flags")
+            module_flags[directory] = (module_name(directory, name_roots), flags)
+    global_flags = manifest.cxx_flags.get(ALL_MODULES, [])
+
+    # What each build root reads on the host, as far as its CMake files say with literal paths
+    set_variables = {**flight_root.cache, **manifest.cmake_cache}
+    trees: Dict[Path, flight_cmake.BuildTree] = {project_root: flight_cmake.BuildTree()}
+    for directory in order.roots:
+        trees[project_root].directories.setdefault(directory, project_root / "CMakeLists.txt")
+        flight_cmake.read_tree(directory / "CMakeLists.txt", stub_dirs, excluded, trees[project_root], set_variables)
+    unread_roots: List[str] = []
+    for library in library_paths:
+        start = next((f for f in (library / "library.cmake", library / f"{library.name}.cmake") if f.is_file()), None)
+        if library in (TOOLKIT_ROOT, project_root) or start is None:
+            continue
+        tree = flight_cmake.read_tree(start, stub_dirs, excluded, None, set_variables)
+        if tree.unread:
+            # A directory is added through a variable: take every module directory below the root
+            cmake_file, command = tree.unread[0]
+            unread_roots.append(f"{_rel(cmake_file, final_output)}:{command.line}: {command.text}")
+            for current, directories, files in os.walk(library):
+                here = Path(current)
+                directories[:] = sorted(
+                    d for d in directories if not d.startswith(("build-", ".")) and d not in ("wsts-logs", "__pycache__")
+                    and not (here / d / fpp.GENERATED_MARKER).exists() and (here / d) not in excluded
+                    and (here / d) not in roots)
+                if here != library and "CMakeLists.txt" in files:
+                    tree.directories.setdefault(here, start)
+                    flight_cmake.read_tree(here / "CMakeLists.txt", stub_dirs, excluded, tree, set_variables)
+        trees[library] = tree
+    for directory in dict.fromkeys([*stub_dirs, *module_flags]):
+        root = owner(directory / "CMakeLists.txt")
+        tree = trees.get(root)
+        if tree is None or directory in tree.directories:
+            continue  # the framework's modules are not followed
+        key = "cmake.stub_variants" if directory in stub_dirs else "cmake.cxx_flags"
+        if root == project_root:
+            listing = ", ".join(_rel(d, project_root) for d in tree.directories) or "none"
+            raise WstsError(
+                f"{key} in the manifest names '{_rel(directory, project_root)}', which is not a module of the "
+                f"simulated build: the patched model uses nothing of it, and no module that is built adds it. "
+                f"Modules of the flight project that are built: {listing}. If it holds code without an FPP model "
+                "that the deployment needs, add it with cmake.extra_subdirectories."
+            )
+        raise WstsError(
+            f"{key} in the manifest names '{_rel(directory, project_root)}', which {_rel(root, project_root)} does not "
+            "add on a Linux host: its library.cmake does not reach that directory (or stops before it with "
+            "restrict_platforms()). Modules it adds: "
+            + (", ".join(_rel(d, project_root) for d in tree.directories) or "none") + "."
+        )
+    variants: Dict[Path, flight_cmake.TestingBranches] = {}
+    for root, tree in trees.items():
+        for directory in tree.directories:
+            branches = flight_cmake.testing_branches(directory)
+            if branches:
+                variants[directory] = branches
+    for directory in stub_dirs:
+        if directory not in variants and not flight_cmake.testing_branches(directory):
+            plan.warnings.append(
+                f"cmake.stub_variants lists {_rel(directory, project_root)}, and its CMakeLists.txt has nothing under "
+                "if (BUILD_TESTING): the module is built as it would be anyway. If the stub is selected by another "
+                "variable, set that one with cmake.cache; if it is selected in a file the module includes, list the "
+                "directory whose CMakeLists.txt holds the if()."
+            )
+
     # ---- Hand-written sources ----
     if manifest.topology_sources is not None:
         topology_sources = [manifest.resolve(s, project_root) for s in manifest.topology_sources]
@@ -2291,17 +2576,13 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
     def cmake_file(path: Path) -> str:
         return '"${CMAKE_CURRENT_LIST_DIR}/' + rel(path) + '"'
 
-    # ---- The flight project's own root CMakeLists.txt ----
-    flight_root = flight_cmake.read_root(
-        project_root, settings.framework_path, manifest.cmake_cache, manifest.defines,
-        sim_root or project_root, rel(project_root / "CMakeLists.txt"))
     plan.warnings += flight_root.warnings
 
     redirect: List[str] = []
     if includes["early"]:
         redirect += ["", "# From `cmake.include_early` in the manifest: before any framework or library module exists",
                      *[f"include({cmake_file(file)})" for file in includes["early"]]]
-    if replaced or deferred_modules or skipped_dirs:
+    if replaced or deferred_modules or skipped_dirs or stub_dirs:
         redirect += REDIRECT_TEMPLATE.format(
             originals="\n".join(f'    "${{CMAKE_CURRENT_LIST_DIR}}/{rel(m.original)}"' for m in replaced.values()),
             copies="\n".join(f'    "${{CMAKE_CURRENT_LIST_DIR}}/{m.relative}"' for m in replaced.values()),
@@ -2311,11 +2592,13 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
             excluded_sets=EXCLUDED_SETS.format(
                 modules="\n".join(f"    {cmake_file(d)}" for d in skipped_dirs)) if skipped_dirs else "",
             excluded_check=EXCLUDED_CHECK if skipped_dirs else "",
+            stub_sets=STUB_SETS.format(modules="\n".join(f"    {cmake_file(d)}" for d in stub_dirs)) if stub_dirs else "",
+            stub_check=STUB_CHECK if stub_dirs else "",
             duplicate_check=DUPLICATE_CHECK,
         ).rstrip("\n").split("\n")
     elif includes["early"]:
         redirect.append("fprime_setup_included_code()")
-    own_setup = bool(replaced or deferred_modules or skipped_dirs or includes["early"])
+    own_setup = bool(replaced or deferred_modules or skipped_dirs or stub_dirs or includes["early"])
     if flight_root.defines_late:
         redirect += [
             "",
@@ -2332,6 +2615,29 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
             "set(WSTS_ADDING_DEFERRED ON)",
             *[f"add_fprime_subdirectory({cmake_file(d)})" for d in deferred_modules],
         ]
+    if stub_dirs:
+        after_modules += STUB_VERIFY.rstrip("\n").split("\n")
+    if module_flags:
+        after_modules += [
+            "",
+            "# From `cmake.cxx_flags` in the manifest: flags for the C++ sources of one module",
+        ]
+        for directory, (target, flags) in module_flags.items():
+            options = " ".join(f'"$<$<COMPILE_LANGUAGE:CXX>:SHELL:{flag}>"' for flag in flags)
+            after_modules += [
+                f"if (TARGET {target})",
+                f"    get_target_property(WSTS_MODULE_TYPE {target} TYPE)",
+                '    if (WSTS_MODULE_TYPE STREQUAL "INTERFACE_LIBRARY")',
+                f'        message(WARNING "[WSTS] cmake.cxx_flags: {target} compiles nothing itself; its flags are not used")',
+                "    else()",
+                f"        target_compile_options({target} PRIVATE {options})",
+                "    endif()",
+                "else()",
+                f'    message(FATAL_ERROR "[WSTS] cmake.cxx_flags in the manifest names {_rel(directory, project_root)}, and the '
+                f'build has no target {target} for it. If the module registers under another name, set its flags with '
+                'target_compile_options() in a file named under cmake.include.")',
+                "endif()",
+            ]
     if standin_modules:
         after_modules += [
             "",
@@ -2368,6 +2674,8 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
            f"add_compile_definitions({' '.join(flight_root.defines_early)})"] if flight_root.defines_early else []),
         *(["# Headers that stand in for those of replaced flight drivers: found before the originals",
            f'include_directories(BEFORE "${{CMAKE_CURRENT_LIST_DIR}}/{STANDIN_DIR}")'] if standin_files else []),
+        *(["# From `cmake.cxx_flags` in the manifest: for every C++ source of this build",
+           f'string(APPEND CMAKE_CXX_FLAGS " {" ".join(global_flags)}")'] if global_flags else []),
         *(["# From `cmake.cache` in the manifest. Set before F Prime reads the libraries; a value given on the",
            "# command line (-D) takes precedence.",
            *[f'set({name} "{";".join(values)}" CACHE STRING "Set by fprime-wsts from cmake.cache in the manifest")'
@@ -2450,10 +2758,143 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
             "file": rel(flight_root.file), "carried_over": flight_root.carried, "not_carried_over": flight_root.not_carried}
     if skipped_dirs:
         report["excluded_modules"] = [rel(d) for d in skipped_dirs]
-    plan.warnings += sdk_warnings(
-        model, plan, topology, [*closure, *[f for module in replaced.values() for f in module.files]], owner,
-        project_root, kept_libraries,
-        {**{name: [] for name in settings_variables}, **flight_root.cache, **manifest.cmake_cache}, excluded)
+    # ---- What the build takes from outside the project ----
+    users = module_users(model, plan, topology, owner)
+    sdk_modules: Dict[Path, List[str]] = {}
+    for f in [*closure, *[f for module in replaced.values() for f in module.files]]:
+        root = owner(f)
+        if root != project_root and root not in kept_libraries:
+            continue
+        directory = module_dir(f, root)
+        if directory is not None and directory not in excluded:
+            sdk_modules.setdefault(directory, users.get(directory, []))
+    for root, tree in trees.items():
+        if root == project_root or root in kept_libraries:
+            for directory in tree.directories:
+                sdk_modules.setdefault(directory, users.get(directory, []))
+    known_variables = {**{name: [] for name in settings_variables}, **flight_root.cache, **manifest.cmake_cache}
+    sdk_found: List[flight_cmake.SdkDependency] = []
+    plan.warnings += sdk_warnings(sdk_modules, owner, project_root, known_variables, stub_dirs, sdk_found)
+
+    # BUILD_TESTING for the whole build
+    testing_on = False
+    if _is_on(manifest.cmake_cache.get("BUILD_TESTING")):
+        testing_on = True
+        plan.warnings.append(testing_warning("cmake.cache in the manifest sets it", True, len(variants)))
+    elif "BUILD_TESTING" not in manifest.cmake_cache and _is_on(flight_root.cache.get("BUILD_TESTING")):
+        testing_on = True
+        plan.warnings.append(testing_warning(
+            f"{rel(project_root / 'CMakeLists.txt')} sets it before F Prime is read, and plain values of that file "
+            "are carried over (cmake: {cache: {BUILD_TESTING: OFF}} in the manifest keeps it off)", True, len(variants)))
+    elif any(option.split("=", 1)[0].split(":")[0] == "BUILD_TESTING" and _is_on(option.split("=", 1)[1:])
+             for option in dropped_options):
+        plan.warnings.append(testing_warning(
+            "The flight project's default_cmake_options (settings.ini) set BUILD_TESTING to ON", False, len(variants)))
+    # cmake.cache entries that the generated set(... CACHE ...) cannot change
+    configure_options: List[str] = []
+    for name, values in manifest.cmake_cache.items():
+        if not SET_BY_PROJECT.fullmatch(name):
+            continue
+        value = ";".join(values)
+        if COMPILER_FLAGS.fullmatch(name):
+            plan.warnings.append(
+                f"cmake.cache sets {name}, which has no effect: project() has put that variable in the cache before "
+                "the manifest's entries are read, and an entry does not replace a value that is there. For flags of "
+                f"the host's C++ compiler use\n  cmake:\n    cxx_flags: [{', '.join(repr(flag) for flag in re.split(r' +(?=-)', value.strip()))}]\n"
+                "which the generated project applies itself (one list entry per flag, with its argument). "
+                "fprime-util cannot pass a value with a space in it on the command line.")
+        else:
+            option = f"-D{name}={value}"
+            passable = " " not in value
+            plan.warnings.append(
+                f"cmake.cache sets {name}, which has no effect: project() has put that variable in the cache before "
+                "the manifest's entries are read. "
+                + (f"Pass it when configuring: fprime-util generate {option} (directly, without '--': after '--' "
+                   "fprime-util takes it for the name of a toolchain)." if passable else
+                   "fprime-util cannot pass a value with a space in it; configure with cmake directly, or set it in "
+                   "a file named under cmake.include_early with set(... CACHE ... FORCE)."))
+            if passable:
+                configure_options.append(option)
+    if configure_options:
+        report["configure_options"] = configure_options
+
+    def shown_module(path: Path) -> str:
+        return _rel(path, project_root)
+
+    if variants:
+        report["testing_variants"] = [
+            {"module": shown_module(directory), "selected": directory in stub_dirs or testing_on,
+             "instances": users.get(directory, []), **branches.describe()}
+            for directory, branches in variants.items()
+        ]
+    if stub_dirs:
+        report["stub_variants"] = [shown_module(d) for d in stub_dirs]
+    if manifest.cxx_flags:
+        report["cxx_flags"] = {
+            **({"all modules": global_flags} if global_flags else {}),
+            **{shown_module(d): flags for d, (_, flags) in module_flags.items()}}
+
+    # Text only, so that the report is the same on every machine: `fprime-wsts check-host` asks the host
+    sanitizers = [
+        name for name, variable in (("address", "ENABLE_SANITIZER_ADDRESS"), ("leak", "ENABLE_SANITIZER_LEAK"),
+                                    ("undefined", "ENABLE_SANITIZER_UNDEFINED_BEHAVIOR"), ("thread", "ENABLE_SANITIZER_THREAD"))
+        if (_is_on(manifest.cmake_cache[variable]) if variable in manifest.cmake_cache
+            else testing_on and name != "thread")
+    ]
+    scanned: Dict[str, dict] = {"libraries": {}, "packages": {}}
+    search: Dict[str, List[str]] = {"include_directories": [], "link_directories": []}
+    host_sources: List[Tuple[Path, str]] = [(s, f"{deployment}/Top") for s in topology_sources]
+    host_sources += [(s, deployment) for s in main_sources]
+    extra = flight_cmake.BuildTree()
+    for file in [*includes["early"], *includes["late"]]:
+        flight_cmake.read_tree(file, stub_dirs, excluded, extra)
+    for tree, module_of in [*[(t, lambda f: shown_module(f.parent)) for t in trees.values()],
+                            (extra, lambda f: f"{f.name} (the simulation's CMake)")]:
+        host_sources += hostcheck.module_sources(tree, module_of) if tree is not extra else []
+        found = hostcheck.scan_cmake(tree, module_of, rel)
+        for name, needs in found["libraries"].items():
+            scanned["libraries"].setdefault(name, []).extend(needs)
+        for name, package in found["packages"].items():
+            known = scanned["packages"].setdefault(name, {"required": False, "components": [], "needed_by": []})
+            known["required"] = known["required"] or package["required"]
+            known["components"] += [c for c in package["components"] if c not in known["components"]]
+            known["needed_by"] += package["needed_by"]
+        for key in search:
+            search[key] += [d for d in found[key] if d not in search[key]]
+    followed = {project_root, *kept_libraries, *sim_roots}
+    index = hostcheck.HeaderIndex(
+        [project_root, *[l for l in flight_libraries if l in kept_libraries], *sim_roots, settings.framework_path, TOOLKIT_ROOT],
+        walked=[project_root, *[l for l in flight_libraries if l in kept_libraries], *sim_roots],
+        fixed=[settings.framework_path, TOOLKIT_ROOT / "Wsts"])
+    defined = {d.split("=", 1)[0] for d in [*manifest.defines, *flight_root.defines_early, *flight_root.defines_late]}
+    compiler = hostcheck.flight_compiler(
+        settings.default_toolchain, [project_root, *flight_libraries, settings.framework_path], rel)
+    module_list = [
+        {"module": shown_module(directory), "instances": users.get(directory, []),
+         **({"has_stub_variant": True} if directory in variants and variants[directory].when_on else {}),
+         **({"stub_variant": True} if directory in stub_dirs else {})}
+        for tree in trees.values() for directory in tree.directories
+    ]
+    report["host_requirements"] = {
+        "flight_project": rel(project_root),
+        "flight_toolchain": settings.default_toolchain,
+        **({"flight_compiler": compiler} if compiler else {}),
+        "modules": module_list,
+        "system_headers": hostcheck.scan_headers(host_sources, index, lambda path: owner(path) in followed, defined, rel),
+        "libraries": scanned["libraries"],
+        "packages": scanned["packages"],
+        "sdk_paths": [
+            {"entry": d.entry, "module": shown_module(d.module), "file": rel(d.module / "CMakeLists.txt"),
+             "problem": d.problem.replace(str(d.module) + "/", ""), "variables": d.variables,
+             **({"path": rel(Path(d.path)) if owner(Path(d.path)) is not None else d.path} if d.path else {})}
+            for d in sdk_found
+        ],
+        "search": {**search, "cxx_flags": global_flags},
+        "cache": manifest.cmake_cache,
+        "sanitizers": sanitizers,
+        "ignore": manifest.host_ignore,
+        **({"not_read": unread_roots} if unread_roots else {}),
+    }
     report["warnings"] = plan.warnings
     report["dropped_cmake_options"] = dropped_options
     if sim_root is not None:

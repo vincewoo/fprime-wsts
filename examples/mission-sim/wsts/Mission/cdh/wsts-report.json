@@ -603,6 +603,123 @@
     ],
     "not_carried_over": []
   },
+  "testing_variants": [
+    {
+      "module": "lib/sensor-lib/SensorLib/Units",
+      "selected": false,
+      "instances": [],
+      "with_build_testing": [
+        "register_fprime_module( SOURCES \"stubs/convert_stub.cpp\" )"
+      ],
+      "without": [
+        "register_fprime_module( SOURCES \"convert.cpp\" )",
+        "target_include_directories(${FPRIME_CURRENT_MODULE} PUBLIC \"include\")"
+      ],
+      "registers_unit_tests": false,
+      "variant_with_build_testing_lacks": {
+        "include_directories": [
+          "target_include_directories(${FPRIME_CURRENT_MODULE} PUBLIC \"include\")"
+        ],
+        "functions": [
+          "reading16"
+        ]
+      }
+    }
+  ],
+  "cxx_flags": {
+    "all modules": [
+      "-include cstring"
+    ]
+  },
+  "host_requirements": {
+    "flight_project": "../../../../mission",
+    "flight_toolchain": "vxworks",
+    "flight_compiler": {
+      "toolchain_file": "../../../../../lib/fprime-vxworks/cmake/toolchain/vxworks.cmake"
+    },
+    "modules": [
+      {
+        "module": "config/project",
+        "instances": []
+      },
+      {
+        "module": "config/project/dep_config",
+        "instances": []
+      },
+      {
+        "module": "../../lib/fprime-vxworks/VxWorks/library/config",
+        "instances": []
+      },
+      {
+        "module": "lib/sensor-lib/SensorLib",
+        "instances": []
+      },
+      {
+        "module": "lib/sensor-lib/SensorLib/SerialSensor",
+        "instances": [
+          "SensorLink.sensor (SensorLib.SerialSensor)"
+        ]
+      },
+      {
+        "module": "lib/sensor-lib/SensorLib/SensorLink",
+        "instances": []
+      },
+      {
+        "module": "lib/sensor-lib/SensorLib/SensorLink/SensorLinkConfig",
+        "instances": []
+      },
+      {
+        "module": "lib/sensor-lib/SensorLib/Units",
+        "instances": [],
+        "has_stub_variant": true
+      },
+      {
+        "module": "../mission-sim/lib/sim-common/SimCommon/Types",
+        "instances": []
+      },
+      {
+        "module": "../mission-sim/SensorSim/SerialSensorSim",
+        "instances": []
+      },
+      {
+        "module": "../mission-sim/SensorSim/GyroSim",
+        "instances": []
+      },
+      {
+        "module": "../mission-sim/SensorSim/SimTime",
+        "instances": []
+      },
+      {
+        "module": "../mission-sim/SensorSim/Top",
+        "instances": []
+      },
+      {
+        "module": "../mission-sim/config",
+        "instances": []
+      }
+    ],
+    "system_headers": {},
+    "libraries": {},
+    "packages": {},
+    "sdk_paths": [],
+    "search": {
+      "include_directories": [],
+      "link_directories": [],
+      "cxx_flags": [
+        "-include cstring"
+      ]
+    },
+    "cache": {
+      "MISSION_SIM_MODULES": [
+        "SensorSim/SerialSensorSim",
+        "SensorSim/GyroSim",
+        "SensorSim/SimTime",
+        "SensorSim/Top"
+      ]
+    },
+    "sanitizers": [],
+    "ignore": []
+  },
   "dropped_cmake_options": [
     "VX_TARGET_TYPE=DKM",
     "FPRIME_PLATFORM=VxWorks"

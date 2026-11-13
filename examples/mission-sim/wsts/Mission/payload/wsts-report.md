@@ -136,3 +136,42 @@ Configuration the simulated build replaces and flight does not. These modules ar
 
 - `AcConstants.fpp`: `../../../config/AcConstants.fpp` replaces `../../../../mission/config/project/AcConstants.fpp`, `../../../../../lib/fprime/default/config/AcConstants.fpp`
 - `CommandDispatcherImplCfg.hpp`: `../../../config/CommandDispatcherImplCfg.hpp` replaces `../../../../mission/config/project/CommandDispatcherImplCfg.hpp`, `../../../../../lib/fprime/default/config/CommandDispatcherImplCfg.hpp`
+
+## Simulation build and run inputs
+
+- CMake included before the libraries are read: `../../../host.cmake`
+
+## Modules that change under BUILD_TESTING
+
+Modules of this build whose `CMakeLists.txt` does something else when `BUILD_TESTING` is set. The simulated build reads a module that way only when the manifest lists it under `cmake.stub_variants`; nothing else of a unit-test build comes with that.
+
+- `Components/Imager` (used by `Payload.imager (Components.Imager)`): **read with `BUILD_TESTING` set**
+  - With `BUILD_TESTING`: `register_fprime_library( AUTOCODER_INPUTS "Imager.fpp" SOURCES "Imager.cpp" "CameraStub.cpp" )`
+  - With `BUILD_TESTING`: `register_fprime_ut( SOURCES "test/ut/CameraStubTest.cpp" DEPENDS Components_Imager )`
+  - Without: `find_package(CamCodec REQUIRED)`
+  - Without: `register_fprime_library( AUTOCODER_INPUTS "Imager.fpp" SOURCES "Imager.cpp" "CameraSdk.cpp" DEPENDS ${SDK_ROOT}/3rdparty/lib/libcamsdk.a -lcamcodec )`
+  - Its unit tests (`register_fprime_ut`) are not built in either case
+  - The variant with `BUILD_TESTING` does not depend on: `${SDK_ROOT}/3rdparty/lib/libcamsdk.a`, `-lcamcodec`
+  - Its sources do not define (read from the text): `selfTest`
+- `lib/sensor-lib/SensorLib/Units` (used by no instance of the topology): read with `BUILD_TESTING` off
+  - With `BUILD_TESTING`: `register_fprime_module( SOURCES "stubs/convert_stub.cpp" )`
+  - Without: `register_fprime_module( SOURCES "convert.cpp" )`
+  - Without: `target_include_directories(${FPRIME_CURRENT_MODULE} PUBLIC "include")`
+  - It does not have: `target_include_directories(${FPRIME_CURRENT_MODULE} PUBLIC "include")`
+  - Its sources do not define (read from the text): `reading16`
+
+## Compiler flags of the simulation
+
+From `cmake.cxx_flags` in the manifest, for C++ sources.
+
+- `lib/sensor-lib/SensorLib/Units`: `-include cstring`
+
+## What the build takes from the host
+
+Read from the sources and CMake files of the modules of this build (the kept flight modules, the libraries and the simulation's own). `fprime-wsts check-host` asks a machine whether it has them, and records its compiler in `wsts-host.md`.
+
+- Flight toolchain `vxworks`: its compiler is not named by a plain set() (`../../../../../lib/fprime-vxworks/cmake/toolchain/vxworks.cmake`). The host compiler is another one: standard library headers include one another differently between compilers and versions, so code that relies on an indirect include may not compile here.
+- System headers: `getopt.h`
+- Libraries (`-l`): none
+- Packages (`find_package`): none
+- Files of an SDK: none

@@ -185,12 +185,20 @@ fprime-wsts generate examples/mission-sim/wsts-system.yaml
 ```
 
 ```bash
+fprime-wsts check-host examples/mission-sim/wsts/Mission
+```
+
+```bash
 for e in cdh payload; do (cd examples/mission-sim/wsts/Mission/$e && fprime-util generate && fprime-util build); done
 ```
 
 ```bash
 fprime-wsts run examples/mission-sim/wsts/Mission --gds
 ```
+
+`check-host` lists what the build needs from the workstation that the flight toolchain's
+sysroot would have provided (system headers, libraries, packages, SDK files), before
+anything is compiled. `generate` prints a summary of the same.
 
 Both computers start, the hub link comes up, and one GDS commands either of them with the
 merged dictionary. Add `--gds-gui` for the GDS's browser GUI instead of the headless GDS;

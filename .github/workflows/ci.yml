@@ -29,6 +29,9 @@ jobs:
       - name: Generated example is up to date
         run: fprime-wsts generate examples/mission-sim/wsts-system.yaml --check
 
+      - name: The host has what the example's simulated build needs
+        run: fprime-wsts check-host examples/mission-sim/wsts-system.yaml
+
       - name: C++ unit tests for the WSTS core
         run: |
           fprime-util generate --ut

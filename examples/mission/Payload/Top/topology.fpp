@@ -23,6 +23,7 @@ module Payload {
     instance sensor
     instance heater
     instance adc
+    instance imager
     instance hub
     instance hubAdapter
     instance bufferManager

@@ -37,6 +37,8 @@ class Command:
     line: int
     depth: int = 0  # how many if()/foreach()/while() blocks it is inside
     condition: str = ""  # the innermost enclosing block, as written
+    # Every enclosing block from the outside in: (as written, whether this is its else() part)
+    conditions: List[Tuple[str, bool]] = field(default_factory=list)
 
 
 BLOCKS = {"if": "endif", "foreach": "endforeach", "while": "endwhile", "function": "endfunction",
@@ -84,7 +86,7 @@ def read_commands(text: str) -> List[Command]:
     a function or macro definition is one command (`function`), not read further."""
     clean = _strip_comments(text)
     commands: List[Command] = []
-    stack: List[Tuple[str, str]] = []  # (block command, its text)
+    stack: List[Tuple[str, str, bool]] = []  # (block command, its text, in its else() part)
     position = 0
     pattern = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)[ \t]*\(")
     while True:
@@ -119,7 +121,7 @@ def read_commands(text: str) -> List[Command]:
             closing = re.compile(r"\b" + BLOCKS[name] + r"[ \t]*\([^)]*\)", re.I).search(clean, position)
             position = closing.end() if closing else len(clean)
             commands.append(Command(name, _arguments(body), written + " ... " + BLOCKS[name] + "()", line,
-                                    len(stack), stack[-1][1] if stack else ""))
+                                    len(stack), stack[-1][1] if stack else "", [(t, e) for _, t, e in stack]))
             continue
         if name in BLOCKS.values():
             if stack:
@@ -127,12 +129,13 @@ def read_commands(text: str) -> List[Command]:
             continue
         if name in ("else", "elseif"):
             if stack:
-                stack[-1] = (stack[-1][0], stack[-1][1] if name == "else" else written)
+                stack[-1] = (stack[-1][0], stack[-1][1] if name == "else" else written, name == "else")
             continue
         if name in BLOCKS:
-            stack.append((name, written))
+            stack.append((name, written, False))
             continue
-        commands.append(Command(name, _arguments(body), written, line, len(stack), stack[-1][1] if stack else ""))
+        commands.append(Command(name, _arguments(body), written, line, len(stack), stack[-1][1] if stack else "",
+                                [(t, e) for _, t, e in stack]))
     return commands
 
 
@@ -531,32 +534,31 @@ class SdkDependency:
     entry: str  # as written in the module's CMakeLists.txt
     problem: str
     variables: List[str]  # variables it needs that the simulated build does not set
+    path: str = ""  # the file it names, when that can be read from the entry
 
 
-def sdk_dependencies(module: Path, cache: Dict[str, List[str]]) -> List[SdkDependency]:
+def sdk_dependencies(module: Path, cache: Dict[str, List[str]], testing: Optional[bool] = False) -> List[SdkDependency]:
     """Entries of a module's DEPENDS (or MOD_DEPS) that name a file rather than a target,
     and that the host build cannot resolve: a path that does not exist here, or one that
-    starts with a variable nothing in the simulated build sets."""
+    starts with a variable nothing in the simulated build sets.
+
+    `testing` says which variant of the module is read: the one built with BUILD_TESTING
+    off (False, the simulated build's unless `cmake.stub_variants` lists the module), the
+    one built with it on (True), or every statement whatever its branch (None)."""
     cmake_file = module / "CMakeLists.txt"
     if not cmake_file.is_file():
         return []
-    text = _strip_comments(cmake_file.read_text(errors="replace"))
     entries: List[str] = []
-    for match in re.finditer(r"\bregister_fprime_\w+\s*\(([^)]*)\)", text, re.S):
-        current = "_"
-        for token in re.findall(r'"[^"]*"|\S+', match.group(1)):
-            token = token.strip('"')
-            if token.isupper() and re.fullmatch(r"[A-Z_]+", token):
-                current = token
-            elif current == "DEPENDS":
-                entries.append(token)
     local: Set[str] = set()
-    for command in read_commands(text):
+    for command in read_commands(cmake_file.read_text(errors="replace")):
         if command.name in ("set", "list", "option", "foreach", "find_library", "find_path", "find_package") and command.args:
             local.add(command.args[1] if command.name == "list" and len(command.args) > 1 else command.args[0])
-        if command.name == "set" and command.args and command.args[0] in ("MOD_DEPS", "UT_MOD_DEPS"):
-            if command.args[0] == "MOD_DEPS":
-                entries += command.args[1:]
+        if not in_variant(command, testing):
+            continue
+        if command.name.startswith("register_fprime_"):
+            entries += directive_values(command, "DEPENDS")
+        if command.name == "set" and command.args and command.args[0] == "MOD_DEPS":
+            entries += command.args[1:]
     found: List[SdkDependency] = []
     for entry in dict.fromkeys(entries):
         used = VARIABLE_USE.findall(entry)
@@ -574,5 +576,245 @@ def sdk_dependencies(module: Path, cache: Dict[str, List[str]]) -> List[SdkDepen
             where = "a file of the target's SDK" if path_like else "set by the flight build only"
             found.append(SdkDependency(module, entry, f"{', '.join(unset)} is not set in the simulated build ({where})", unset))
         elif path_like and is_literal(resolved) and not (module / resolved).exists():
-            found.append(SdkDependency(module, entry, f"{resolved} does not exist on this host", []))
+            found.append(SdkDependency(module, entry, f"{resolved} does not exist on this host", [],
+                                       str((module / resolved))))
     return found
+
+
+def directive_values(command: Command, directive: str) -> List[str]:
+    """The values that follow one directive (`DEPENDS`, `SOURCES`, ...) of a `register_fprime_*()` call"""
+    current, found = "_", []
+    for token in command.args:
+        if re.fullmatch(r"[A-Z][A-Z_]*", token):
+            current = token
+        elif current == directive:
+            found.append(token)
+    return found
+
+
+# ----------------------------------------------------------------------
+# What a module does differently when BUILD_TESTING is set
+# ----------------------------------------------------------------------
+
+TESTING = "BUILD_TESTING"
+_PLAIN_TEST = re.compile(r"(?:else)?if\s*\(\s*(NOT\s+)?\"?(?:\$\{)?BUILD_TESTING\}?\"?\s*\)", re.I)
+
+
+def testing_state(command: Command) -> Optional[bool]:
+    """Whether a command is read only when BUILD_TESTING is on (True), only when it is off
+    (False), or either way (None). A condition that combines BUILD_TESTING with something
+    else is taken by the sense BUILD_TESTING has in it."""
+    for text, in_else in command.conditions:
+        if TESTING not in text:
+            continue
+        plain = _PLAIN_TEST.fullmatch(text)
+        positive = not plain.group(1) if plain else not re.search(r"\bNOT\s+\"?(?:\$\{)?BUILD_TESTING", text, re.I)
+        return positive != in_else
+    return None
+
+
+def in_variant(command: Command, testing: Optional[bool]) -> bool:
+    """Whether a command is read in the variant of its module that is built with
+    BUILD_TESTING on (True) or off (False). None takes every command."""
+    state = testing_state(command)
+    return testing is None or state is None or state == testing
+
+
+SOURCE_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".C", ".S", ".s")
+HEADER_SUFFIXES = (".h", ".hh", ".hpp", ".hxx")
+_FUNCTION = re.compile(
+    r"(?m)^[A-Za-z_][\w:<>,*&\s]*?[\s*&]((?:\w+::)*~?\w+)\s*\([^;{}()]*(?:\([^()]*\)[^;{}()]*)*\)"
+    r"\s*(?:const\b\s*)?(?:noexcept\b\s*)?(?:override\b\s*)?\{")
+_NOT_FUNCTIONS = {"if", "for", "while", "switch", "catch", "return", "sizeof", "else", "do", "namespace"}
+
+
+def _files_named(command: Command, directory: Path, suffixes: Tuple[str, ...]) -> List[Path]:
+    """Files with one of the suffixes that a command names literally, as paths"""
+    found = []
+    for token in command.args:
+        token = token.replace("${CMAKE_CURRENT_LIST_DIR}", str(directory)).replace("${CMAKE_CURRENT_SOURCE_DIR}", str(directory))
+        if is_literal(token) and token.endswith(suffixes):
+            found.append((directory / token).resolve())
+    return found
+
+
+SOURCE_COMMANDS = ("add_library", "add_executable", "target_sources")
+
+
+def named_sources(command: Command, directory: Path) -> List[Path]:
+    """Source files a command gives to a target"""
+    if command.name.startswith("register_fprime_") or command.name in SOURCE_COMMANDS or (
+            command.name in ("set", "list") and command.args and "SOURCE" in command.args[0].upper()):
+        return _files_named(command, directory, SOURCE_SUFFIXES)
+    return []
+
+
+def defined_functions(source: Path) -> List[str]:
+    """Names of the functions a C or C++ source file defines, as far as its text shows"""
+    if not source.is_file():
+        return []
+    text = re.sub(r"//[^\n]*|/\*.*?\*/", " ", source.read_text(errors="replace"), flags=re.S)
+    names = [m.group(1) for m in _FUNCTION.finditer(text)]
+    return list(dict.fromkeys(n for n in names if n.rpartition("::")[2] not in _NOT_FUNCTIONS))
+
+
+@dataclass
+class TestingBranches:
+    """The statements of a module's CMakeLists.txt that depend on BUILD_TESTING"""
+    __test__ = False  # not a test class, whatever pytest makes of the name
+    module: Path
+    when_on: List[Command] = field(default_factory=list)
+    when_off: List[Command] = field(default_factory=list)
+    mentioned: bool = False  # the file names BUILD_TESTING at all
+
+    def __bool__(self) -> bool:
+        return bool(self.when_on or self.when_off)
+
+    def sources(self, testing: bool) -> List[Path]:
+        # Not those of its unit tests: they are no part of the module
+        return [f for c in (self.when_on if testing else self.when_off) if c.name != "register_fprime_ut"
+                for f in named_sources(c, self.module)]
+
+    def depends(self, testing: bool) -> List[str]:
+        return [d for c in (self.when_on if testing else self.when_off)
+                if c.name.startswith("register_fprime_") for d in directive_values(c, "DEPENDS")]
+
+    def describe(self) -> dict:
+        """For the report: what each side does, and what the side read with BUILD_TESTING on lacks"""
+        def statements(commands: List[Command]) -> List[str]:
+            # Paths in the module's own directory by their names, to keep a statement readable
+            texts = [c.text.replace('"${CMAKE_CURRENT_LIST_DIR}/', '"') for c in commands]
+            return [text if len(text) <= 240 else text[:237] + "..." for text in texts]
+
+        on_depends, off_depends = self.depends(True), self.depends(False)
+        def exports(commands: List[Command]) -> List[str]:
+            return statements([c for c in commands if c.name in ("target_include_directories", "include_directories")])
+
+        exported, on_exported = exports(self.when_off), set(exports(self.when_on))
+        lacks: Dict[str, List[str]] = {}
+        missing_depends = [d for d in off_depends if d not in on_depends]
+        if missing_depends:
+            lacks["depends"] = missing_depends
+        if [e for e in exported if e not in on_exported]:
+            lacks["include_directories"] = [e for e in exported if e not in on_exported]
+        on_sources, off_sources = self.sources(True), self.sources(False)
+        if on_sources and off_sources:
+            stub_names = {n for s in on_sources for n in defined_functions(s)}
+            real_only = [n for s in off_sources if s not in on_sources for n in defined_functions(s) if n not in stub_names]
+            if real_only:
+                lacks["functions"] = list(dict.fromkeys(real_only))
+        return {
+            "with_build_testing": statements(self.when_on),
+            "without": statements(self.when_off),
+            "registers_unit_tests": any(c.name == "register_fprime_ut" for c in self.when_on),
+            **({"variant_with_build_testing_lacks": lacks} if lacks else {}),
+        }
+
+
+def testing_branches(module: Path) -> TestingBranches:
+    """What `module/CMakeLists.txt` does differently when BUILD_TESTING is set"""
+    branches = TestingBranches(module)
+    cmake_file = module / "CMakeLists.txt"
+    if not cmake_file.is_file():
+        return branches
+    text = _strip_comments(cmake_file.read_text(errors="replace"))
+    branches.mentioned = TESTING in text
+    if not branches.mentioned:
+        return branches
+    for command in read_commands(text):
+        state = testing_state(command)
+        if state is not None:
+            (branches.when_on if state else branches.when_off).append(command)
+    return branches
+
+
+# ----------------------------------------------------------------------
+# The CMake files a build root reads on the host
+# ----------------------------------------------------------------------
+
+HOST_PLATFORMS = {"linux", "posix", "sockets"}
+
+
+def restricts_host(command: Command) -> bool:
+    """A `restrict_platforms()` call that leaves a Linux host out"""
+    if command.name != "restrict_platforms":
+        return False
+    platforms = {a.strip().lower() for a in command.args if a.strip()}
+    return bool(platforms) and not (platforms & HOST_PLATFORMS)
+
+
+@dataclass
+class BuildTree:
+    """What is read on the host when a CMake file is included or a directory added: the
+    files in the order they are read, with the commands of each that apply."""
+    files: Dict[Path, List[Command]] = field(default_factory=dict)  # CMake file -> commands read on the host
+    directories: Dict[Path, Path] = field(default_factory=dict)  # added directory -> the file that adds it
+    unread: List[Tuple[Path, Command]] = field(default_factory=list)  # add/include calls whose path needs a variable
+
+
+_FOREACH = re.compile(r"foreach\s*\(\s*(\w+)\s+(?:IN\s+(LISTS|ITEMS)\s+)?(.*)\)", re.I | re.S)
+
+
+def _loop_values(command: Command, variables: Dict[str, List[str]]) -> List[Dict[str, str]]:
+    """Values a `foreach()` around a command gives its loop variable, where they are
+    literal or a list the build sets (`cmake.cache`): [{variable: value}]. Empty when
+    the command is in no such loop."""
+    for text, _ in reversed(command.conditions):
+        match = _FOREACH.fullmatch(text)
+        if not match:
+            continue
+        name, kind, rest = match.group(1), (match.group(2) or "ITEMS").upper(), _arguments(match.group(3))
+        if kind == "LISTS":
+            if not all(item in variables for item in rest):
+                return []
+            return [{name: value} for item in rest for value in variables[item]]
+        return [{name: value} for value in rest] if all(is_literal(value) for value in rest) else []
+    return []
+
+
+def read_tree(start: Path, stub_variants: Iterable[Path] = (), excluded: Iterable[Path] = (),
+              tree: Optional[BuildTree] = None, variables: Optional[Dict[str, List[str]]] = None) -> BuildTree:
+    """Follow a CMake file (a `library.cmake`, or a module's `CMakeLists.txt`) through the
+    directories and files it adds with literal paths, or in a `foreach()` over a list in
+    `variables`. Reading of a file stops at a `restrict_platforms()` that leaves the host
+    out, as F Prime's does. A directory in `stub_variants` is read with BUILD_TESTING on,
+    the others with it off; one in `excluded` is not read."""
+    stub_variants, excluded = set(stub_variants), set(excluded)
+    tree = tree if tree is not None else BuildTree()
+    variables = variables or {}
+
+    def read(cmake_file: Path, testing: bool) -> None:
+        cmake_file = cmake_file.resolve()
+        if cmake_file in tree.files or not cmake_file.is_file():
+            return
+        applied: List[Command] = []
+        tree.files[cmake_file] = applied
+        for command in read_commands(cmake_file.read_text(errors="replace")):
+            if not in_variant(command, testing):
+                continue
+            if restricts_host(command):
+                break
+            applied.append(command)
+            if command.name in ("add_fprime_subdirectory", "add_subdirectory", "include") and command.args:
+                targets = [_resolved(command.args[0], cmake_file)]
+                if targets[0] is None:
+                    targets = []
+                    for loop in _loop_values(command, variables):
+                        token = command.args[0]
+                        for name, value in loop.items():
+                            token = token.replace("${" + name + "}", value)
+                        targets.append(_resolved(token, cmake_file))
+                    if not targets or None in targets:
+                        tree.unread.append((cmake_file, command))
+                        continue
+                for target in targets:
+                    if command.name == "include":
+                        if target.is_file():
+                            read(target, testing)
+                    elif target.is_dir() and target != cmake_file.parent and target not in excluded:
+                        tree.directories.setdefault(target, cmake_file)
+                        read(target / "CMakeLists.txt", target in stub_variants)
+
+    start = start.resolve()
+    read(start, start.parent in stub_variants)
+    return tree

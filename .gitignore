@@ -10,3 +10,6 @@ wsts-logs/
 *.wsts-rec.jsonl
 # GDS test API logs
 /logs/
+# Host check of the machine that generated (fprime-wsts generate, check-host)
+wsts-host.json
+wsts-host.md

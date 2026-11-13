@@ -71,6 +71,10 @@ cmake:
   # This project's library.cmake builds only the modules this element uses
   cache:
     MISSION_SIM_MODULES: [SensorSim/SerialSensorSim, SensorSim/GyroSim, SensorSim/SimTime, SensorSim/Top]
+  # sensor-lib uses memcpy without including <cstring>, which the flight compiler's
+  # standard library brings in and the host's does not. Here for every C++ source of the
+  # build; payload.yaml gives the same flag to the one module that needs it.
+  cxx_flags: ["-include cstring"]
   # CMake this simulation needs around the flight modules: an alias for one of them
   include:
     - sim.cmake

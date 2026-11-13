@@ -18,11 +18,14 @@ def cmd_generate(args: argparse.Namespace) -> int:
 
     manifest_path = Path(args.manifest).resolve()
     output = Path(args.output) if args.output else None
+    notices = []
     if is_system_manifest(manifest_path):
         system = load_system(manifest_path)
         result = generate_system(system, output, check=args.check,
                                  project=Path(args.project).resolve() if args.project else None)
         reports = {name: element.report for name, element in result.elements.items()}
+        outputs = {name: element.output for name, element in result.elements.items()}
+        notices = result.notices
         if args.json:
             print(json.dumps({"output": str(result.output), "changed": result.changed, "system": result.description,
                               "reports": reports}, indent=2))
@@ -30,24 +33,31 @@ def cmd_generate(args: argparse.Namespace) -> int:
             for name, report in reports.items():
                 print(f"element {name} ({report['topology']}):")
                 _print_report(report)
+                _host_summary(report, outputs[name], write=not args.check)
             for link in result.description["links"]:
                 print(f"link {link['name']}: {link['a']['element']}.{link['a']['endpoint']} <-> "
                       f"{link['b']['element']}.{link['b']['endpoint']}")
-        what, build = "Simulated system", "Build each element with: cd {0}/<element> && fprime-util generate && fprime-util build"
+        options = {name: report.get("configure_options", []) for name, report in reports.items()}
+        if any(options.values()):
+            build = "Build each element with: cd {0}/<element> && fprime-util generate <options> && fprime-util build\n" + \
+                "\n".join(f"  options for {name}: {' '.join(values)}" for name, values in options.items() if values)
+        else:
+            build = "Build each element with: cd {0}/<element> && fprime-util generate && fprime-util build"
+        what = "Simulated system"
     else:
         manifest = load_manifest(manifest_path)
-        if args.project:
-            project = Path(args.project).resolve()
-        elif manifest.project is not None:
-            project = manifest.project_root()
-        else:
-            project = find_project(manifest_path.parent)
+        project = _project_of(args, manifest, manifest_path)
         result = generate(project, manifest, output, check=args.check)
+        notices = result.notices
         if args.json:
             print(json.dumps({"output": str(result.output), "changed": result.changed, "report": result.report}, indent=2))
         else:
             _print_report(result.report)
-        what, build = "Simulated deployment", "Build it with: cd {0} && fprime-util generate && fprime-util build"
+            _host_summary(result.report, result.output, write=not args.check)
+        options = "".join(f" {option}" for option in result.report.get("configure_options", []))
+        what, build = "Simulated deployment", f"Build it with: cd {{0}} && fprime-util generate{options} && fprime-util build"
+    for notice in notices:
+        print(f"note: {notice}", file=sys.stderr)
     if args.check:
         if result.changed:
             print(f"{result.output} is out of date:", file=sys.stderr)
@@ -61,6 +71,72 @@ def cmd_generate(args: argparse.Namespace) -> int:
         print(f"{what} written to {result.output}")
         print(build.format(result.output))
     return 0
+
+
+def _project_of(args: argparse.Namespace, manifest, manifest_path: Path) -> Path:
+    from .system import find_project
+
+    if getattr(args, "project", None):
+        return Path(args.project).resolve()
+    if manifest.project is not None:
+        return manifest.project_root()
+    return find_project(manifest_path.parent)
+
+
+def _host_summary(report: dict, output: Path, write: bool) -> None:
+    """Ask this host for what the build needs, say what is missing, and leave the answer beside the report"""
+    from . import hostcheck
+
+    requirements = report.get("host_requirements")
+    if requirements is None:
+        return
+    result = hostcheck.probe(requirements, output)
+    if write and output.is_dir():
+        hostcheck.write(output, result, requirements)
+    for line in hostcheck.summary(result):
+        print(f"  host: {line}")
+    if result["missing"]:
+        print(f"  host: details and what to do: fprime-wsts check-host {output}")
+
+
+def cmd_check_host(args: argparse.Namespace) -> int:
+    """List what the host must provide for the build, and whether it does"""
+    from . import hostcheck
+    from .generate import generate
+    from .manifest import load_manifest
+    from .system import generate_system, is_system_manifest, load_system
+
+    target = Path(args.target).resolve()
+    checks = {}  # name -> (requirements, directory its paths are relative to)
+    if target.is_dir():
+        system = target / "wsts-system.json"
+        if system.is_file():
+            for element in json.loads(system.read_text())["elements"]:
+                directory = target / element["directory"]
+                checks[element["name"]] = (hostcheck.load_requirements(directory), directory)
+        else:
+            checks[target.name] = (hostcheck.load_requirements(target), target)
+    elif is_system_manifest(target):
+        result = generate_system(load_system(target), None, check=True,
+                                 project=Path(args.project).resolve() if args.project else None)
+        for name, element in result.elements.items():
+            checks[name] = (element.report["host_requirements"], element.output)
+    else:
+        manifest = load_manifest(target)
+        result = generate(_project_of(args, manifest, target), manifest, None, check=True)
+        checks[result.output.name] = (result.report["host_requirements"], result.output)
+    results = {}
+    for name, (requirements, base) in checks.items():
+        results[name] = hostcheck.probe(requirements, base)
+        if target.is_dir() and base.is_dir():
+            hostcheck.write(base, results[name], requirements)
+        if not args.json:
+            if len(checks) > 1:
+                print(f"element {name}:")
+            print(hostcheck.render(results[name], requirements, base), end="" if name == list(checks)[-1] else "\n")
+    if args.json:
+        print(json.dumps(results if len(results) > 1 else next(iter(results.values())), indent=2))
+    return 0 if all(result["ok"] for result in results.values()) else 1
 
 
 def _print_report(report: dict) -> None:
@@ -79,10 +155,14 @@ def cmd_report(args: argparse.Namespace) -> int:
     path = Path(args.directory) / "wsts-report.json"
     if not path.is_file():
         raise WstsError(f"{path} not found: is this a generated simulation deployment?")
+    host = path.parent / "wsts-host.md"
     if args.json:
         print(path.read_text())
     else:
         print((path.parent / "wsts-report.md").read_text())
+        if host.is_file():
+            # What `generate` or `check-host` found on this machine: its compiler, and what it lacks
+            print(host.read_text())
     return 0
 
 
@@ -110,6 +190,14 @@ def main(argv=None) -> int:
     generate.add_argument("--check", action="store_true", help="do not write; fail if the output is out of date")
     generate.add_argument("--json", action="store_true", help="print the result as JSON")
     generate.set_defaults(handler=cmd_generate)
+
+    check_host = commands.add_parser(
+        "check-host", help="list what the host must provide for the simulated build (headers, libraries, packages, "
+                           "SDK files, compiler), and whether it does: exit status 1 when something is missing")
+    check_host.add_argument("target", help="a generated simulation deployment or system directory, or a deployment or system manifest")
+    check_host.add_argument("--project", help="flight F Prime project root, for a manifest (default: as for generate)")
+    check_host.add_argument("--json", action="store_true", help="print the result as JSON")
+    check_host.set_defaults(handler=cmd_check_host)
 
     report = commands.add_parser("report", help="show the fidelity report of a generated deployment")
     report.add_argument("directory", nargs="?", default=".")

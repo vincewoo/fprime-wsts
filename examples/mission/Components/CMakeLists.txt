@@ -1,5 +1,6 @@
 add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Adc")
 add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/HeaterControl")
+add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Imager")
 add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/ImuManager")
 add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Instrument")
 add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/PowerMonitor")

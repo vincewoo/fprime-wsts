@@ -233,6 +233,12 @@ class Manifest:
     exclude_subdirectories: List[str] = field(default_factory=list)
     extra_depends: List[str] = field(default_factory=list)
     cmake_cache: Dict[str, List[str]] = field(default_factory=dict)  # name -> values (one, or a CMake list)
+    # Module directories read with BUILD_TESTING set (their stub variant), relative to the flight project
+    stub_variants: List[str] = field(default_factory=list)
+    # Flags for the host's C++ compiler: for every module (key ALL_MODULES), or for one module directory
+    cxx_flags: Dict[str, List[str]] = field(default_factory=dict)
+    # Names the host check does not report: headers, libraries (-l<name>), packages, SDK entries
+    host_ignore: List[str] = field(default_factory=list)
     simulators: SimulatorsSpec = field(default_factory=SimulatorsSpec)
     devices: List[DeviceSpec] = field(default_factory=list)
     clocks: List[ClockSpec] = field(default_factory=list)
@@ -280,8 +286,11 @@ class Manifest:
 KNOWN_KEYS = {
     "project", "deployment", "topology", "output", "substitute", "keep", "models", "control", "bridge", "tick_hz",
     "catalogs", "sources", "main", "cmake", "libraries", "fpp_exclude", "defines", "simulators", "devices",
-    "clocks", "run",
+    "clocks", "run", "host",
 }
+HOST_KEYS = {"ignore"}
+#: Key of `Manifest.cxx_flags` for flags that apply to every module
+ALL_MODULES = ""
 CLOCK_KEYS = {"instance", "hz", "options"}
 LIBRARY_KEYS = {"keep", "drop", "sim"}
 RUN_KEYS = {"env"}
@@ -290,7 +299,8 @@ ENV_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
 SUBSTITUTE_KEYS = {"instance", "component", "with", "endpoint", "options", "ports", *ATTRIBUTE_KEYS}
 SIMULATOR_KEYS = {"instances", "topologies", "connections", "headers"}
 DEVICE_KEYS = {"instance", "endpoint", "options"}
-CMAKE_KEYS = {"extra_subdirectories", "exclude_subdirectories", "depends", "cache", "include", "include_early"}
+CMAKE_KEYS = {"extra_subdirectories", "exclude_subdirectories", "depends", "cache", "include", "include_early",
+              "stub_variants", "cxx_flags"}
 CONNECTION_END = r"([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+)\s*(?:\[\s*(\d+)\s*\])?"
 CACHE_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
 
@@ -309,6 +319,31 @@ def parse_connection(text: str, where: str) -> ConnectionSpec:
         target=target.replace("$", ""), target_index=int(target_index) if target_index is not None else None,
     )
 MODEL_KINDS = {"bytestream", "i2c", "spi", "gpio", "none"}
+
+
+def _cxx_flags(value, where: str) -> Dict[str, List[str]]:
+    """`cmake.cxx_flags`: a list of flags for every module, or a mapping from a module
+    directory (relative to the flight project) to its flags. One entry is one flag with
+    its argument: `-include cstring`."""
+    if value is None:
+        return {}
+
+    def flags(entries, what: str) -> List[str]:
+        entries = [entries] if isinstance(entries, str) else entries
+        if not isinstance(entries, list) or not all(isinstance(e, str) and e.strip() for e in entries):
+            raise WstsError(f"{where}: {what} must be a list of compiler flags (one entry per flag, with its "
+                            "argument: '-include cstring')")
+        for entry in entries:
+            if any(char in entry for char in '";$\n') or not entry.strip().startswith("-"):
+                raise WstsError(f"{where}: {what}: '{entry}' is not a plain compiler flag (it must start with '-' "
+                                "and have no quotes, ';' or '$' in it)")
+        return [" ".join(entry.split()) for entry in entries]
+
+    if isinstance(value, dict):
+        # `"*"` is every module, as the list form is
+        return {(ALL_MODULES if str(module).strip() == "*" else str(module).strip().rstrip("/")):
+                flags(entries, f"cmake.cxx_flags.{module}") for module, entries in value.items()}
+    return {ALL_MODULES: flags(value, "cmake.cxx_flags")}
 
 
 def load_manifest(path: Path) -> Manifest:
@@ -470,6 +505,19 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
     manifest.exclude_subdirectories = [str(d) for d in cmake.get("exclude_subdirectories", [])]
     manifest.extra_depends = [str(d) for d in cmake.get("depends", [])]
     manifest.cmake_include = [str(f) for f in cmake.get("include") or []]
+    stubs = cmake.get("stub_variants") or []
+    if not isinstance(stubs, list) or not all(isinstance(d, str) and d.strip() for d in stubs):
+        raise WstsError(f"{where}: cmake.stub_variants must be a list of module directories, relative to the flight project")
+    manifest.stub_variants = [d.strip() for d in stubs]
+    manifest.cxx_flags = _cxx_flags(cmake.get("cxx_flags"), where)
+    host = data.get("host") or {}
+    unknown = set(host) - HOST_KEYS if isinstance(host, dict) else {"(not a mapping)"}
+    if unknown:
+        raise WstsError(f"{where}: host: unknown key(s): {', '.join(sorted(unknown))}")
+    ignore = host.get("ignore") or []
+    if not isinstance(ignore, list):
+        raise WstsError(f"{where}: host.ignore must be a list of header, library (-l<name>) and package names")
+    manifest.host_ignore = [str(name).strip() for name in ignore]
     manifest.cmake_include_early = [str(f) for f in cmake.get("include_early") or []]
     libraries = data.get("libraries") or {}
     unknown = set(libraries) - LIBRARY_KEYS
