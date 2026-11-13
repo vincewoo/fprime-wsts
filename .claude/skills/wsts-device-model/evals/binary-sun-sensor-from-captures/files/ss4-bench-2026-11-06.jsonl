@@ -1,0 +1,17 @@
+# wsts-probe {"device": "SS-4 s/n 117, fw 3.0", "interface": "uart", "config": {"port": "/dev/ttyUSB1", "baud": 115200}, "endpoint": "sunUart", "tick_hz": 10, "started": "2026-11-06T14:02:11"}
+{"rec": "bs_tx", "tick": 5, "endpoint": "sunUart", "src": "flight", "data": "eb9001013e1f", "t": 0.5, "step": "version"}
+{"rec": "bs_rx", "tick": 5, "endpoint": "sunUart", "src": "model", "data": "eb90038103004625", "t": 0.52, "step": "version", "latency_ms": 3.1}
+{"rec": "bs_tx", "tick": 5, "endpoint": "sunUart", "src": "flight", "data": "eb9001103c0f", "t": 0.54, "step": "angles"}
+{"rec": "bs_rx", "tick": 5, "endpoint": "sunUart", "src": "model", "data": "eb90069004d2fe0c01ff3d", "t": 0.56, "step": "angles", "latency_ms": 3.1}
+{"rec": "bs_tx", "tick": 5, "endpoint": "sunUart", "src": "flight", "data": "eb9001103c0f", "t": 0.58, "step": "angles"}
+{"rec": "bs_rx", "tick": 6, "endpoint": "sunUart", "src": "model", "data": "eb90069004d2fe0c01ff3d", "t": 0.6, "step": "angles", "latency_ms": 3.1}
+{"rec": "bs_tx", "tick": 6, "endpoint": "sunUart", "src": "flight", "data": "eb9001103c0f", "t": 0.62, "step": "angles"}
+{"rec": "bs_rx", "tick": 6, "endpoint": "sunUart", "src": "model", "data": "eb90069004d2fe0c01ff3d", "t": 0.64, "step": "angles", "latency_ms": 3.1}
+{"rec": "bs_tx", "tick": 6, "endpoint": "sunUart", "src": "flight", "data": "eb9001121c4d", "t": 0.66, "step": "temperature"}
+{"rec": "bs_rx", "tick": 6, "endpoint": "sunUart", "src": "model", "data": "eb90027f029ad9", "t": 0.68, "step": "temperature", "latency_ms": 3.1}
+{"rec": "bs_tx", "tick": 7, "endpoint": "sunUart", "src": "flight", "data": "eb9001103cf0", "t": 0.7, "step": "bad_crc"}
+{"rec": "bs_rx", "tick": 7, "endpoint": "sunUart", "src": "model", "data": "eb90027f01aaba", "t": 0.72, "step": "bad_crc", "latency_ms": 3.1}
+{"rec": "bs_tx", "tick": 7, "endpoint": "sunUart", "src": "flight", "data": "eb900155246e", "t": 0.74, "step": "unknown_cmd"}
+{"rec": "bs_rx", "tick": 7, "endpoint": "sunUart", "src": "model", "data": "eb90027f029ad9", "t": 0.76, "step": "unknown_cmd", "latency_ms": 3.1}
+{"rec": "bs_tx", "tick": 7, "endpoint": "sunUart", "src": "flight", "data": "0013eb9001013e1f", "t": 0.78, "step": "leading_garbage"}
+{"rec": "bs_rx", "tick": 8, "endpoint": "sunUart", "src": "model", "data": "eb90038103004625", "t": 0.8, "step": "leading_garbage", "latency_ms": 3.1}
