@@ -223,3 +223,30 @@ Configuration the simulated build replaces and flight does not. These modules ar
 - Library of the simulation: `../../../lib/sim-common`
 - CMake included after all modules are added: `../../../sim.cmake`
 - Environment: `SENSOR_SIM_PROFILE=../../../profiles/calm.txt` (a path relative to this directory)
+
+## Modules that change under BUILD_TESTING
+
+Modules of this build whose `CMakeLists.txt` does something else when `BUILD_TESTING` is set. The simulated build reads a module that way only when the manifest lists it under `cmake.stub_variants`; nothing else of a unit-test build comes with that.
+
+- `lib/sensor-lib/SensorLib/Units` (used by no instance of the topology): read with `BUILD_TESTING` off
+  - With `BUILD_TESTING`: `register_fprime_module( SOURCES "stubs/convert_stub.cpp" )`
+  - Without: `register_fprime_module( SOURCES "convert.cpp" )`
+  - Without: `target_include_directories(${FPRIME_CURRENT_MODULE} PUBLIC "include")`
+  - It does not have: `target_include_directories(${FPRIME_CURRENT_MODULE} PUBLIC "include")`
+  - Its sources do not define (read from the text): `reading16`
+
+## Compiler flags of the simulation
+
+From `cmake.cxx_flags` in the manifest, for C++ sources.
+
+- all modules: `-include cstring`
+
+## What the build takes from the host
+
+Read from the sources and CMake files of the modules of this build (the kept flight modules, the libraries and the simulation's own). `fprime-wsts check-host` asks a machine whether it has them, and records its compiler in `wsts-host.md`.
+
+- Flight toolchain `vxworks`: its compiler is not named by a plain set() (`../../../../../lib/fprime-vxworks/cmake/toolchain/vxworks.cmake`). The host compiler is another one: standard library headers include one another differently between compilers and versions, so code that relies on an indirect include may not compile here.
+- System headers: none
+- Libraries (`-l`): none
+- Packages (`find_package`): none
+- Files of an SDK: none

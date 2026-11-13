@@ -8,7 +8,8 @@
 | `fprime-wsts generate <wsts-system.yaml> [--output DIR] [--check] [--json]` | The same for every element of a [system](systems.md), plus `wsts-system.json` |
 | `fprime-wsts run [DIR] [--gds] [--gds-gui] [--gds-port P] [--gds-gui-port P] [--gds-gui-addr A] [--scenario F] [--scenario-mode stimulus\|responses] [--record F] [--duration S] [--bridge ADDR] [--files-dir DIR] [--env NAME=VALUE]... [--json]` | Run a built simulated deployment, optionally with the GDS. `--gds` is headless; `--gds-gui` starts the browser GUI (implies `--gds`) and prints its URL. Logs go to `DIR/wsts-logs`. `--env` sets an environment variable of the deployment, over the manifest's `run.env` |
 | `fprime-wsts run [SYSTEM DIR] [--gds] [--gds-gui] [--duration S] [--env [ELEMENT.]NAME=VALUE]... [--json]` | Run every element of a generated system, with their links, and optionally one GDS on the ground element with the merged dictionary. `--env NAME=VALUE` goes to every element, `--env payload.NAME=VALUE` to one |
-| `fprime-wsts report [DIR] [--json]` | Print a generated deployment's fidelity report |
+| `fprime-wsts check-host <DIR or manifest> [--project DIR] [--json]` | List what the host must provide for the simulated build (system headers, libraries, packages, SDK files, sanitizer runtime) and whether it does, with the host and flight compilers. Compiles nothing of the project. Exit status 1 when something is missing; a check that cannot be made is a warning. Given a generated directory it also writes `wsts-host.md` and `wsts-host.json` there |
+| `fprime-wsts report [DIR] [--json]` | Print a generated deployment's fidelity report, and the host check of this machine if `generate` or `check-host` left one |
 | `fprime-wsts scaffold <Component> --output DIR [--project DIR] [--name NAME]` | Start a mirror surrogate for a flight component |
 
 Errors the user can fix are printed as `fprime-wsts: error: …` with exit code 2.
@@ -105,6 +106,8 @@ cmake:
     SIM_LEVEL: 2
   include: [sim.cmake]               # CMake included after all modules, before the deployment
   include_early: [options.cmake]     # CMake included before the framework and libraries are read
+  stub_variants: [Components/Imager] # modules read with BUILD_TESTING set: their stub variant (see "Bridging the host")
+  cxx_flags: ["-include cstring"]    # flags of the host C++ compiler; or {<module directory>: [flags]}
 libraries:
   keep: [...]                        # flight libraries to build although nothing in the model uses them
   drop: [...]
@@ -115,6 +118,8 @@ run:
     SIM_SEED: 42
 fpp_exclude: ["*/Experimental/*"]    # FPP files to leave out of the analysis
 defines: [MY_SIM_FLAG]               # compile definitions, in addition to WSTS_SIM=1
+host:
+  ignore: [vendor/gen.h, -lcodec]    # names the host check does not report (header, -l<library>, package, SDK entry)
 ```
 
 ### Instance names
@@ -295,8 +300,40 @@ Design and reasons: [design.md](design.md#what-is-taken-from-the-flight-build).
   simulation, given the original's target name with `add_library(<name> ALIAS <target>)` in a
   file named under `cmake.include`.
 - **Link dependencies that are files of the target's SDK** are reported as warnings, with
-  the ways out: substitute the instances that need the module, drop the library, exclude
-  the module, or point the variable at a host build with `cmake.cache`.
+  the ways out: take the module's stub variant if it has one, substitute the instances that
+  need the module, drop the library, exclude the module, or point the variable at a host
+  build with `cmake.cache`. A module is read in the variant the build takes.
+
+### Bridging the host
+
+Recipes and reasons:
+[Building on a host that lacks the target's toolchain](vxworks-conversion.md#building-on-a-host-that-lacks-the-targets-toolchain).
+
+- **`cmake.stub_variants`** lists module directories, relative to the flight project
+  (`../` allowed, so a module of any library can be named). Each is read with
+  `BUILD_TESTING` set, for that `CMakeLists.txt` alone: no unit-test target, no sanitizer or
+  coverage flags, no `BUILD_UT`. Errors: a path that is no module directory, the
+  deployment's own directories, a module that `cmake.exclude_subdirectories` leaves out, a
+  module of a library that is not built, and a module that the build does not add. A module
+  with nothing under `if (BUILD_TESTING)` is a warning. Report: `stub_variants`, and
+  `testing_variants: [{module, selected, instances, with_build_testing, without,
+  registers_unit_tests, variant_with_build_testing_lacks: {depends, include_directories,
+  functions}}]` for every module of the build that has such a branch, listed or not.
+- **`cmake.cxx_flags`** is a list of flags for every C++ source of the build, or a mapping
+  from a module directory to its flags (`"*"` for every module). One entry is one flag
+  with its argument. Report: `cxx_flags`.
+- **`BUILD_TESTING` for the whole build** (`cmake.cache`, the flight root `CMakeLists.txt`,
+  the flight `default_cmake_options`) is a warning that says what it turns on.
+- **`host.ignore`** names what `check-host` should not report.
+- **The host check** reads `host_requirements` of the report, which `generate` writes from
+  text alone, so that it is the same on every machine: `modules`, `system_headers:
+  {<header>: [{module, file, line, condition?}]}`, `libraries`, `packages: {<name>:
+  {required, components, needed_by}}`, `sdk_paths`, `search` (include and link directories
+  from the simulation's CMake files, `cxx_flags`), `sanitizers`, `flight_toolchain`,
+  `flight_compiler`, `ignore`. What a machine answers is in `wsts-host.json` beside the
+  report (`compiler`, `flight_compiler`, `missing: [{kind, name, needed_by, remedies,
+  hint?}]`, `notes`, `warnings`, `ok`); that file is not compared by `--check` and is not
+  meant to be checked in.
 
 ### Surrogates of another kind, or with other port names
 
@@ -323,6 +360,14 @@ them in its `library.cmake` sees them. A list is written as a CMake list. Preced
 highest first: `-D` on the command line (`fprime-util generate -DNAME=...`), then
 `cmake.cache`, then the flight project's `default_cmake_options`, from which a variable
 that `cmake.cache` sets is left out.
+
+`project()` has already run where the entries are written, and it puts some variables in
+the cache itself: `CMAKE_<LANG>_FLAGS…`, `CMAKE_<LANG>_COMPILER`, the linker flags,
+`CMAKE_BUILD_TYPE`, `CMAKE_INSTALL_PREFIX`. An entry for one of those changes nothing, and
+the generator warns. Compiler flags go under `cmake.cxx_flags`. The others are passed when
+configuring, as `fprime-util generate -DNAME=VALUE` (directly: after `--`, and for a value
+with a space in it, `fprime-util` takes the text for the name of a toolchain); the report
+lists them as `configure_options`, and the build command that `generate` prints has them.
 
 ## System manifest (`wsts-system.yaml`)
 

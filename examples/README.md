@@ -77,6 +77,11 @@ runs the end-to-end tests against it.
 | A cycle source with a rate of its own | `SensorSim.simClock` at 125 Hz stepping `SensorSim.gyroSim` (`clocks`) | `test_cdh.py::test_fast_simulator_runs_at_its_own_rate` and the clock tests |
 | A further library of the simulation | `mission-sim/lib/sim-common` (`libraries.sim`) | Python tests |
 | CMake around the flight modules | `cmake.cache` (each element builds only its modules), `cmake.include` (`sim.cmake`), `cmake.depends` | Python tests; the build |
+| A module that links the target's SDK, built in its stub variant | `mission/Components/Imager`: `CameraSdk.cpp` and `${SDK_ROOT}/3rdparty/lib/libcamsdk.a`, or `CameraStub.cpp` under `if (BUILD_TESTING)`; `cmake.stub_variants` in `payload.yaml` | `test_payload.py::test_stub_variant_of_the_camera_runs`; Python tests (`test_host_bridges.py`); the build |
+| A library module that must keep its real variant | `mission/lib/sensor-lib/SensorLib/Units` exports `<units/convert.h>` in its real variant only, and Payload's topology code includes it: with `BUILD_TESTING` for the whole build it would not compile | the build |
+| Code that needs an include the host compiler does not bring in | `Units/convert.cpp` uses `memcpy` without `<cstring>`; `cmake.cxx_flags` for that module in `payload.yaml`, for the whole build in `cdh.yaml` | the build; Python tests |
+| A header of the target's sysroot | `Imager.cpp` includes `<board/revision.h>`; `mission-sim/host.cmake` (`cmake.include_early`) adds `mission-sim/host/include` | the build; `test_payload.py::test_stub_variant_of_the_camera_runs` |
+| A host check before the build | `fprime-wsts check-host mission-sim/wsts-system.yaml`: clean as checked in; without `stub_variants` it lists the camera SDK's headers, library, package and file | Python tests (`test_host_bridges.py`); CI |
 | Environment of the simulated deployment | `SENSOR_SIM_PROFILE` (`run.env` in `cdh.yaml`) | `test_cdh.py::test_environment_variable_reaches_the_simulator` |
 | A system of several elements | `wsts-system.yaml`: two elements, their ID windows, the `hub` link | `test_system.py` |
 | Faults on a link and on an element's endpoint | the `hub` link; `payload.hubDriver` | `test_system.py` |
@@ -89,5 +94,6 @@ runs the end-to-end tests against it.
 What the example does not show is covered by the Python tests instead: a manifest kept
 inside the flight project (`test_generate.py`), `control: none`, SPI, surrogates with other
 port names, `cmake.include_early`, statements of the flight root `CMakeLists.txt` that
-are reported and not carried over, modules that link SDK files, and the assert that
-`fprime-wsts run` resolves (`test_flight_shapes.py`).
+are reported and not carried over, modules that link SDK files, the assert that
+`fprime-wsts run` resolves (`test_flight_shapes.py`), and `BUILD_TESTING` set for the whole
+build (`test_host_bridges.py`).

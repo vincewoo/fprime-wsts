@@ -50,6 +50,17 @@ models:
       period: "20"
 
 cmake:
+  # The camera's SDK exists for the flight board only. Components/Imager has a stub of the
+  # camera for its unit tests, under if (BUILD_TESTING): that module alone is read with
+  # BUILD_TESTING set. sensor-lib's unit conversions also have a variant for unit tests,
+  # and keep their real one: the topology code needs the include directory it exports.
+  stub_variants: [Components/Imager]
+  # sensor-lib uses memcpy without including <cstring>: the flight compiler's standard
+  # library brings it in, the host's does not
+  cxx_flags:
+    lib/sensor-lib/SensorLib/Units: ["-include cstring"]
+  # Headers of the board's sysroot that a workstation lacks (host/include)
+  include_early: [host.cmake]
   # This project's library.cmake builds only the modules this element uses
   cache:
     MISSION_SIM_MODULES: [Models, Surrogates/SimLinuxGpio]

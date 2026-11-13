@@ -50,6 +50,9 @@ module Payload {
 
   instance adc: Components.Adc base id 0x20018000
 
+  @ The payload camera, through its vendor's SDK
+  instance imager: Components.Imager base id 0x20019000
+
   # ----------------------------------------------------------------------
   # The hub to the Cdh computer
   # ----------------------------------------------------------------------

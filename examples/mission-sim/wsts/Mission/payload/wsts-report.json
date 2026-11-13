@@ -284,6 +284,7 @@
   "project_modules": [
     "Components/Adc",
     "Components/HeaterControl",
+    "Components/Imager",
     "Components/ImuManager",
     "Components/Instrument",
     "Components/PowerMonitor"
@@ -374,6 +375,171 @@
     ],
     "not_carried_over": []
   },
+  "testing_variants": [
+    {
+      "module": "Components/Imager",
+      "selected": true,
+      "instances": [
+        "Payload.imager (Components.Imager)"
+      ],
+      "with_build_testing": [
+        "register_fprime_library( AUTOCODER_INPUTS \"Imager.fpp\" SOURCES \"Imager.cpp\" \"CameraStub.cpp\" )",
+        "register_fprime_ut( SOURCES \"test/ut/CameraStubTest.cpp\" DEPENDS Components_Imager )"
+      ],
+      "without": [
+        "find_package(CamCodec REQUIRED)",
+        "register_fprime_library( AUTOCODER_INPUTS \"Imager.fpp\" SOURCES \"Imager.cpp\" \"CameraSdk.cpp\" DEPENDS ${SDK_ROOT}/3rdparty/lib/libcamsdk.a -lcamcodec )"
+      ],
+      "registers_unit_tests": true,
+      "variant_with_build_testing_lacks": {
+        "depends": [
+          "${SDK_ROOT}/3rdparty/lib/libcamsdk.a",
+          "-lcamcodec"
+        ],
+        "functions": [
+          "selfTest"
+        ]
+      }
+    },
+    {
+      "module": "lib/sensor-lib/SensorLib/Units",
+      "selected": false,
+      "instances": [],
+      "with_build_testing": [
+        "register_fprime_module( SOURCES \"stubs/convert_stub.cpp\" )"
+      ],
+      "without": [
+        "register_fprime_module( SOURCES \"convert.cpp\" )",
+        "target_include_directories(${FPRIME_CURRENT_MODULE} PUBLIC \"include\")"
+      ],
+      "registers_unit_tests": false,
+      "variant_with_build_testing_lacks": {
+        "include_directories": [
+          "target_include_directories(${FPRIME_CURRENT_MODULE} PUBLIC \"include\")"
+        ],
+        "functions": [
+          "reading16"
+        ]
+      }
+    }
+  ],
+  "stub_variants": [
+    "Components/Imager"
+  ],
+  "cxx_flags": {
+    "lib/sensor-lib/SensorLib/Units": [
+      "-include cstring"
+    ]
+  },
+  "host_requirements": {
+    "flight_project": "../../../../mission",
+    "flight_toolchain": "vxworks",
+    "flight_compiler": {
+      "toolchain_file": "../../../../../lib/fprime-vxworks/cmake/toolchain/vxworks.cmake"
+    },
+    "modules": [
+      {
+        "module": "Components/Adc",
+        "instances": [
+          "Payload.adc (Components.Adc)"
+        ]
+      },
+      {
+        "module": "Components/HeaterControl",
+        "instances": [
+          "Payload.heater (Components.HeaterControl)"
+        ]
+      },
+      {
+        "module": "Components/Imager",
+        "instances": [
+          "Payload.imager (Components.Imager)"
+        ],
+        "has_stub_variant": true,
+        "stub_variant": true
+      },
+      {
+        "module": "Components/ImuManager",
+        "instances": [
+          "Payload.imu (Components.ImuManager)"
+        ]
+      },
+      {
+        "module": "Components/Instrument",
+        "instances": [
+          "Payload.instrument (Components.Instrument)"
+        ]
+      },
+      {
+        "module": "Components/PowerMonitor",
+        "instances": [
+          "Payload.power (Components.PowerMonitor)"
+        ]
+      },
+      {
+        "module": "lib/sensor-lib/SensorLib",
+        "instances": []
+      },
+      {
+        "module": "lib/sensor-lib/SensorLib/SerialSensor",
+        "instances": [
+          "Payload.sensor (SensorLib.SerialSensor)"
+        ]
+      },
+      {
+        "module": "lib/sensor-lib/SensorLib/SensorLink",
+        "instances": []
+      },
+      {
+        "module": "lib/sensor-lib/SensorLib/SensorLink/SensorLinkConfig",
+        "instances": []
+      },
+      {
+        "module": "lib/sensor-lib/SensorLib/Units",
+        "instances": [],
+        "has_stub_variant": true
+      },
+      {
+        "module": "../mission-sim/Models",
+        "instances": []
+      },
+      {
+        "module": "../mission-sim/Surrogates/SimLinuxGpio",
+        "instances": []
+      },
+      {
+        "module": "../mission-sim/config",
+        "instances": []
+      }
+    ],
+    "system_headers": {
+      "getopt.h": [
+        {
+          "module": "Payload",
+          "file": "../../../../mission/Payload/Main.cpp",
+          "line": 4
+        }
+      ]
+    },
+    "libraries": {},
+    "packages": {},
+    "sdk_paths": [],
+    "search": {
+      "include_directories": [
+        "../../../host/include"
+      ],
+      "link_directories": [],
+      "cxx_flags": []
+    },
+    "cache": {
+      "MISSION_SIM_MODULES": [
+        "Models",
+        "Surrogates/SimLinuxGpio"
+      ]
+    },
+    "sanitizers": [],
+    "ignore": []
+  },
   "dropped_cmake_options": [
     "VX_TARGET_TYPE=DKM",
     "FPRIME_PLATFORM=VxWorks"
@@ -412,5 +578,11 @@
         "../../../../../lib/fprime/default/config/CommandDispatcherImplCfg.hpp"
       ]
     }
-  ]
+  ],
+  "cmake_includes": {
+    "before_libraries": [
+      "../../../host.cmake"
+    ],
+    "after_modules": []
+  }
 }

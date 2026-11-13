@@ -6,4 +6,5 @@ register_fprime_module(
         "${CMAKE_CURRENT_LIST_DIR}/PayloadTopology.cpp"
     DEPENDS
         Fw_Logger
+        SensorLib_Units
 )

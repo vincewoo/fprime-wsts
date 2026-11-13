@@ -530,6 +530,48 @@ file stops with a clear message if `add_fprime_subdirectory` has been overridden
 Not supported: an instance defined in a file that belongs to no module directory, and two
 replaced modules whose paths below their roots coincide.
 
+### One module in its unit-test variant
+
+A flight module that needs the target's SDK often has a second variant for unit tests,
+chosen where its `CMakeLists.txt` is read: `if (BUILD_TESTING)` registers a stub source,
+the `else()` links the SDK. The simulated build wants the stub of that module and nothing
+else of a unit-test build, so `cmake.stub_variants` reuses the redirection above: the
+overlay's `add_fprime_subdirectory()` is the one place every module passes through,
+whether the overlay, a library's `library.cmake`, the framework or a patched copy adds it.
+
+CMake variables are scoped by function call and by directory. The function sets
+`BUILD_TESTING` to `ON` as a variable of the call that adds a listed directory, which
+shadows the cache entry for that directory. A nested call (the listed module adding a
+child) puts the build's own value back first, and the variable ends with the call, so
+nothing has to be restored afterwards. Two things F´ does per module when `BUILD_TESTING`
+is set are switched off for the same call: `register_fprime_ut()` returns at once when
+`__FPRIME_NO_UT_GEN__` is set, and the coverage flags that a module's own target would get
+(`FPRIME_TESTING_REQUIRED_COMPILE_FLAGS`, `…_LINK_FLAGS`) are emptied. Everything else F´
+derives from `BUILD_TESTING` (sanitizers, `-DBUILD_UT`, unit-test targets, GoogleTest) is
+decided once, when F´ is read, where the variable is off.
+
+`BUILD_UT` is deliberately not defined for the listed module: it changes the layout of
+framework classes, and one module built with it would not fit the rest. After the last
+module the generated project checks that every listed directory was in fact added, and
+stops if one was not.
+
+Which variant a module is read in also decides what the generator says about it: SDK link
+dependencies and the host's requirements are read from the branch the build takes
+(`flight_cmake.in_variant`).
+
+### What the build takes from the host
+
+The generator cannot evaluate flight CMake, but it can read which sources the modules of
+the build compile, what those include, and what their CMake files ask the linker and
+`find_package()` for. These requirements (`host_requirements`, put together in
+`generate.py` with the readers of `hostcheck.py`) are read from text and are part of the
+report, identical on every machine. `hostcheck.probe` asks one machine: one preprocessor
+run for all headers, one link per library, one CMake configure of a scratch project for
+all packages. The answer goes to `wsts-host.json`, which `--check` leaves out of the
+comparison. The build tree is followed from each library's `library.cmake` and each
+project module's `CMakeLists.txt` through literal `add_fprime_subdirectory()` calls,
+stopping at a `restrict_platforms()` that leaves the host out, as F´ does.
+
 ### Simulator components
 
 A device simulator may be an F´ component rather than a C++ model. It is not a

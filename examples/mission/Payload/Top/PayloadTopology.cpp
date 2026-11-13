@@ -14,6 +14,9 @@
 #include <Fw/Logger/Logger.hpp>
 #include <Fw/Types/MallocAllocator.hpp>
 
+// From sensor-lib: the SensorLib_Units target exports the directory this is in
+#include <units/convert.h>
+
 using namespace Payload;
 
 namespace {
@@ -33,6 +36,8 @@ enum TopologyConstants {
     BUFFER_COUNT = 40,
     HEATER_PIN = 17,
     SWITCH_PIN = 27,
+    CAMERA_EXPOSURE_MS = 20,
+    CAMERA_TICK_HZ = 48000,
 };
 
 void configureDevices() {
@@ -88,6 +93,7 @@ void setupTopology(const TopologyState& state) {
     hubDriver.start(hubName, HUB_PRIORITY, Default::STACK_SIZE);
 
     configureDevices();
+    imager.configure(Units::millisToTicks(CAMERA_EXPOSURE_MS, CAMERA_TICK_HZ));
     regCommands();
     startTasks(state);
 

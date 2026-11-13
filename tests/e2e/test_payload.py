@@ -73,6 +73,17 @@ def test_mirror_surrogate_keeps_the_flight_dictionary(dictionary):
     assert not any(name.startswith(("Payload.i2cBus.", "Payload.spiBus.", "Payload.sensorUart.")) for name in events)
 
 
+def test_stub_variant_of_the_camera_runs(gds):
+    # Components/Imager links the camera vendor's SDK in flight. Here it is built in the
+    # variant it has for unit tests (cmake.stub_variants in payload.yaml): the frame is the
+    # stub's gradient, 64 * 48 bytes with a mean level of 31. The exposure went through
+    # sensor-lib's real unit conversions, not their stubs (20 ms at 48 kHz), and the board
+    # revision comes from the simulation's <board/revision.h> (host.cmake).
+    gds.send_and_assert_command("Payload.imager.CAPTURE", timeout=T)
+    gds.assert_event("Payload.imager.FrameCaptured", [3072, 31, 960, 2], timeout=T)
+    gds.assert_telemetry("Payload.imager.FramesCaptured", timeout=T)
+
+
 def test_command_drives_gpio_output(gds, payload):
     gds.send_and_assert_command("Payload.heater.HEATER_SET", ["ON"], timeout=T)
     assert payload.gpio_get("heaterPin") is True

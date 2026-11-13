@@ -9,6 +9,7 @@ register_fprime_module(
         "${CMAKE_CURRENT_LIST_DIR}/WstsSetup.cpp"
     DEPENDS
         Fw_Logger
+        SensorLib_Units
         Models
         Wsts_Core
 )

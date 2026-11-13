@@ -20,6 +20,9 @@ set(SENSOR_LIB_BOARD "cdh-rev-b" CACHE STRING "Carried over by fprime-wsts from 
 set(FPRIME_INCLUDE_FRAMEWORK_CODE OFF)
 find_package(FPrime REQUIRED PATHS "${CMAKE_CURRENT_LIST_DIR}/../../../../../lib/fprime/cmake")
 
+# From `cmake.include_early` in the manifest: before any framework or library module exists
+include("${CMAKE_CURRENT_LIST_DIR}/../../../host.cmake")
+
 # Modules whose FPP is patched: the copy in this project is built in place of the original.
 # The framework and the libraries add their own modules, so the redirection has to be in
 # place before they are read.
@@ -33,6 +36,13 @@ set(WSTS_REPLACEMENTS
 # read, which is before the flight project's modules: they are held back and added below.
 set(WSTS_DEFERRED_MODULES
     "${CMAKE_CURRENT_LIST_DIR}/../../../config"
+)
+# From `cmake.stub_variants` in the manifest: modules that are read with BUILD_TESTING set, so that
+# they take the variant they have for unit tests (a stub in place of code that needs the target's
+# SDK). Nothing else of a unit-test build comes with it: no unit-test targets, no sanitizers, no
+# coverage flags, and BUILD_UT is not defined.
+set(WSTS_STUB_VARIANT_MODULES
+    "${CMAKE_CURRENT_LIST_DIR}/../../../../mission/Components/Imager"
 )
 if (COMMAND _add_fprime_subdirectory)
     message(FATAL_ERROR "add_fprime_subdirectory() is already overridden: fprime-wsts cannot redirect modules")
@@ -54,6 +64,34 @@ function(add_fprime_subdirectory FP_SOURCE_DIR)
         return()
     endif()
     set_property(GLOBAL APPEND PROPERTY WSTS_ADDED_DIRECTORIES "${WSTS_REQUESTED}")
+    # BUILD_TESTING is a variable of this call: the listed module's CMakeLists.txt sees it, a module
+    # which that one adds gets the build's own value back, and it is gone when the call returns
+    if (DEFINED WSTS_BUILD_TESTING_OUTSIDE)
+        set(BUILD_TESTING "${WSTS_BUILD_TESTING_OUTSIDE}")
+        set(__FPRIME_NO_UT_GEN__ "${WSTS_NO_UT_GEN_OUTSIDE}")
+        set(FPRIME_TESTING_REQUIRED_COMPILE_FLAGS "${WSTS_TESTING_COMPILE_FLAGS_OUTSIDE}")
+        set(FPRIME_TESTING_REQUIRED_LINK_FLAGS "${WSTS_TESTING_LINK_FLAGS_OUTSIDE}")
+        unset(WSTS_BUILD_TESTING_OUTSIDE)
+    endif()
+    foreach (WSTS_MODULE IN LISTS WSTS_STUB_VARIANT_MODULES)
+        get_filename_component(WSTS_MODULE "${WSTS_MODULE}" REALPATH)
+        if (WSTS_MODULE STREQUAL WSTS_REQUESTED)
+            set_property(GLOBAL APPEND PROPERTY WSTS_STUB_VARIANTS_READ "${WSTS_REQUESTED}")
+            if (NOT BUILD_TESTING)
+                message(STATUS "[WSTS] ${WSTS_REQUESTED} is read with BUILD_TESTING set (cmake.stub_variants)")
+                set(WSTS_BUILD_TESTING_OUTSIDE "${BUILD_TESTING}")
+                set(WSTS_NO_UT_GEN_OUTSIDE "${__FPRIME_NO_UT_GEN__}")
+                set(WSTS_TESTING_COMPILE_FLAGS_OUTSIDE "${FPRIME_TESTING_REQUIRED_COMPILE_FLAGS}")
+                set(WSTS_TESTING_LINK_FLAGS_OUTSIDE "${FPRIME_TESTING_REQUIRED_LINK_FLAGS}")
+                set(BUILD_TESTING ON)
+                # register_fprime_ut() returns at once with this set: no unit-test target
+                set(__FPRIME_NO_UT_GEN__ ON)
+                # What F Prime adds to a module's own target when BUILD_TESTING is set (coverage)
+                set(FPRIME_TESTING_REQUIRED_COMPILE_FLAGS "")
+                set(FPRIME_TESTING_REQUIRED_LINK_FLAGS "")
+            endif()
+        endif()
+    endforeach()
     get_filename_component(WSTS_HERE "${CMAKE_CURRENT_SOURCE_DIR}" REALPATH)
     set(WSTS_SOURCE "")
     set(WSTS_INDEX 0)
@@ -93,6 +131,7 @@ fprime_setup_included_code()
 set(WSTS_FLIGHT_PROJECT "${CMAKE_CURRENT_LIST_DIR}/../../../../mission")
 add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/Components/Adc")
 add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/Components/HeaterControl")
+add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/Components/Imager")
 add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/Components/ImuManager")
 add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/Components/Instrument")
 add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/Components/PowerMonitor")
@@ -101,6 +140,29 @@ add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/Components/PowerMonitor")
 # where both replace a file the simulation's is the one built
 set(WSTS_ADDING_DEFERRED ON)
 add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../../config")
+
+# Every module listed under `cmake.stub_variants` has to have been added by now
+get_property(WSTS_STUB_VARIANTS_READ GLOBAL PROPERTY WSTS_STUB_VARIANTS_READ)
+foreach (WSTS_MODULE IN LISTS WSTS_STUB_VARIANT_MODULES)
+    get_filename_component(WSTS_MODULE "${WSTS_MODULE}" REALPATH)
+    if (NOT WSTS_MODULE IN_LIST WSTS_STUB_VARIANTS_READ)
+        message(FATAL_ERROR "[WSTS] cmake.stub_variants in the manifest lists ${WSTS_MODULE}, and nothing in this "
+                            "build adds that directory with add_fprime_subdirectory(): its stub variant is not "
+                            "selected. Remove the entry, or list the directory that is added.")
+    endif()
+endforeach()
+
+# From `cmake.cxx_flags` in the manifest: flags for the C++ sources of one module
+if (TARGET SensorLib_Units)
+    get_target_property(WSTS_MODULE_TYPE SensorLib_Units TYPE)
+    if (WSTS_MODULE_TYPE STREQUAL "INTERFACE_LIBRARY")
+        message(WARNING "[WSTS] cmake.cxx_flags: SensorLib_Units compiles nothing itself; its flags are not used")
+    else()
+        target_compile_options(SensorLib_Units PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include cstring>")
+    endif()
+else()
+    message(FATAL_ERROR "[WSTS] cmake.cxx_flags in the manifest names lib/sensor-lib/SensorLib/Units, and the build has no target SensorLib_Units for it. If the module registers under another name, set its flags with target_compile_options() in a file named under cmake.include.")
+endif()
 
 # Headers of replaced flight drivers resolve to stand-ins (wsts-include/). A driver module that is
 # still part of this build compiles against its own header.

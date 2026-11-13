@@ -10,6 +10,8 @@ add_compile_definitions(WSTS_SIM=1)
 add_compile_definitions(MISSION_VEHICLE_ID=2)
 # Headers that stand in for those of replaced flight drivers: found before the originals
 include_directories(BEFORE "${CMAKE_CURRENT_LIST_DIR}/wsts-include")
+# From `cmake.cxx_flags` in the manifest: for every C++ source of this build
+string(APPEND CMAKE_CXX_FLAGS " -include cstring")
 # From `cmake.cache` in the manifest. Set before F Prime reads the libraries; a value given on the
 # command line (-D) takes precedence.
 set(MISSION_SIM_MODULES "SensorSim/SerialSensorSim;SensorSim/GyroSim;SensorSim/SimTime;SensorSim/Top" CACHE STRING "Set by fprime-wsts from cmake.cache in the manifest")
