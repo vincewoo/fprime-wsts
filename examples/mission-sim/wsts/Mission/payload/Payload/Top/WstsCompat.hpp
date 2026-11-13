@@ -12,6 +12,7 @@
 #include <Wsts/Drv/SimI2c/SimI2c.hpp>
 #include <Wsts/Drv/SimSpi/SimSpi.hpp>
 #include <Wsts/Svc/SimTick/SimTick.hpp>
+#include <WstsAdapted/SensorLib_RegisterInterface/SensorLib_RegisterInterface.hpp>
 
 namespace Svc { using LinuxTimer = ::Wsts::SimTick; }
 namespace Drv { using TcpClient = ::Wsts::SimByteStream; }
@@ -19,6 +20,7 @@ namespace Drv { using LinuxI2cDriver = ::Wsts::SimI2c; }
 namespace Drv { using PosixUartDriver = ::Wsts::SimByteStream; }
 namespace Drv { using LinuxGpioDriver = ::Sim::SimLinuxGpio; }
 namespace Drv { using LinuxSpiDriver = ::Wsts::SimSpi; }
+namespace SensorLib { using RegisterInterface = ::WstsAdapted::SensorLib_RegisterInterface; }
 
 namespace Drv {
 enum SpiFrequency {

@@ -14,6 +14,8 @@ register_fprime_module(
         "${CMAKE_CURRENT_LIST_DIR}/Clock.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/Bridge.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/Models.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/Dma.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/RegisterSurrogate.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/Link.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/Runtime.cpp"
     HEADERS
@@ -23,6 +25,8 @@ register_fprime_module(
         "${CMAKE_CURRENT_LIST_DIR}/Clock.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/Bridge.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/Models.hpp"
+        "${CMAKE_CURRENT_LIST_DIR}/Dma.hpp"
+        "${CMAKE_CURRENT_LIST_DIR}/RegisterSurrogate.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/Link.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/Runtime.hpp"
     DEPENDS

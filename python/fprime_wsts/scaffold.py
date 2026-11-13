@@ -35,6 +35,10 @@ To finish it:
 
        void wstsBind(const char* endpoint, const char* options = "");
 
+   For a register interface component (register read and write ports, an interrupt
+   output) derive from `Wsts::RegisterSurrogate` as well: it has the bus side of every
+   handler (`Wsts/Core/RegisterSurrogate.hpp`; docs/surrogate-guide.md, "A register block").
+
 3. Give the class the public methods flight topology code calls on `{original_cpp}`
    (for example `open(...)`), so that code compiles unchanged.
 4. Add this directory to the project's build and name `wsts-catalog.yaml` under
@@ -53,7 +57,13 @@ def scaffold_cli(args) -> int:
     with tempfile.TemporaryDirectory(prefix="wsts-scaffold-") as scratch:
         work = Path(scratch)
         roots = [settings.framework_path, *settings.library_locations, settings.project_root, TOOLKIT_ROOT / "Wsts"]
-        candidates = fpp.select_candidates(fpp.find_fpp_files(roots), settings.framework_path)
+        # As the generator reads the project: of the configuration files that are overridden
+        # with CONFIGURATION_OVERRIDES only the winner is read
+        found = fpp.find_fpp_files(roots)
+        overrides, _ = fpp.find_config_overrides(
+            [settings.framework_path, *settings.library_locations, TOOLKIT_ROOT / "Wsts", settings.project_root])
+        overrides = [o for o in overrides if o.winner in found and any(r in found for r in o.replaced)]
+        candidates = fpp.select_candidates(found, settings.framework_path, overrides)
         located = fpp.locate_defs(work, candidates)
         source = located.get(("component", args.component))
         if source is None:

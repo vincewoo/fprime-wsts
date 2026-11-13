@@ -18,10 +18,12 @@ the concrete list for that deployment.
 | Area | In simulation | Consequence |
 |---|---|---|
 | Drivers | Replaced at their port interface | Driver internals (register sequences, device files, interrupt handling, DMA) are not exercised |
+| Register blocks (a register interface component replaced) | The device driver is flight code; a model answers its register reads and writes and raises its interrupts | Register semantics are exactly what the model implements, no more. Bus timing, caches, the order of accesses from several cores, and access widths other than 4 and 8 bytes are not reproduced. A read that fails gives flight all ones |
+| DMA | Not modelled by the toolkit. A model may read and write a buffer whose address a driver wrote into a register, once the project supplies the address translation (`Wsts::Dma`) | A DMA engine that moves data by itself needs a model of its own. Cache maintenance calls do nothing useful on a host |
 | Device behaviour | Supplied by models | Only as good as the model. Timing inside a transaction is not modelled |
 | Operating system | Linux/POSIX OSAL instead of the target's | Priorities are advisory; no priority inheritance or preemption guarantees; stack sizes are not enforced the same way |
 | Time | Host wall clock, optionally scaled | Not cycle-exact. A loaded host stretches ticks; the tick source does not burst to catch up |
-| Interrupts | Delivered on ordinary threads | Code that relies on interrupt context (no blocking, masking) is not checked |
+| Interrupts | Delivered on ordinary threads: a register block's on the thread that raises it (the tick thread for a model), one at a time | Code that relies on interrupt context (no blocking, masking) is not checked. Priorities, masking and nesting of the target's interrupts are not reproduced |
 | Word size, byte order | Host's (64-bit little-endian on x86-64) | Code that depends on the target's representation behaves differently |
 | Dictionary | Entries of replaced drivers are missing unless a mirror surrogate is used; WSTS entries are added | Ground procedures that use a replaced driver's telemetry need a mirror surrogate |
 | File system | Host paths | Target-specific paths need to exist or be changed until path remapping is built |
@@ -34,6 +36,9 @@ the concrete list for that deployment.
   test. You write or reuse a device model.
 - Replace the **device manager** when the device protocol is complex and not the subject of
   the test. You write one project surrogate; less flight code runs.
+- Replace the **register interface component** when the device is an FPGA block or an SoC
+  peripheral and its driver is what you want to test. You write a model of the block's
+  registers; the driver, and everything above it, is flight code.
 - A **mirror surrogate** costs the same as a driver surrogate plus keeping its model in
   step with the flight component, and gives a flight-identical dictionary.
 

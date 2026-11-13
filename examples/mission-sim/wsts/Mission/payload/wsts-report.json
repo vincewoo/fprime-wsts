@@ -16,6 +16,30 @@
       "peer": "cdh.hubDriver"
     }
   ],
+  "register_blocks": [
+    {
+      "instance": "Payload.fpgaRegs",
+      "endpoint": "fpgaRegs",
+      "flight_component": "SensorLib.RegisterInterface",
+      "surrogate": "WstsAdapted.SensorLib_RegisterInterface",
+      "written_for_the_component": true,
+      "ports": {
+        "interrupt": "interrupt",
+        "read32In": "read32",
+        "read64In": "read64",
+        "write32In": "write32",
+        "write64In": "write64"
+      },
+      "ports_without_a_role": [],
+      "drivers": [
+        "Payload.fpga"
+      ],
+      "interrupt_to": [
+        "Payload.fpga.interruptIn"
+      ],
+      "model": "fpga"
+    }
+  ],
   "generator": "fprime-wsts",
   "topology": "Payload.Payload",
   "flight_toolchain": "vxworks",
@@ -155,6 +179,29 @@
         ],
         "params": []
       }
+    },
+    {
+      "instance": "Payload.fpgaRegs",
+      "flight_component": "SensorLib.RegisterInterface",
+      "surrogate": "WstsAdapted.SensorLib_RegisterInterface",
+      "seam": "S1 topology",
+      "chosen_by": "manifest",
+      "endpoint": "fpgaRegs",
+      "options": "",
+      "base_id": 537096192,
+      "dictionary_items_removed": {
+        "commands": [
+          "REG_READ",
+          "REG_WRITE"
+        ],
+        "events": [
+          "OffsetOutOfRange",
+          "RegisterValue",
+          "RegisterWritten"
+        ],
+        "channels": [],
+        "params": []
+      }
     }
   ],
   "kept_hardware_instances": [],
@@ -181,6 +228,13 @@
       "address": 0
     },
     {
+      "name": "fpga",
+      "class": "Wsts::RegisterFile",
+      "endpoint": "fpgaRegs",
+      "kind": "register",
+      "address": 0
+    },
+    {
       "name": "tempSensor",
       "class": "Wsts::ScriptedByteStream",
       "endpoint": "sensorUart",
@@ -190,15 +244,18 @@
   ],
   "control": {
     "enabled": true,
-    "setup_base_id": 537096192,
-    "control_base_id": 537100288
+    "setup_base_id": 537100288,
+    "control_base_id": 537104384
   },
   "bridge": "tcp:50101",
   "dictionary": {
     "identical_to_flight": false,
     "flight_ids_unchanged": true,
     "removed": {
-      "commands": [],
+      "commands": [
+        "Payload.fpgaRegs.REG_READ",
+        "Payload.fpgaRegs.REG_WRITE"
+      ],
       "events": [
         "Payload.sensorUart.BufferTooSmall",
         "Payload.sensorUart.ConfigError",
@@ -211,7 +268,10 @@
         "Payload.spiBus.SPI_ConfigMismatch",
         "Payload.spiBus.SPI_OpenError",
         "Payload.spiBus.SPI_PortOpened",
-        "Payload.spiBus.SPI_WriteError"
+        "Payload.spiBus.SPI_WriteError",
+        "Payload.fpgaRegs.OffsetOutOfRange",
+        "Payload.fpgaRegs.RegisterValue",
+        "Payload.fpgaRegs.RegisterWritten"
       ],
       "channels": [
         "Payload.sensorUart.BytesRecv",
@@ -228,9 +288,11 @@
         "Payload.wstsControl.I2C_REG_SET",
         "Payload.wstsControl.INJECT_BYTES",
         "Payload.wstsControl.INJECT_TEXT",
+        "Payload.wstsControl.IRQ_RAISE",
         "Payload.wstsControl.MODEL_SET",
         "Payload.wstsControl.RECORD_START",
         "Payload.wstsControl.RECORD_STOP",
+        "Payload.wstsControl.REG_SET",
         "Payload.wstsControl.SCENARIO_LOAD",
         "Payload.wstsControl.SCENARIO_START",
         "Payload.wstsControl.SCENARIO_STOP",
@@ -283,6 +345,7 @@
   },
   "project_modules": [
     "Components/Adc",
+    "Components/FpgaMonitor",
     "Components/HeaterControl",
     "Components/Imager",
     "Components/ImuManager",
@@ -298,6 +361,8 @@
     ]
   },
   "fidelity_notes": [
+    "Payload.fpgaRegs is a register interface component, replaced by WstsAdapted.SensorLib_RegisterInterface: the flight drivers that read and write registers through it run as in flight, against the model 'fpga' on endpoint 'fpgaRegs'. Register semantics are exactly what the model implements. Bus timing, caches, the order of accesses from several cores and accesses of other widths than 4 and 8 bytes are not reproduced. Interrupts are delivered on the thread that raises them (a model's is the simulation's tick thread), one at a time: the target's interrupt priorities, masking and nesting are not reproduced.",
+    "DMA: a flight driver that allocates memory for hardware and writes its physical address into a register needs that address to mean something on the host. The toolkit cannot supply this: off the target, the flight libraries' virtual-to-physical translation has to go through the allocator's region (host base, physical base, size), and the model has to be given the same translation (Wsts::Dma, registered from 'setup' in the manifest). See docs/vxworks-conversion.md, 'Memory shared with hardware'.",
     "Operating system: flight OSAL implementations are replaced by the Linux/POSIX ones. Task priorities are advisory and scheduling is not real-time, so timing and preemption order differ from the target.",
     "Word size and byte order are those of the host; code that depends on the target's differs here.",
     "Surrogates replace drivers at their port interface: driver internals (register access, interrupt handling, device files) are not exercised.",
@@ -355,6 +420,14 @@
           "Drv/LinuxSpiDriver/LinuxSpiDriver.hpp",
           "Drv/LinuxSpiDriver/LinuxSpiDriverComponentImpl.hpp",
           "Drv/LinuxSpiDriver/LinuxSpiDriverComponentAc.hpp"
+        ]
+      },
+      {
+        "component": "SensorLib.RegisterInterface",
+        "surrogate": "WstsAdapted.SensorLib_RegisterInterface",
+        "headers": [
+          "SensorLib/RegisterInterface/RegisterInterface.hpp",
+          "SensorLib/RegisterInterface/RegisterInterfaceComponentAc.hpp"
         ]
       }
     ]
@@ -445,6 +518,12 @@
         ]
       },
       {
+        "module": "Components/FpgaMonitor",
+        "instances": [
+          "Payload.fpga (Components.FpgaMonitor)"
+        ]
+      },
+      {
         "module": "Components/HeaterControl",
         "instances": [
           "Payload.heater (Components.HeaterControl)"
@@ -481,6 +560,10 @@
         "instances": []
       },
       {
+        "module": "lib/sensor-lib/SensorLib/RegisterInterface",
+        "instances": []
+      },
+      {
         "module": "lib/sensor-lib/SensorLib/SerialSensor",
         "instances": [
           "Payload.sensor (SensorLib.SerialSensor)"
@@ -508,16 +591,41 @@
         "instances": []
       },
       {
+        "module": "../mission-sim/Surrogates/SimRegisterInterface",
+        "instances": []
+      },
+      {
         "module": "../mission-sim/config",
         "instances": []
       }
     ],
     "system_headers": {
+      "fcntl.h": [
+        {
+          "module": "lib/sensor-lib/SensorLib/RegisterInterface",
+          "file": "../../../../mission/lib/sensor-lib/SensorLib/RegisterInterface/RegisterInterface.cpp",
+          "line": 3
+        }
+      ],
       "getopt.h": [
         {
           "module": "Payload",
           "file": "../../../../mission/Payload/Main.cpp",
           "line": 4
+        }
+      ],
+      "sys/mman.h": [
+        {
+          "module": "lib/sensor-lib/SensorLib/RegisterInterface",
+          "file": "../../../../mission/lib/sensor-lib/SensorLib/RegisterInterface/RegisterInterface.cpp",
+          "line": 4
+        }
+      ],
+      "unistd.h": [
+        {
+          "module": "lib/sensor-lib/SensorLib/RegisterInterface",
+          "file": "../../../../mission/lib/sensor-lib/SensorLib/RegisterInterface/RegisterInterface.cpp",
+          "line": 5
         }
       ]
     },
@@ -534,7 +642,8 @@
     "cache": {
       "MISSION_SIM_MODULES": [
         "Models",
-        "Surrogates/SimLinuxGpio"
+        "Surrogates/SimLinuxGpio",
+        "Surrogates/SimRegisterInterface"
       ]
     },
     "sanitizers": [],

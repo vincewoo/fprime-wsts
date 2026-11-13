@@ -105,8 +105,35 @@ C++ expression, so other arguments of the entry point are written into it.
   variable). An overlay that defines its own `add_fprime_subdirectory()` (it does when a
   module is patched, deferred or excluded) skips the repeat; otherwise CMake reports the
   duplicate, and `cmake.exclude_subdirectories` on the child settles it.
-- **Memory-mapped registers and interrupts.** There is no stock surrogate for these
-  interfaces: a driver that uses them is substituted with a project surrogate.
+- **Memory-mapped registers and interrupts.** Drivers that read and write registers
+  through a register interface component are kept, and that component is replaced: name
+  it in the manifest with `Wsts.SimRegister`, and put a model of the register block on
+  its endpoint (`kind: register`). See
+  [A register block](surrogate-guide.md#a-register-block). A driver that maps its
+  registers itself, without such a component, is substituted with a project surrogate.
+- **Memory shared with hardware (DMA).** A driver that allocates a buffer, writes its
+  *physical* address into a register and reads the data through the *virtual* address
+  needs both to mean something on the host. The toolkit cannot supply that, because the
+  translation lives in the flight libraries. Two things usually go wrong there, off the
+  target: the utility that turns a virtual address into a physical one returns one fixed
+  value for every pointer (0 until a setter is called, which only unit tests do), so a
+  check that the address lies inside the window the hardware can reach asserts; and if
+  that check is passed with the setter, every buffer gets the same "physical" address.
+  The allocator's host variant, meanwhile, knows both sides: it takes the region from the
+  heap and records the physical base it was configured with. What the project has to
+  supply, in its flight libraries, is the connection between the two:
+  - off the target, record the region when the host allocator maps it (host base, physical
+    base, size), and translate through it: `physical = physicalBase + (virtual - hostBase)`;
+  - add the inverse, which a device model needs to reach the buffer;
+  - keep the setter as an override, so existing unit tests pass, and leave the target's
+    branch as it is.
+
+  The simulation then hands the same translation to the toolkit at start-up, from `setup`
+  in the manifest, and a model calls `Wsts::Dma::toVirtual(address, size)` on an address
+  it finds in a register
+  ([Memory shared with hardware](surrogate-guide.md#memory-shared-with-hardware)). Until the
+  library is changed, `setup` can call the setter as a stop-gap: set-up then passes, with
+  one address for every buffer.
 - **Third-party build systems inside libraries** behave on the host as they do there, not
   as on the target's build machine (an autocoder script that depends on the shell, for
   example). The toolkit builds them as they are.
@@ -117,7 +144,10 @@ C++ expression, so other arguments of the entry point are written into it.
 - **A project component that drives the rate groups or supplies time from hardware.** If
   it is not platform-restricted it builds on Linux and is kept, but its interrupt never
   arrives. The generator warns; the remedy is a project surrogate
-  ([A project timer](surrogate-guide.md#a-project-timer)).
+  ([A project timer](surrogate-guide.md#a-project-timer)), or, when the interrupt and the
+  time arrive through a register interface component, a register model that is the
+  simulation's tick source ([A time unit](surrogate-guide.md#a-time-unit)): the driver
+  is then kept.
 - **Two substituted instances with the same base name** (a `uart` in each of two
   subtopologies) need an `endpoint:` for one of them
   ([Instance names](reference.md#instance-names)).

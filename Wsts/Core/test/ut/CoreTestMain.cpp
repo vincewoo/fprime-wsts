@@ -1,11 +1,13 @@
 // ======================================================================
 // \title  CoreTestMain.cpp
-// \brief  Unit tests for the WSTS core: JSON, bus, faults, control, scenarios, recording, links
+// \brief  Unit tests for the WSTS core: JSON, bus, faults, control, scenarios, recording, links,
+//         registers
 // ======================================================================
 #include <gtest/gtest.h>
 
 #include <unistd.h>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <fstream>
@@ -17,8 +19,10 @@
 #include <Wsts/Core/Bus.hpp>
 #include <Wsts/Core/Clock.hpp>
 #include <Wsts/Core/Control.hpp>
+#include <Wsts/Core/Dma.hpp>
 #include <Wsts/Core/Link.hpp>
 #include <Wsts/Core/Models.hpp>
+#include <Wsts/Core/RegisterSurrogate.hpp>
 
 namespace {
 
@@ -404,6 +408,578 @@ TEST_F(CoreTest, ReplayedResponsesAreKeptApartByI2cAddress) {
     ASSERT_TRUE(run(R"({"op": "scenario_stop"})"));
     EXPECT_EQ(read(0x40), 0x88);
     std::remove(path.c_str());
+}
+
+
+// ----------------------------------------------------------------------
+// Registers
+// ----------------------------------------------------------------------
+
+TEST(Json, UnsignedSixtyFourBitValues) {
+    JsonObj obj;
+    obj.setHex("offset", 0xFFFFFFFF00000010ull);
+    EXPECT_EQ(obj.dump(), R"({"offset":"0xffffffff00000010"})");
+    JsonObj parsed;
+    std::string error;
+    ASSERT_TRUE(parsed.parse(R"({"offset": "0xffffffff00000010", "small": 16, "neg": -1})", error)) << error;
+    EXPECT_EQ(parsed.unum("offset"), 0xFFFFFFFF00000010ull);
+    EXPECT_EQ(parsed.unum("small"), 16u);
+    EXPECT_EQ(parsed.unum("neg", 7), 7u);
+    EXPECT_EQ(parsed.unum("missing", 3), 3u);
+}
+
+class RegisterTest : public ::testing::Test {
+  protected:
+    void SetUp() override {
+        Control::get().reset();
+        Wsts::Dma::reset();
+        ASSERT_TRUE(block.set("endpoint", "fpga"));
+        Bus::get().attachRegister("fpga", &block);
+        Bus::get().bindRegister("fpga", [this](std::uint32_t number) {
+            std::lock_guard<std::mutex> lock(mutex);
+            interrupts.push_back(number);
+            interruptThread = std::this_thread::get_id();
+        });
+    }
+    void TearDown() override { Control::get().reset(); }
+
+    std::uint32_t read32(std::uint64_t offset, int* status = nullptr) {
+        std::uint64_t value = 0;
+        const int result = Bus::get().registerRead("fpga", offset, 4, value);
+        if (status != nullptr) {
+            *status = result;
+        }
+        return static_cast<std::uint32_t>(value);
+    }
+    int write32(std::uint64_t offset, std::uint32_t value) { return Bus::get().registerWrite("fpga", offset, 4, value); }
+    std::size_t interruptCount() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return interrupts.size();
+    }
+
+    Wsts::RegisterFile block;
+    std::mutex mutex;
+    std::vector<std::uint32_t> interrupts;
+    std::thread::id interruptThread;
+};
+
+TEST_F(RegisterTest, ReadAndWriteThroughTheBus) {
+    ASSERT_TRUE(block.set("reg.0x00", "0xC0DE0001"));
+    ASSERT_TRUE(block.set("reg.0x10", "5"));
+    int status = -1;
+    EXPECT_EQ(read32(0x00, &status), 0xC0DE0001u);
+    EXPECT_EQ(status, 0);
+    EXPECT_EQ(write32(0x10, 0x12345678), 0);
+    EXPECT_EQ(read32(0x10), 0x12345678u);
+    EXPECT_EQ(block.peek(0x10), 0x12345678u);
+
+    // An undefined offset fails, and flight reads all ones
+    EXPECT_EQ(read32(0x40, &status), 0xFFFFFFFFu);
+    EXPECT_EQ(status, Wsts::RegisterStatus::NO_DEVICE);
+    EXPECT_EQ(write32(0x40, 1), Wsts::RegisterStatus::NO_DEVICE);
+    // ... unless the block is plain memory
+    ASSERT_TRUE(block.set("strict", "0"));
+    EXPECT_EQ(write32(0x40, 7), 0);
+    EXPECT_EQ(read32(0x40, &status), 7u);
+    EXPECT_EQ(status, 0);
+
+    const Wsts::BusCounters counters = Bus::get().counters();
+    EXPECT_EQ(counters.transactions, 7u);
+    EXPECT_EQ(counters.bytes, 28u);
+    EXPECT_EQ(counters.errors, 2u);
+}
+
+TEST_F(RegisterTest, RegisterSemantics) {
+    // Write mask: only the low byte is writable
+    block.define(0x04, 0xAB00, 0x000000FF);
+    EXPECT_EQ(write32(0x04, 0xFFFFFF12), 0);
+    EXPECT_EQ(read32(0x04), 0xAB12u);
+    // Write 1 to clear
+    block.define(0x08, 0x0F, 0xFFFFFFFF, Wsts::RegisterFile::WRITE_1_TO_CLEAR);
+    EXPECT_EQ(write32(0x08, 0x05), 0);
+    EXPECT_EQ(read32(0x08), 0x0Au);
+    // Read clears
+    ASSERT_TRUE(block.set("reg.0x0C", "0x30"));
+    ASSERT_TRUE(block.set("rc.0x0C", "1"));
+    EXPECT_EQ(read32(0x0C), 0x30u);
+    EXPECT_EQ(read32(0x0C), 0u);
+    // Reset values
+    ASSERT_TRUE(block.set("reset", "1"));
+    EXPECT_EQ(block.peek(0x04), 0xAB00u);
+    EXPECT_EQ(block.peek(0x08), 0x0Fu);
+    EXPECT_EQ(block.peek(0x0C), 0x30u);
+    // Hooks run after the access, and may use the model
+    std::vector<std::pair<std::uint64_t, std::uint32_t>> seen;
+    block.onWrite(0x04, [&](std::uint64_t offset, std::uint32_t value) {
+        seen.emplace_back(offset, value);
+        block.setBits(0x08, 0x100);
+    });
+    block.onRead(0x08, [&](std::uint64_t offset, std::uint32_t value) { seen.emplace_back(offset, value); });
+    EXPECT_EQ(write32(0x04, 0x34), 0);
+    EXPECT_EQ(read32(0x08), 0x10Fu);
+    ASSERT_EQ(seen.size(), 2u);
+    EXPECT_EQ(seen[0], (std::pair<std::uint64_t, std::uint32_t>(0x04, 0xAB34)));
+    EXPECT_EQ(seen[1], (std::pair<std::uint64_t, std::uint32_t>(0x08, 0x10F)));
+    // Bad parameters
+    EXPECT_FALSE(block.set("reg.0x02", "1")) << "offsets are multiples of 4";
+    EXPECT_FALSE(block.set("reg.0x10", "0x100000000"));
+    EXPECT_FALSE(block.set("bogus.0x10", "1"));
+    EXPECT_FALSE(block.set("reg.0x10", "x"));
+}
+
+TEST_F(RegisterTest, SixtyFourBitAccessIsTwoRegisters) {
+    block.define(0x20, 0);
+    block.define(0x24, 0);
+    EXPECT_EQ(Bus::get().registerWrite("fpga", 0x20, 8, 0x1122334455667788ull), 0);
+    EXPECT_EQ(block.peek(0x20), 0x55667788u);
+    EXPECT_EQ(block.peek(0x24), 0x11223344u);
+    std::uint64_t value = 0;
+    EXPECT_EQ(Bus::get().registerRead("fpga", 0x20, 8, value), 0);
+    EXPECT_EQ(value, 0x1122334455667788ull);
+    // The high half is not defined here: the access fails as a whole
+    block.define(0x30, 1);
+    EXPECT_EQ(Bus::get().registerRead("fpga", 0x30, 8, value), Wsts::RegisterStatus::NO_DEVICE);
+    EXPECT_EQ(value, ~0ull);
+    // Only 4 and 8 bytes exist
+    EXPECT_EQ(Bus::get().registerRead("fpga", 0x20, 2, value), Wsts::RegisterStatus::WIDTH_ERR);
+    EXPECT_EQ(Bus::get().registerWrite("fpga", 0x20, 1, 0), Wsts::RegisterStatus::WIDTH_ERR);
+    EXPECT_EQ(block.peek(0x20), 0x55667788u);
+}
+
+//! A device with 32-bit accesses only
+class NarrowBlock : public Wsts::RegisterDevice {
+  public:
+    int read(std::uint64_t, unsigned width, std::uint64_t& value) override {
+        value = 0x77;
+        return (width == 4) ? 0 : static_cast<int>(Wsts::RegisterStatus::WIDTH_ERR);
+    }
+    int write(std::uint64_t, unsigned width, std::uint64_t) override {
+        return (width == 4) ? 0 : static_cast<int>(Wsts::RegisterStatus::WIDTH_ERR);
+    }
+};
+
+TEST_F(RegisterTest, AttachingTwiceReplacesAndAnUnattachedEndpointReadsAllOnes) {
+    ASSERT_TRUE(block.set("reg.0", "1"));
+    NarrowBlock second;
+    EXPECT_EQ(Bus::get().attachRegister("fpga", &second), &block);
+    EXPECT_EQ(read32(0), 0x77u) << "one block per endpoint: the last one attached answers";
+    // The second block leaves and gives the endpoint back; that only works while it is the one there
+    Bus::get().replaceRegister("fpga", &second, &block);
+    EXPECT_EQ(read32(0), 1u);
+    Bus::get().replaceRegister("fpga", &second, nullptr);
+    EXPECT_EQ(read32(0), 1u);
+    EXPECT_EQ(Bus::get().attachRegister("fpga", &second), &block);
+    std::uint64_t wide = 0;
+    EXPECT_EQ(Bus::get().registerRead("fpga", 0, 8, wide), Wsts::RegisterStatus::WIDTH_ERR);
+    EXPECT_EQ(wide, ~0ull);
+    EXPECT_FALSE(Bus::get().registerPoke("fpga", 0, 1)) << "this device has no poke";
+
+    std::uint64_t value = 0;
+    EXPECT_EQ(Bus::get().registerRead("nothing", 0x10, 4, value), Wsts::RegisterStatus::NO_DEVICE);
+    EXPECT_EQ(value, 0xFFFFFFFFull);
+    EXPECT_EQ(Bus::get().registerWrite("nothing", 0x10, 4, 1), Wsts::RegisterStatus::NO_DEVICE);
+    Bus::get().detach("fpga");
+    EXPECT_EQ(read32(0), 0xFFFFFFFFu);
+    // An interrupt nobody is bound to is recorded and goes nowhere
+    Bus::get().registerInterrupt("nothing", 1);
+    EXPECT_EQ(Bus::get().counters().errors, 4u);
+    EXPECT_EQ(Bus::get().counters().transactions, 8u);
+}
+
+TEST_F(RegisterTest, FaultsOnReadsAndWrites) {
+    ASSERT_TRUE(block.set("reg.0x10", "0x000000F0"));
+    int status = 0;
+
+    // ERROR: status to the surrogate, the register is not reached, flight reads all ones
+    ASSERT_TRUE(run(R"({"op": "fault_set", "endpoint": "fpga", "kind": "error", "arg": 9, "count": 2})"));
+    EXPECT_EQ(read32(0x10, &status), 0xFFFFFFFFu);
+    EXPECT_EQ(status, 9);
+    EXPECT_EQ(write32(0x10, 1), 9);
+    EXPECT_EQ(block.peek(0x10), 0xF0u);
+    EXPECT_EQ(read32(0x10, &status), 0xF0u) << "the fault was bounded to two accesses";
+
+    // DROP: a read fails; a write is lost and flight cannot tell
+    ASSERT_TRUE(run(R"({"op": "fault_set", "endpoint": "fpga", "kind": "drop"})"));
+    EXPECT_EQ(read32(0x10, &status), 0xFFFFFFFFu);
+    EXPECT_EQ(status, Wsts::RegisterStatus::READ_ERR);
+    EXPECT_EQ(write32(0x10, 0x55), 0);
+    EXPECT_EQ(block.peek(0x10), 0xF0u);
+    ASSERT_TRUE(run(R"({"op": "fault_clear", "endpoint": "fpga"})"));
+
+    // STUCK: reads return arg, writes are ignored
+    ASSERT_TRUE(run(R"({"op": "fault_set", "endpoint": "fpga", "kind": "stuck", "arg": "0xDEADBEEF"})"));
+    EXPECT_EQ(read32(0x10, &status), 0xDEADBEEFu);
+    EXPECT_EQ(status, 0);
+    EXPECT_EQ(write32(0x10, 0x55), 0);
+    EXPECT_EQ(block.peek(0x10), 0xF0u);
+    ASSERT_TRUE(run(R"({"op": "fault_clear", "endpoint": "fpga"})"));
+
+    // CORRUPT: all 32 bits of arg, in the direction of the fault
+    ASSERT_TRUE(run(R"({"op": "fault_set", "endpoint": "fpga", "kind": "corrupt", "arg": "0x80000001", "dir": "to_flight"})"));
+    EXPECT_EQ(read32(0x10), 0x800000F1u);
+    EXPECT_EQ(write32(0x10, 0x0F), 0);
+    EXPECT_EQ(block.peek(0x10), 0x0Fu) << "a to_flight fault leaves writes alone";
+    ASSERT_TRUE(run(R"({"op": "fault_clear"})"));
+    ASSERT_TRUE(run(R"({"op": "fault_set", "endpoint": "fpga", "kind": "corrupt", "arg": "0xFF00", "dir": "to_device"})"));
+    EXPECT_EQ(write32(0x10, 0x0F), 0);
+    EXPECT_EQ(block.peek(0x10), 0xFF0Fu);
+    EXPECT_EQ(read32(0x10), 0xFF0Fu) << "a to_device fault leaves reads alone";
+    ASSERT_TRUE(run(R"({"op": "fault_clear"})"));
+
+    // DELAY holds the access
+    ASSERT_TRUE(run(R"({"op": "fault_set", "endpoint": "fpga", "kind": "delay", "arg": 40, "count": 1})"));
+    const auto before = std::chrono::steady_clock::now();
+    EXPECT_EQ(read32(0x10), 0xFF0Fu);
+    EXPECT_GE(std::chrono::steady_clock::now() - before, std::chrono::milliseconds(40));
+
+    const Wsts::BusCounters counters = Bus::get().counters();
+    EXPECT_EQ(counters.errors, 3u) << "the two ERROR accesses and the dropped read";
+    EXPECT_EQ(counters.faultHits, 9u);
+}
+
+TEST_F(RegisterTest, InterruptReachesTheHandlerOnTheThreadThatRaisedIt) {
+    ASSERT_TRUE(block.set("irq.number", "3"));
+    ASSERT_TRUE(block.set("irq.period", "2"));
+    ASSERT_TRUE(block.set("irq.status", "0x08"));
+    ASSERT_TRUE(block.set("irq.bits", "0x4"));
+    ASSERT_TRUE(block.set("w1c.0x08", "1"));
+    Control::get().addModel("fpga", &block);
+
+    std::thread::id tickThread;
+    std::thread ticker([&]() {
+        tickThread = std::this_thread::get_id();
+        for (int i = 0; i < 4; i++) {
+            Control::get().onTick();
+        }
+    });
+    ticker.join();
+    ASSERT_EQ(interruptCount(), 2u) << "every second tick";
+    EXPECT_EQ(interrupts[0], 3u);
+    EXPECT_EQ(interruptThread, tickThread);
+    EXPECT_NE(interruptThread, std::this_thread::get_id()) << "not the thread that reads the registers";
+    // What a flight handler does next, on its own thread: read the status and clear it
+    EXPECT_EQ(read32(0x08), 0x4u);
+    EXPECT_EQ(write32(0x08, 0x4), 0);
+    EXPECT_EQ(read32(0x08), 0u);
+
+    // The action, as a bridge client, a scenario or the IRQ_RAISE command would send it
+    ASSERT_TRUE(run(R"({"op": "irq_raise", "endpoint": "fpga", "number": 7})"));
+    ASSERT_EQ(interruptCount(), 3u);
+    EXPECT_EQ(interrupts[2], 7u);
+    std::string error;
+    EXPECT_FALSE(run(R"({"op": "irq_raise", "endpoint": "nowhere", "number": 7})", &error));
+    EXPECT_NE(error.find("unknown endpoint"), std::string::npos);
+}
+
+TEST_F(RegisterTest, InterruptFaultsHaveATargetOfTheirOwn) {
+    ASSERT_TRUE(block.set("reg.0x10", "1"));
+    // Faults on the endpoint act on register traffic, not on interrupts
+    ASSERT_TRUE(run(R"({"op": "fault_set", "endpoint": "fpga", "kind": "drop"})"));
+    block.raise(1);
+    EXPECT_EQ(interruptCount(), 1u);
+    ASSERT_TRUE(run(R"({"op": "fault_clear"})"));
+
+    // A lost interrupt, once
+    ASSERT_TRUE(run(R"({"op": "fault_set", "endpoint": "fpga:irq", "kind": "drop", "count": 1})"));
+    block.raise(2);
+    EXPECT_EQ(interruptCount(), 1u);
+    EXPECT_EQ(read32(0x10), 1u) << "reads are not affected";
+    block.raise(2);
+    EXPECT_EQ(interruptCount(), 2u);
+
+    // A duplicated one
+    ASSERT_TRUE(run(R"({"op": "fault_set", "endpoint": "fpga:irq", "kind": "duplicate", "count": 1})"));
+    block.raise(5);
+    ASSERT_EQ(interruptCount(), 4u);
+    EXPECT_EQ(interrupts[2], 5u);
+    EXPECT_EQ(interrupts[3], 5u);
+
+    std::string error;
+    EXPECT_FALSE(run(R"({"op": "fault_set", "endpoint": "nowhere:irq", "kind": "drop"})", &error));
+    EXPECT_NE(error.find("unknown endpoint"), std::string::npos);
+}
+
+TEST_F(RegisterTest, RegSetActionPokesTheModel) {
+    block.define(0x10, 0, 0x0000000F);
+    ASSERT_TRUE(run(R"({"op": "reg_set", "endpoint": "fpga", "offset": "0x10", "value": "0xCAFE"})"));
+    EXPECT_EQ(read32(0x10), 0xCAFEu) << "a poke is not subject to the write mask";
+    ASSERT_TRUE(run(R"({"op": "reg_set", "endpoint": "fpga", "offset": 20, "value": 3})"));
+    EXPECT_EQ(block.peek(20), 3u);
+    std::string error;
+    EXPECT_FALSE(run(R"({"op": "reg_set", "endpoint": "uart", "offset": 0, "value": 1})", &error));
+    EXPECT_NE(error.find("no register block"), std::string::npos);
+    EXPECT_FALSE(run(R"({"op": "reg_set", "endpoint": "fpga", "offset": 2, "value": 1})", &error));
+    EXPECT_FALSE(run(R"({"op": "reg_set", "endpoint": "fpga", "value": 1})", &error));
+    EXPECT_NE(error.find("offset"), std::string::npos);
+}
+
+TEST_F(RegisterTest, RecordingHoldsRegisterTrafficAndReplaysIt) {
+    const std::string path = tempFile("registers.jsonl");
+    ASSERT_TRUE(block.set("reg.0x10", "0x11"));
+    ASSERT_TRUE(block.set("reg.0x14", "0x22"));
+    ASSERT_TRUE(run(R"({"op": "record_start", "path": ")" + path + R"("})"));
+    Control::get().onTick();
+    EXPECT_EQ(read32(0x10), 0x11u);
+    EXPECT_EQ(read32(0x10), 0x11u);
+    EXPECT_EQ(read32(0x14), 0x22u);
+    EXPECT_EQ(write32(0x14, 0x33), 0);
+    Control::get().onTick();
+    block.raise(4);
+    Control::get().onTick();
+    ASSERT_TRUE(run(R"({"op": "irq_raise", "endpoint": "fpga", "number": 9})"));
+    ASSERT_TRUE(run(R"({"op": "record_stop"})"));
+
+    // The lines, as the recorder writes them
+    std::ifstream file(path);
+    std::vector<JsonObj> lines;
+    std::string line;
+    while (std::getline(file, line)) {
+        JsonObj obj;
+        std::string error;
+        ASSERT_TRUE(obj.parse(line, error)) << line;
+        lines.push_back(obj);
+    }
+    ASSERT_EQ(lines.size(), 7u);
+    EXPECT_EQ(lines[0].dump(),
+              R"({"endpoint":"fpga","offset":"0x10","read":"11000000","rec":"reg_rd","src":"flight","status":0,"tick":1,"width":4})");
+    EXPECT_EQ(lines[3].dump(),
+              R"({"endpoint":"fpga","offset":"0x14","rec":"reg_wr","src":"flight","status":0,"tick":1,"width":4,"write":"33000000"})");
+    EXPECT_EQ(lines[4].dump(), R"({"endpoint":"fpga","number":4,"rec":"reg_irq","src":"model","tick":2})");
+    EXPECT_EQ(lines[5].str("rec"), "reg_irq");
+    EXPECT_EQ(lines[5].str("src"), "inject");
+    EXPECT_EQ(lines[6].str("op"), "irq_raise");
+
+    // Stimulus replay: the injected interrupt happens again, the model's own does not
+    interrupts.clear();
+    ASSERT_TRUE(run(R"({"op": "scenario_load", "path": ")" + path + R"(", "mode": "stimulus"})"));
+    EXPECT_EQ(Control::get().status().scenarioSteps, 1u);
+    ASSERT_TRUE(run(R"({"op": "scenario_start"})"));
+    for (int i = 0; i < 3; i++) {
+        Control::get().onTick();
+    }
+    ASSERT_EQ(interruptCount(), 1u);
+    EXPECT_EQ(interrupts[0], 9u);
+
+    // Response replay: recorded reads per offset, whatever the order; the model is bypassed
+    interrupts.clear();
+    ASSERT_TRUE(block.set("reg.0x10", "0x99"));
+    ASSERT_TRUE(block.set("reg.0x14", "0x88"));
+    ASSERT_TRUE(run(R"({"op": "scenario_load", "path": ")" + path + R"(", "mode": "responses"})"));
+    ASSERT_TRUE(run(R"({"op": "scenario_start"})"));
+    int status = 0;
+    EXPECT_EQ(read32(0x14, &status), 0x22u);
+    EXPECT_EQ(read32(0x10), 0x11u);
+    EXPECT_EQ(write32(0x14, 0x44), 0);
+    EXPECT_EQ(block.peek(0x14), 0x88u) << "writes do not reach the model during a replay";
+    block.raise(1);
+    EXPECT_EQ(interruptCount(), 0u) << "the model's interrupts are replaced by the recording";
+    EXPECT_EQ(read32(0x10), 0x11u);
+    // The recording has two reads of 0x10 and one of 0x14: after that, reads fail
+    EXPECT_EQ(read32(0x10, &status), 0xFFFFFFFFu);
+    EXPECT_EQ(status, Wsts::RegisterStatus::OTHER_ERR);
+    EXPECT_EQ(read32(0x14, &status), 0xFFFFFFFFu);
+    EXPECT_EQ(status, Wsts::RegisterStatus::OTHER_ERR);
+    for (int i = 0; i < 3; i++) {
+        Control::get().onTick();
+    }
+    ASSERT_EQ(interruptCount(), 2u) << "the model's interrupt from the recording, and the injected one";
+    EXPECT_EQ(interrupts[0], 4u);
+    EXPECT_EQ(interrupts[1], 9u);
+    EXPECT_FALSE(Bus::get().replay()) << "the scenario has completed";
+    EXPECT_EQ(read32(0x10), 0x99u);
+    std::remove(path.c_str());
+}
+
+TEST_F(RegisterTest, SurrogateHelperForwardsAndSerialisesInterrupts) {
+    block.define(0x10, 0x10);
+    block.define(0x14, 0);
+    std::atomic<int> inside{0};
+    std::atomic<int> overlaps{0};
+    std::atomic<int> delivered{0};
+    {
+        Wsts::RegisterSurrogate surrogate;
+        surrogate.bindRegister("fpga", "", [&](std::uint32_t) {
+            if (inside.fetch_add(1) != 0) {
+                overlaps++;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            inside--;
+            delivered++;
+        });
+        EXPECT_EQ(surrogate.registerRead32(0x10), 0x10u);
+        surrogate.registerWrite64(0x10, 0x0000000200000001ull);
+        EXPECT_EQ(surrogate.registerRead64(0x10), 0x0000000200000001ull);
+        EXPECT_EQ(surrogate.registerRead32(0x80), 0xFFFFFFFFu) << "a failed read is all ones";
+        std::uint64_t value = 0;
+        EXPECT_EQ(surrogate.registerRead(0x80, 4, value), Wsts::RegisterStatus::NO_DEVICE);
+        EXPECT_EQ(surrogate.registerFailures(), 2u);
+
+        // Two sources raise at once: the flight handler is entered one at a time
+        std::thread a([&]() { for (int i = 0; i < 10; i++) { block.raise(1); } });
+        std::thread b([&]() { for (int i = 0; i < 10; i++) { Bus::get().registerInterrupt("fpga", 2, "inject"); } });
+        a.join();
+        b.join();
+        EXPECT_EQ(delivered.load(), 20);
+        EXPECT_EQ(overlaps.load(), 0);
+        EXPECT_EQ(surrogate.registerInterrupts(), 20u);
+    }
+    // The surrogate is gone: an interrupt is not delivered into it
+    block.raise(1);
+    EXPECT_EQ(delivered.load(), 20);
+
+    Wsts::RegisterSurrogate quiet;
+    quiet.bindRegister("fpga", "irq=off", [&](std::uint32_t) { delivered++; });
+    block.raise(1);
+    EXPECT_EQ(delivered.load(), 20);
+}
+
+TEST(Dma, RegionsTranslateBothWays) {
+    Wsts::Dma::reset();
+    std::vector<std::uint8_t> receive(256), transmit(64);
+    ASSERT_TRUE(Wsts::Dma::addRegion(receive.data(), 0x80000000ull, receive.size()));
+    ASSERT_TRUE(Wsts::Dma::addRegion(transmit.data(), 0x80001000ull, transmit.size()));
+    EXPECT_FALSE(Wsts::Dma::addRegion(receive.data() + 8, 0x90000000ull, 16)) << "overlaps in host memory";
+    EXPECT_FALSE(Wsts::Dma::addRegion(&receive, 0x800000F0ull, 32)) << "overlaps in physical memory";
+
+    std::uint64_t physical = 0;
+    ASSERT_TRUE(Wsts::Dma::toPhysical(receive.data() + 16, physical));
+    EXPECT_EQ(physical, 0x80000010ull);
+    ASSERT_TRUE(Wsts::Dma::toPhysical(transmit.data(), physical));
+    EXPECT_EQ(physical, 0x80001000ull) << "two buffers have two addresses";
+    EXPECT_FALSE(Wsts::Dma::toPhysical(&physical, physical));
+
+    EXPECT_EQ(Wsts::Dma::toVirtual(0x80000010ull, 8), receive.data() + 16);
+    EXPECT_EQ(Wsts::Dma::toVirtual(0x800000F8ull, 8), receive.data() + 248);
+    EXPECT_EQ(Wsts::Dma::toVirtual(0x800000F8ull, 9), nullptr) << "runs past the end of the region";
+    EXPECT_EQ(Wsts::Dma::toVirtual(0x70000000ull), nullptr);
+    EXPECT_EQ(Wsts::Dma::toVirtual(0), nullptr);
+
+    // A project's own functions take over
+    Wsts::Dma::setTranslator(
+        [](const void*, std::uint64_t& out) { out = 0x1234; return true; },
+        [](std::uint64_t address, std::size_t) -> void* { return reinterpret_cast<void*>(address + 1); });
+    ASSERT_TRUE(Wsts::Dma::toPhysical(nullptr, physical));
+    EXPECT_EQ(physical, 0x1234u);
+    EXPECT_EQ(Wsts::Dma::toVirtual(0x10), reinterpret_cast<void*>(0x11));
+    Wsts::Dma::setTranslator(nullptr, nullptr);
+    Wsts::Dma::removeRegion(receive.data());
+    EXPECT_EQ(Wsts::Dma::toVirtual(0x80000010ull, 8), nullptr);
+    Wsts::Dma::reset();
+}
+
+// The model of docs/surrogate-guide.md, "A register block": a time unit that is both the
+// source of the flight cycles (through its interrupt) and the source of time. The flight
+// driver on top of it is kept as it is.
+class TimeUnitModel : public Wsts::RegisterFile {
+  public:
+    enum : std::uint64_t { REVISION = 0x00, IRQ_STATUS = 0x08, SECONDS = 0x10, SUBSECONDS = 0x14 };
+    enum : std::uint32_t { IRQ_CYCLE = 0x1, IRQ_PPS = 0x2, IRQ_NUMBER = 0 };
+
+    explicit TimeUnitModel(std::uint64_t periodNs) : m_periodNs(periodNs) {
+        this->define(REVISION, 0x00010002, 0);                                // read only
+        this->define(IRQ_STATUS, 0, 0xFFFFFFFF, WRITE_1_TO_CLEAR);
+        this->define(SECONDS, 0, 0);
+        this->define(SUBSECONDS, 0, 0);
+        // This model is the simulation's tick source: no internal ticker is started
+        Control::get().registerTickSource();
+        Control::get().setTickPeriod(periodNs);
+    }
+    ~TimeUnitModel() { this->stop(); }
+
+    //! One flight cycle: simulation time first, then the registers, then the interrupt
+    void cycle() {
+        Control& control = Control::get();
+        control.onTick();
+        const std::uint64_t now = control.tick() * m_periodNs;
+        this->poke(SECONDS, now / 1000000000ull);
+        this->poke(SUBSECONDS, now % 1000000000ull);
+        const bool pps = (now / 1000000000ull) != ((now - m_periodNs) / 1000000000ull);
+        this->setBits(IRQ_STATUS, IRQ_CYCLE | (pps ? static_cast<std::uint32_t>(IRQ_PPS) : 0u));
+        this->raise(IRQ_NUMBER);
+    }
+
+    void start() {
+        m_quit.store(false);
+        m_thread = std::thread([this]() {
+            Control& control = Control::get();
+            auto next = std::chrono::steady_clock::now();
+            while (!m_quit.load()) {
+                const double rate = std::max(0.001, control.rate());
+                next += std::chrono::nanoseconds(static_cast<std::int64_t>(static_cast<double>(m_periodNs) / rate));
+                const auto now = std::chrono::steady_clock::now();
+                if (next < now) {
+                    next = now;  // fell behind: do not burst to catch up
+                }
+                std::this_thread::sleep_until(next);
+                if (control.paused()) {
+                    control.onIdle();
+                } else if (!m_quit.load()) {
+                    this->cycle();
+                }
+            }
+        });
+    }
+    void stop() {
+        m_quit.store(true);
+        if (m_thread.joinable()) {
+            m_thread.join();
+        }
+    }
+
+  private:
+    std::uint64_t m_periodNs;
+    std::atomic<bool> m_quit{false};
+    std::thread m_thread;
+};
+
+TEST(RegisterTimeUnit, InterruptCyclesFlightAndRegistersFollowSimulatedTime) {
+    Control::get().reset();
+    TimeUnitModel unit(250000000);  // 4 Hz
+    ASSERT_TRUE(unit.set("endpoint", "timeUnit"));
+    Bus::get().attachRegister("timeUnit", &unit);
+    EXPECT_TRUE(Control::get().hasTickSource());
+    EXPECT_EQ(Control::get().tickPeriodNs(), 250000000u);
+
+    // The flight driver's side: the interrupt handler only notes the interrupt; its own
+    // thread then reads the status register, clears it, and reads the time
+    Wsts::RegisterSurrogate regif;
+    std::atomic<int> pending{0};
+    regif.bindRegister("timeUnit", "", [&](std::uint32_t) { pending++; });
+    EXPECT_EQ(regif.registerRead32(TimeUnitModel::REVISION), 0x00010002u);
+
+    int cycles = 0;
+    int pps = 0;
+    for (int i = 0; i < 5; i++) {
+        unit.cycle();
+        ASSERT_EQ(pending.exchange(0), 1);
+        const std::uint32_t status = regif.registerRead32(TimeUnitModel::IRQ_STATUS);
+        regif.registerWrite32(TimeUnitModel::IRQ_STATUS, status);
+        cycles += (status & TimeUnitModel::IRQ_CYCLE) ? 1 : 0;
+        pps += (status & TimeUnitModel::IRQ_PPS) ? 1 : 0;
+    }
+    EXPECT_EQ(cycles, 5);
+    EXPECT_EQ(pps, 1) << "one second boundary in five cycles of 250 ms";
+    EXPECT_EQ(Control::get().tick(), 5u);
+    EXPECT_EQ(regif.registerRead32(TimeUnitModel::SECONDS), 1u);
+    EXPECT_EQ(regif.registerRead32(TimeUnitModel::SUBSECONDS), 250000000u);
+    EXPECT_EQ(regif.registerRead32(TimeUnitModel::IRQ_STATUS), 0u);
+    regif.registerWrite32(TimeUnitModel::SECONDS, 99);
+    EXPECT_EQ(regif.registerRead32(TimeUnitModel::SECONDS), 1u) << "read only";
+
+    // On its own thread, pause stops the interrupts and so the flight cycles
+    ASSERT_TRUE(run(R"({"op": "set_rate", "rate": 50})"));
+    unit.start();
+    ASSERT_TRUE(eventually([&]() { return pending.load() >= 3; }));
+    ASSERT_TRUE(run(R"({"op": "pause"})"));
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    const int held = pending.load();
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_EQ(pending.load(), held);
+    ASSERT_TRUE(run(R"({"op": "resume"})"));
+    ASSERT_TRUE(eventually([&]() { return pending.load() > held; }));
+    unit.stop();
+    regif.unbindRegister();
+    Control::get().reset();
 }
 
 }  // namespace

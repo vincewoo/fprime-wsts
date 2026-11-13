@@ -209,6 +209,26 @@ void SimControl::I2C_REG_SET_cmdHandler(FwOpcodeType opCode,
     this->run(opCode, cmdSeq, action);
 }
 
+void SimControl::REG_SET_cmdHandler(FwOpcodeType opCode,
+                                    U32 cmdSeq,
+                                    const Fw::CmdStringArg& endpoint,
+                                    U64 offset,
+                                    U64 value) {
+    JsonObj action;
+    action.set("op", "reg_set").set("endpoint", endpoint.toChar());
+    action.setHex("offset", offset).setHex("value", value);
+    this->run(opCode, cmdSeq, action);
+}
+
+void SimControl::IRQ_RAISE_cmdHandler(FwOpcodeType opCode,
+                                      U32 cmdSeq,
+                                      const Fw::CmdStringArg& endpoint,
+                                      U32 number) {
+    JsonObj action;
+    action.set("op", "irq_raise").set("endpoint", endpoint.toChar()).setNum("number", number);
+    this->run(opCode, cmdSeq, action);
+}
+
 void SimControl::MODEL_SET_cmdHandler(FwOpcodeType opCode,
                                       U32 cmdSeq,
                                       const Fw::CmdStringArg& model,

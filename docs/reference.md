@@ -61,9 +61,14 @@ models:                          # in-process C++ device models
     class: Wsts::RegisterMapI2c
     header: Wsts/Core/Models.hpp  # default
     endpoint: i2cBus
-    kind: i2c                    # bytestream | i2c | spi | gpio | none
+    kind: i2c                    # bytestream | i2c | spi | gpio | register | none
     address: 0x68                # i2c only
     params: {"0x75": "0x68"}     # each becomes model.set(key, value) at start-up
+  - name: fpga                   # a block of memory-mapped registers (see "Register blocks")
+    class: Wsts::RegisterFile
+    endpoint: fpgaRegs           # the endpoint of a substituted register interface instance
+    kind: register               # one block per endpoint; offsets and widths are the model's
+    params: {"reg.0x00": "0xF00D0001", "irq.period": "20"}
 
 simulators:                      # F´ instances the simulation adds (see "Simulator components")
   topologies: [SensorSim.Simulator]      # subtopologies, by qualified name
@@ -97,6 +102,10 @@ main:
     extern "C" int start(const char* hostname, int port);
   start: start(hostname, port)   # hostname and port come from -a and -p
   stop: stop()
+setup:                           # C++ run by the generated set-up once the surrogates are bound and the
+  headers: [Proj/Dma/Dma.hpp]    # models attached, before the runtime starts. Or just `setup: |` with the text
+  code: |
+    Wsts::Dma::addRegion(Proj::Dma::hostBase(), Proj::Dma::physicalBase(), Proj::Dma::size());
 cmake:
   extra_subdirectories: [Lib/Math]   # modules with no FPP model that components depend on
   exclude_subdirectories: [...]      # modules to leave out, wherever they are added (project, library, framework)
@@ -156,6 +165,108 @@ There are no manifest keys for configuration overrides either: files replaced wi
 applies them. If the analysis picks the wrong file (two configuration modules of one
 project overriding the same file, for instance), list the unwanted one under
 `fpp_exclude`.
+
+### Register blocks
+
+A **register interface component** is what flight device drivers read and write
+memory-mapped registers through, and what delivers the hardware's interrupts to them. It
+is a component of the project or of one of its libraries, so no catalog lists it: the
+manifest names it, and puts a model of the register block on its endpoint.
+
+```yaml
+substitute:
+  - component: Board.RegisterInterface   # every instance; or `instance: fpgaRegs` for one
+    with: Wsts.SimRegister
+models:
+  - {name: fpga, class: Wsts::RegisterFile, endpoint: fpgaRegs, kind: register,
+     params: {"reg.0x00": "0xF00D0001", "irq.period": "20", "irq.status": "0x04"}}
+```
+
+Each instance is one endpoint, named after the instance's base name (`endpoint:` gives
+another name, and is needed when two substituted instances share a base name). An
+endpoint has one register block. Offsets and widths are not in the manifest: they are the
+model's.
+
+**A surrogate for register interface components.** `Wsts.SimRegister` has five ports:
+`read32In`, `write32In`, `read64In`, `write64In` (input) and `interrupt` (output), with
+port types of the toolkit. A flight component has port types of its own, and FPP connects
+a port only to one of the same type. So unless the flight component's connected ports
+already are those of `Wsts.SimRegister`, the generator writes the surrogate again for it:
+a component `WstsAdapted.<Module>_<Component>` in the overlay
+(`WstsAdapted/<Module>_<Component>/`), with the flight component's port names and port
+types. No `ports:` mapping is needed, whatever the ports are called. The ports are
+recognised by their signatures:
+
+| Role | Port |
+|---|---|
+| read32, read64 | input port, one unsigned integer argument (the offset), returning `U32` or `U64` |
+| write32, write64 | input port, two unsigned integer arguments (offset, then a `U32` or `U64` value), returning nothing |
+| interrupt | output port with one unsigned integer argument (the number) or none, returning nothing, of a port type that is not the framework's |
+
+A component may have several ports of one role, and need not have all five. Every output
+port with the interrupt's shape is called for each interrupt. Command, event, telemetry
+and time ports are left out: the flight component's commands and events leave the
+dictionary, and the report lists them. A connected port of any other shape is an error
+that names it: drop the connection with `ports: {<port>: }` if the simulation can do
+without it, or write a mirror surrogate
+([A register block](surrogate-guide.md#a-register-block)), which is also how the flight
+component's commands and events are kept. Arguments of types other than the built-in
+unsigned integers (a project's alias for the offset, say) are not recognised.
+
+The surrogate accepts `configure(...)` and `open(...)` with any arguments, which is what
+flight topology code usually calls to open the device (`open` returns `true`). Its
+`wstsBind` options are `irq=serial` (the default: one interrupt at a time), `irq=direct`
+and `irq=off`.
+
+Behaviour on the bus:
+
+- **A read that fails returns all ones.** The read ports have no status. A fault, an
+  offset the model does not have, an endpoint without a model, a bridge model that does not
+  answer within two seconds, an exhausted recording: flight software reads `0xFFFFFFFF`
+  (or 64 bits of ones), and the access counts in `BusErrors`. No event is raised for the
+  read itself; a fault's first application raises `FaultTriggered` as on any endpoint.
+- **A write that fails is lost.** Flight software cannot tell.
+- **64-bit accesses** reach the model as one access of width 8. `Wsts::RegisterFile`
+  serves them as two 32-bit registers, the low half at the offset; a model without 64-bit
+  accesses returns an error, and the read is all ones.
+- **Interrupts** are raised by the model (`Wsts::Bus::registerInterrupt`, or
+  `RegisterFile::raise`), by `irq_raise`, or by a recording. The flight handler runs on the
+  thread that raised it: for a model, the simulation's tick thread. That is never the
+  flight thread that reads and writes the registers, as an interrupt context is not.
+  Deliveries are serialised, so a handler is not re-entered. A handler that posts a
+  message to its component's queue, which is what a handler in interrupt context has to
+  do, needs nothing more.
+
+`Wsts::RegisterFile` (in `Wsts/Core/Models.hpp`) is the stock model: 32-bit registers at
+offsets that are multiples of 4. Parameters, in the manifest and through `model_set`:
+
+| Parameter | Meaning |
+|---|---|
+| `reg.<offset>` | Value of a register. The first use defines the register, with this as its reset value |
+| `reset.<offset>` | Reset value |
+| `mask.<offset>` | Write mask: the bits flight software can write (default all) |
+| `w1c.<offset>` | `1`: writing a 1 clears the bit instead of setting it |
+| `rc.<offset>` | `1`: a flight read returns the value and clears the register |
+| `strict` | `1` (default): an access to an offset that is not defined fails. `0`: undefined offsets are plain memory |
+| `reset` | `1`: every register back to its reset value |
+| `irq.period`, `irq.number` | Raise interrupt `irq.number` every `irq.period` ticks (0: never) |
+| `irq.status`, `irq.bits` | Before raising it, set `irq.bits` (default 1) in the register at `irq.status` |
+
+In C++ a model derived from it adds `define()`, a hook per register that runs after a
+flight read or write (`onRead`, `onWrite`), `setBits()` and `raise()`.
+
+The report has a "Register blocks" section: each replaced instance, its endpoint and
+model, which instances read and write through it, and where its interrupt goes.
+
+### Set-up code
+
+`setup` adds C++ to the generated `WstsGenerated::setup()`, in a block of its own, after
+the surrogates are bound and the models attached and before the runtime (bridge,
+recorder, scenario, tick) starts. `setup.headers` are included in that file. It is for
+what the manifest cannot express: registering a DMA address translation, or calling a
+setter of a flight library that only its unit tests call. The topology's instances are
+constructed by then and not yet started. Keep it to a few lines that call functions of
+the simulation project.
 
 ### Simulator components
 
@@ -418,6 +529,7 @@ Built-in surrogates (`catalog/wsts-catalog.yaml`):
 | `Wsts.SimI2c` | `Drv.I2c` | `Drv.LinuxI2cDriver` | |
 | `Wsts.SimSpi` | `Drv.Spi` | `Drv.LinuxSpiDriver` | |
 | `Wsts.SimGpio` | `Drv.Gpio` (one pin per instance) | `Drv.LinuxGpioDriver` | |
+| `Wsts.SimRegister` | 32-bit and 64-bit register reads and writes, an interrupt output ([Register blocks](#register-blocks)) | nothing by itself: the manifest names a project's register interface component | `irq=serial\|direct\|off` |
 | `Wsts.SimTick` | `Drv.Tick` | `Svc.LinuxTimer`, `VxWorksSvc.VxWatchDogTimer` | `mode=block\|thread`, `tick_hz=<n>` |
 
 Stock components that are not surrogates, for instances the simulation adds:
@@ -437,6 +549,8 @@ Used identically by the bridge, scenario files and (through its commands) `Wsts.
 | `inject_bytes` | `endpoint`, `data` (hex) or `text` | Bytes to flight software as if from the device |
 | `gpio_force` | `endpoint`, `level` | Drive a GPIO input |
 | `i2c_reg_set` | `endpoint`, `addr`, `reg`, `value` | Set a register of a register-addressed I2C model |
+| `reg_set` | `endpoint`, `offset`, `value` | Set a register of the register block on an endpoint, without a flight write (no write mask, no hook). 64-bit values may be given as `"0x…"` strings |
+| `irq_raise` | `endpoint`, `number`=0 | Raise an interrupt of the register block on an endpoint |
 | `model_set` | `model`, `key`, `value` | Set a model parameter |
 | `record_start` / `record_stop` | `path` | Record bus traffic and actions |
 | `scenario_load` | `path`, `mode`=`stimulus` | Load a scenario or recording |
@@ -450,28 +564,58 @@ to the log directory, or `--files-dir`).
 
 `dir` is `both`, `to_device` (flight software → device) or `to_flight`.
 
-| `kind` | Byte stream | I2C / SPI | GPIO | `arg` |
-|---|---|---|---|---|
-| `drop` | Data discarded | Transaction fails (write or read error) | Write ignored; input change ignored | |
-| `corrupt` | Every byte XOR `arg` | Written or read bytes XOR `arg` | | 8-bit mask |
-| `delay` | Held for `arg` ms | Held for `arg` ms | Held for `arg` ms | milliseconds |
-| `duplicate` | Delivered twice | | | |
-| `error` | Send returns an error status | Transaction returns status `arg` | Call returns status `arg` | driver status value (0 means 1) |
-| `stuck` | Data discarded | Read bytes all `arg` | Reads return `arg`; writes ignored | value |
+| `kind` | Byte stream | I2C / SPI | GPIO | Register | `arg` |
+|---|---|---|---|---|---|
+| `drop` | Data discarded | Transaction fails (write or read error) | Write ignored; input change ignored | A write is lost; a read fails (all ones) | |
+| `corrupt` | Every byte XOR `arg` | Written or read bytes XOR `arg` | | The value written or read XOR `arg` | 8-bit mask; for a register all 32 bits |
+| `delay` | Held for `arg` ms | Held for `arg` ms | Held for `arg` ms | Held for `arg` ms | milliseconds |
+| `duplicate` | Delivered twice | | | | |
+| `error` | Send returns an error status | Transaction returns status `arg` | Call returns status `arg` | The model is not reached; a read is all ones | driver status value (0 means 1) |
+| `stuck` | Data discarded | Read bytes all `arg` | Reads return `arg`; writes ignored | Reads return `arg`; writes ignored | value |
 
 For I2C, status values are those of `Drv.I2cStatus` (1 address, 2 write, 3 read, 5 other).
+
+On a register endpoint a write travels `to_device`, and a read `to_flight`: a fault in one
+direction leaves the other alone. Register ports have no status, so the status of a failed
+access (1 nothing there, 2 write, 3 read, 4 width, 5 other; or `arg` of an `error` fault)
+is in the recording and not in flight software, which reads all ones.
+
+The interrupts of a register endpoint are a fault target of their own, named
+`<endpoint>:irq`. Faults on the endpoint itself do not touch them.
+
+| `kind` on `<endpoint>:irq` | Effect |
+|---|---|
+| `drop` | The interrupt is lost |
+| `duplicate` | It is delivered twice |
+| `delay` | It is held for `arg` ms, on the thread that raised it |
+| `corrupt` | The interrupt number XOR `arg` |
 
 ## Scenario and recording files
 
 One JSON object per line. Blank lines and lines starting with `#` are ignored.
 
 - Action lines have `tick` (relative to scenario start) and the action fields above.
-- Recording lines have `rec` (`bs_tx`, `bs_rx`, `i2c`, `spi`, `gpio_out`, `gpio_in`),
+- Recording lines have `rec` (`bs_tx`, `bs_rx`, `i2c`, `spi`, `gpio_out`, `gpio_in`,
+  `reg_rd`, `reg_wr`, `reg_irq`),
   `tick`, `endpoint`, `src` (`flight`, `model`, `link`, `inject`, `replay`) and the data. They are
   ignored in `stimulus` mode and replayed in `responses` mode. Recorded I2C and SPI
   responses are served in the order flight software asks for them, separately for each
   endpoint and, on I2C, each device address: devices that share a bus keep their own
   responses even when the replay interleaves their transactions differently.
+- Register lines:
+
+  ```json
+  {"rec": "reg_rd", "tick": 4, "endpoint": "fpgaRegs", "src": "flight", "offset": "0xc", "width": 4, "read": "d7000000", "status": 0}
+  {"rec": "reg_wr", "tick": 4, "endpoint": "fpgaRegs", "src": "flight", "offset": "0x10", "width": 4, "write": "2a000000", "status": 0}
+  {"rec": "reg_irq", "tick": 20, "endpoint": "fpgaRegs", "src": "model", "number": 1}
+  ```
+
+  `offset` is a `"0x…"` string, because an offset may use all 64 bits. `read` and `write`
+  are the value as little-endian bytes, `width` of them. In `responses` mode recorded reads
+  are served separately for each endpoint and offset, in the order they were recorded for
+  that offset; when those are used up, a read of the offset fails (status 5, all ones).
+  Writes are recorded and reach no model, and interrupts come from the recording: those a
+  model raises during the replay are suppressed.
 
 ## Bridge protocol
 
@@ -484,11 +628,13 @@ Newline-delimited JSON. A client sends `{"id": n, "op": …}` and receives
 | `subscribe` | Start receiving `{"ev": "rec", …}`, `{"ev": "action", …}` and `{"ev": "sim_event", …}` |
 | `gpio_get` (`endpoint`) | Level flight software last wrote |
 | `attach` (`endpoint`, `kind`: `i2c`\|`spi`, `addr`) | Become the device model. The sim then sends `{"ev": "i2c_req", "rid", "endpoint", "addr", "write", "rlen"}` and waits up to 2 s for `{"op": "reply", "rid", "status", "data"}` |
+| `attach` (`endpoint`, `kind`: `register`) | Become the register block. The sim sends `{"ev": "reg_req", "rid", "endpoint", "access": "read", "offset": "0x…", "width", "rlen"}` or `{…, "access": "write", "offset", "width", "value": "0x…", "rlen": 0}` and waits up to 2 s for `{"op": "reply", "rid", "status", "data"}`, where `data` is the value read as little-endian hex (`width` bytes; empty for a write). Raise the block's interrupts with `irq_raise`. When the client disconnects, the block that was on the endpoint before answers again |
 
 Byte stream and GPIO models need no `attach`: subscribe, watch `bs_tx` / `gpio_out`
 records, and answer with `inject_bytes` / `gpio_force`.
 
-`fprime_wsts.bridge.WstsBridge` wraps all of this. `fprime_wsts.bridge.WstsSystem` holds one
+`fprime_wsts.bridge.WstsBridge` wraps all of this (`serve_i2c`, `serve_spi`,
+`serve_register`, `raise_irq`, `reg_set`, `register_accesses`). `fprime_wsts.bridge.WstsSystem` holds one
 `WstsBridge` per element of a system and addresses faults by link name.
 
 ## Environment variables read by a simulated deployment
@@ -504,7 +650,8 @@ records, and answer with `inject_bytes` / `gpio_force`.
 
 ## `Wsts.SimControl`
 
-Commands mirror the actions (see the README). Events: `SimPaused`, `SimResumed`,
+Commands mirror the actions (see the README); `REG_SET` (`endpoint`, `offset`, `value`,
+both 64 bits) and `IRQ_RAISE` (`endpoint`, `number`) are those of the register kind. Events: `SimPaused`, `SimResumed`,
 `SimRateSet`, `FaultArmed`, `FaultTriggered` (first application of a fault only),
 `FaultExpired`, `FaultsCleared`, `Injected`, `ScenarioLoaded`, `ScenarioStarted`,
 `ScenarioCompleted`, `ScenarioStopped`, `ScenarioError`, `RecordStarted`,

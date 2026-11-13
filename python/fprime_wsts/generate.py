@@ -8,6 +8,7 @@ code, and build files.
 
 from __future__ import annotations
 
+import dataclasses
 import filecmp
 import json
 import os
@@ -21,6 +22,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from . import flight_cmake
 from . import fpp
 from . import hostcheck
+from . import registers
 from . import simulators as sims
 from .fpp import WstsError
 from .manifest import ALL_MODULES, DEFAULT_CATALOG, TOOLKIT_ROOT, LinkEnd, Manifest, ModelSpec, Surrogate, load_catalog
@@ -58,6 +60,9 @@ class PlannedSubstitution:
     attributes: Dict[str, str] = field(default_factory=dict)
     # False for a surrogate that does not use the bus (`endpoint: none`): no endpoint, no wstsBind()
     bind: bool = True
+    # For a surrogate of a register interface component: its ports that are register
+    # accesses or interrupts, port name -> role (read32, write32, read64, write64, interrupt)
+    register_roles: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -78,6 +83,8 @@ class Plan:
     control_base_id: int = 0
     links: List[PlannedLink] = field(default_factory=list)
     sim: sims.SimulatorPlan = field(default_factory=sims.SimulatorPlan)
+    # Wsts.SimRegister written for flight components, by the name of the component it is for
+    adapted: Dict[str, registers.AdaptedSurrogate] = field(default_factory=dict)
 
 
 def _host_restriction(text: str) -> Optional[re.Match]:
@@ -151,7 +158,8 @@ def resolve_instance(spec: str, names: List[str]) -> Optional[str]:
     return found[0] if found else None
 
 
-def _check_tick_sources(plan: Plan, model: fpp.Model, framework: Optional[Path]) -> None:
+def _check_tick_sources(plan: Plan, model: fpp.Model, framework: Optional[Path],
+                        manifest: Optional[Manifest] = None) -> None:
     """Warn when what cycles the flight rate groups, or supplies time, is a kept component
     that will probably do nothing on a workstation"""
     topology = plan.topology
@@ -170,6 +178,28 @@ def _check_tick_sources(plan: Plan, model: fpp.Model, framework: Optional[Path])
         if source in substituted or component in HOST_TICK_SOURCES:
             continue
         targets = ", ".join(sorted({c.to_instance for c in cycles if c.from_instance == source}))
+        # Its interrupt may arrive from a register interface component that is simulated
+        interrupts = [
+            (sub, c) for sub in plan.substitutions if sub.bind for c in topology.connections
+            if c.from_instance == sub.instance.name and c.to_instance == source
+            and sub.register_roles.get(sub.port_map.get(c.from_port) or c.from_port) == "interrupt"
+        ]
+        if interrupts:
+            sub, connection = interrupts[0]
+            modelled = [m.name for m in (manifest.models if manifest else []) if m.kind == "register" and m.endpoint == sub.endpoint]
+            where = (f"the model '{modelled[0]}' on that endpoint" if modelled
+                     else "a register model on that endpoint (none is attached in the manifest: one can attach through the bridge)")
+            text = (
+                f"{source} ({component}) cycles the flight rate groups (it drives {targets}) and is kept as it is. Its "
+                f"interrupt arrives on {connection.to_port} from {sub.instance.name}, which is simulated (register "
+                f"endpoint '{sub.endpoint}'): the rate groups run when {where} raises that interrupt. For pause, "
+                "resume and the time scale to act on the flight rate groups, the model that raises it has to be the "
+                "simulation's tick source (docs/surrogate-guide.md, 'A register block')."
+            )
+            if not modelled:
+                plan.warnings.append(text)
+            plan.fidelity_notes.append(text)
+            continue
         plan.warnings.append(
             f"{source} ({component}) cycles the flight rate groups (it drives {targets}) and is kept as it is. "
             "Unless that component produces ticks on a Linux host, the rate groups will never run: nothing "
@@ -193,9 +223,56 @@ def _check_tick_sources(plan: Plan, model: fpp.Model, framework: Optional[Path])
             )
 
 
+def adapt_register_surrogates(model: fpp.Model, manifest: Manifest, topology: fpp.Topology,
+                              overlay: Path) -> Tuple[Manifest, Dict[str, registers.AdaptedSurrogate]]:
+    """Where the manifest names Wsts.SimRegister for a component whose port types are its
+    own, describe that surrogate with the component's ports, add it to the model, and name
+    it in the manifest's place. Returns the manifest to plan with and what was adapted."""
+    adapted: Dict[str, registers.AdaptedSurrogate] = {}
+    stock = model.components.get(registers.SURROGATE)
+    used: Dict[str, Set[str]] = {}
+    for connection in topology.connections:
+        used.setdefault(connection.from_instance, set()).add(connection.from_port)
+        used.setdefault(connection.to_instance, set()).add(connection.to_port)
+    entries = []
+    for entry in manifest.substitutions:
+        entries.append(entry)
+        if entry.surrogate != registers.SURROGATE:
+            continue
+        if entry.instance:
+            found = resolve_instance(entry.instance, topology.instances)
+            instances = [found] if found else []
+        else:
+            instances = [n for n in topology.instances if model.instances[n].component == entry.component]
+        original = model.components.get(model.instances[instances[0]].component) if instances else None
+        if original is None:
+            continue  # the plan reports a name that is not there
+        ports_in_use = set().union(*[used.get(name, set()) for name in instances])
+        if stock is not None and registers.matches_stock(original, stock, ports_in_use) and not entry.ports:
+            continue
+        renamed = sorted(k for k, v in (entry.ports or {}).items() if v is not None)
+        if renamed:
+            raise WstsError(
+                f"substitute {entry.instance or entry.component} with {registers.SURROGATE}: 'ports' renames "
+                f"{', '.join(renamed)}, but the surrogate is written with the flight component's own port names, so "
+                "there is nothing to rename. An empty value (a flight connection to drop) is the only mapping that "
+                "applies here."
+            )
+        dropped = set(entry.ports or {})
+        if original.name not in adapted:
+            adapted[original.name] = registers.adapt(original, model.port_defs, overlay, dropped)
+            model.components[adapted[original.name].name] = adapted[original.name].component
+        entries[-1] = dataclasses.replace(entry, surrogate=adapted[original.name].name)
+    if not adapted:
+        return manifest, adapted
+    return dataclasses.replace(manifest, substitutions=entries), adapted
+
+
 def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], topology: fpp.Topology, roots: List[Path],
-              framework: Optional[Path] = None) -> Plan:
+              framework: Optional[Path] = None,
+              adapted: Optional[Dict[str, registers.AdaptedSurrogate]] = None) -> Plan:
     plan = Plan(topology)
+    plan.adapted = adapted or {}
     plan.sim = sims.collect_added(model, manifest, topology)
     by_surrogate = {s.name: s for s in catalog}
     replaces: Dict[str, Surrogate] = {}
@@ -305,6 +382,15 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
             if surrogate_port is not None and surrogate_port not in surrogate.ports:
                 raise WstsError(f"port mapping for {name}: {chosen.name} has no port '{surrogate_port}'")
         missing = _covers(surrogate, original, used_ports.get(name, set()), port_map)
+        if missing and original.name in plan.adapted and plan.adapted[original.name].name == chosen.name:
+            raise WstsError(
+                f"{registers.SURROGATE} cannot stand in for {name} ({original.name}): the topology connects ports "
+                "of it that are neither a register access nor an interrupt: "
+                + "; ".join(registers.describe(original.ports[m.split(" ")[0]], model.port_defs) for m in missing)
+                + ". " + registers.shapes_text() + " Drop a connection the simulation can do without with "
+                "'ports: {<port>: }' in the 'substitute' entry, or write a mirror surrogate that serves it "
+                f"(fprime-wsts scaffold {original.name}; docs/surrogate-guide.md, 'A register block')."
+            )
         if missing:
             raise WstsError(
                 f"{chosen.name} cannot replace {name} ({original.name}): connected ports it does not serve: "
@@ -335,8 +421,12 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
                 f"link '{link_ends[name].link}' ends at {name}, which is substituted with 'endpoint: none': "
                 f"{chosen.name} does not use the bus, so there is no endpoint for a link to end at"
             )
+        roles = registers.register_roles(surrogate, model.port_defs)
+        if not any(role != "interrupt" for role in roles.values()):
+            roles = {}  # an output port alone does not make a register interface
         plan.substitutions.append(PlannedSubstitution(
-            instance, original, surrogate, chosen, endpoint if bind else "", options, reason, port_map, attributes, bind))
+            instance, original, surrogate, chosen, endpoint if bind else "", options, reason, port_map, attributes, bind,
+            roles))
 
     # Base IDs for the WSTS instances: above everything the flight topology uses
     highest = 0
@@ -434,7 +524,52 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
                     "a byte stream endpoint takes one or the other"
                 )
         plan.links.append(PlannedLink(end, sub.instance.name, sub.endpoint))
-    _check_tick_sources(plan, model, framework)
+    # ---- Register blocks ----
+    bound = {sub.endpoint: sub for sub in plan.substitutions if sub.bind}
+    register_models: Dict[str, str] = {}
+    for spec in manifest.models:
+        if spec.kind != "register":
+            continue
+        sub = bound[spec.endpoint]
+        if not sub.register_roles or all(role == "interrupt" for role in sub.register_roles.values()):
+            raise WstsError(
+                f"model '{spec.name}' is a register block (kind: register) on endpoint '{spec.endpoint}', which "
+                f"{sub.instance.name} is bound to as {sub.surrogate.name}: that is not a surrogate for a register "
+                "interface component (it has no port that reads or writes a register). Substitute the register "
+                f"interface component with {registers.SURROGATE}, or with a mirror of it, and attach the model to "
+                "that instance's endpoint. Register endpoints: "
+                + (", ".join(sorted(e for e, s in bound.items() if s.register_roles)) or "none") + "."
+            )
+        if spec.endpoint in register_models:
+            raise WstsError(
+                f"models '{register_models[spec.endpoint]}' and '{spec.name}' are both register blocks on endpoint "
+                f"'{spec.endpoint}'. A register endpoint has one block (there is no address to tell two apart): "
+                "combine them in one model, or give each its own register interface instance."
+            )
+        register_models[spec.endpoint] = spec.name
+    for sub in plan.substitutions:
+        if sub.register_roles and sub.bind:
+            plan.fidelity_notes.append(
+                f"{sub.instance.name} is a register interface component, replaced by {sub.surrogate.name}: the flight "
+                f"drivers that read and write registers through it run as in flight, against "
+                + (f"the model '{register_models[sub.endpoint]}'" if sub.endpoint in register_models
+                   else "whatever attaches to the endpoint through the bridge (no model is attached in the manifest: "
+                        "until one is, reads return all ones)")
+                + f" on endpoint '{sub.endpoint}'. Register semantics are exactly what the model implements. Bus "
+                "timing, caches, the order of accesses from several cores and accesses of other widths than 4 and 8 "
+                "bytes are not reproduced. Interrupts are delivered on the thread that raises them (a model's is the "
+                "simulation's tick thread), one at a time: the target's interrupt priorities, masking and nesting "
+                "are not reproduced."
+            )
+    if any(sub.register_roles for sub in plan.substitutions):
+        plan.fidelity_notes.append(
+            "DMA: a flight driver that allocates memory for hardware and writes its physical address into a register "
+            "needs that address to mean something on the host. The toolkit cannot supply this: off the target, the "
+            "flight libraries' virtual-to-physical translation has to go through the allocator's region (host base, "
+            "physical base, size), and the model has to be given the same translation (Wsts::Dma, registered from "
+            "'setup' in the manifest). See docs/vxworks-conversion.md, 'Memory shared with hardware'."
+        )
+    _check_tick_sources(plan, model, framework, manifest)
 
     # ---- Simulator components and bus devices ----
     wsts_ids = [(prefix_of(topology) + SETUP_INSTANCE, plan.setup_base_id, plan.setup_base_id + ID_BLOCK - 1)]
@@ -1217,6 +1352,7 @@ ATTACH = {
     "i2c": "Wsts::Bus::get().attachI2c({endpoint}, {address:#x}, &{var});",
     "spi": "Wsts::Bus::get().attachSpi({endpoint}, &{var});",
     "gpio": "Wsts::Bus::get().attachGpio({endpoint}, &{var});",
+    "register": "Wsts::Bus::get().attachRegister({endpoint}, &{var});",
 }
 
 
@@ -1233,6 +1369,9 @@ def render_setup(plan: Plan, manifest: Manifest, topology_header: str) -> str:
         lines.append("#include <Wsts/Core/Link.hpp>")
     for header in sorted({m.header for m in manifest.models}):
         lines.append(f"#include <{header}>")
+    if manifest.setup:
+        lines.append("// From `setup.headers` in the manifest")
+        lines += [f"#include <{header}>" for header in manifest.setup.headers]
     lines += [f"#include <{topology_header}>", "", "namespace {", ""]
     for spec in manifest.models:
         lines.append(f"{spec.cls} model_{_identifier(spec.name)};")
@@ -1295,6 +1434,15 @@ def render_setup(plan: Plan, manifest: Manifest, topology_header: str) -> str:
             )
         lines.append(f"    Wsts::Bus::get().attachByteStream({_cpp_string(link.endpoint)}, &{var});")
     lines.append("")
+    if manifest.setup:
+        lines += [
+            "    // From `setup` in the manifest: the surrogates are bound and the models attached; the runtime",
+            "    // (bridge, recorder, scenario, tick) has not started",
+            "    {",
+            *[("        " + line).rstrip() for line in manifest.setup.code.strip("\n").split("\n")],
+            "    }",
+            "",
+        ]
     if manifest.control_enabled:
         control = _cpp_instance((plan.topology.module + "." if plan.topology.module else "") + CONTROL_INSTANCE)
         lines.append(f'    {control}.wstsBind("", "");')
@@ -1404,6 +1552,30 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
             **({"ports": sub.port_map} if sub.port_map else {}),
             **({"attributes": sub.attributes} if sub.attributes else {}),
         })
+    register_blocks = []
+    for sub in plan.substitutions:
+        if not sub.register_roles or not sub.bind:
+            continue
+        flight_name = {surrogate_port: flight_port for flight_port, surrogate_port in sub.port_map.items() if surrogate_port}
+        interrupt_ports = {flight_name.get(port, port) for port, role in sub.register_roles.items() if role == "interrupt"}
+        access_ports = {flight_name.get(port, port) for port, role in sub.register_roles.items() if role != "interrupt"}
+        item = plan.adapted.get(sub.original.name)
+        register_blocks.append({
+            "instance": sub.instance.name,
+            "endpoint": sub.endpoint,
+            "flight_component": sub.original.name,
+            "surrogate": sub.surrogate.name,
+            "written_for_the_component": bool(item and item.name == sub.surrogate.name),
+            "ports": dict(sorted(sub.register_roles.items())),
+            "ports_without_a_role": sorted(item.unmatched) if item and item.name == sub.surrogate.name else [],
+            "drivers": sorted({
+                c.from_instance for c in plan.topology.connections
+                if c.to_instance == sub.instance.name and c.to_port in access_ports}),
+            "interrupt_to": sorted({
+                f"{c.to_instance}.{c.to_port}" for c in plan.topology.connections
+                if c.from_instance == sub.instance.name and c.from_port in interrupt_ports}),
+            "model": next((m.name for m in manifest.models if m.kind == "register" and m.endpoint == sub.endpoint), None),
+        })
     added = {"commands": [], "events": [], "channels": []}
     if manifest.control_enabled and CONTROL_COMPONENT in model.components:
         control = model.components[CONTROL_COMPONENT]
@@ -1467,6 +1639,10 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
     return {
         **system,
         **simulator_report,
+        # Only when there is one, so that reports of deployments without them are unchanged
+        **({"register_blocks": register_blocks} if register_blocks else {}),
+        **({"setup": {"headers": manifest.setup.headers, "lines": len(manifest.setup.code.strip().split("\n"))}}
+           if manifest.setup else {}),
         "generator": "fprime-wsts",
         "topology": plan.topology.name,
         "flight_toolchain": settings.default_toolchain,
@@ -1710,6 +1886,38 @@ def render_report(report: dict) -> str:
                     size = f"of {c['size']} (`{constant}` in `{c['source']}`)" if c["size"] is not None else \
                         f"(`{constant}` could not be read: check it by hand)"
                     lines.append(f"- {label}: {c['used']} {size}")
+    if report.get("register_blocks"):
+        lines += [
+            "", "## Register blocks", "",
+            "Register interface components replaced at their ports: the flight drivers above them read and write "
+            "registers as in flight, and the register block on the endpoint answers. A failed read (a fault, an "
+            "offset the model does not have, no model) gives flight software all ones and counts in `BusErrors`. "
+            "Interrupts have the fault target `<endpoint>:irq`.",
+            "",
+            "| Instance | Flight component | Surrogate | Endpoint | Model | Read and written by | Interrupt to |",
+            "|---|---|---|---|---|---|---|",
+        ]
+        for block in report["register_blocks"]:
+            model_name = f"`{block['model']}`" if block["model"] else "none in the manifest"
+            lines.append(
+                f"| `{block['instance']}` | `{block['flight_component']}` | `{block['surrogate']}` | `{block['endpoint']}` "
+                f"| {model_name} | " + (", ".join(f"`{d}`" for d in block["drivers"]) or "nothing") + " | "
+                + (", ".join(f"`{d}`" for d in block["interrupt_to"]) or "not connected") + " |")
+        for block in report["register_blocks"]:
+            if not block["written_for_the_component"]:
+                continue
+            ports = ", ".join(f"`{port}` ({role})" for port, role in block["ports"].items())
+            lines += ["", f"`{block['surrogate']}` is `Wsts.SimRegister` written with the ports of "
+                          f"`{block['flight_component']}`, recognised by their signatures: {ports}."
+                          + (" Ports of the flight component it does not have: "
+                             + ", ".join(f"`{p}`" for p in block["ports_without_a_role"]) + "."
+                             if block["ports_without_a_role"] else "")]
+    if report.get("setup"):
+        lines += ["", "## Set-up code", "",
+                  f"`setup` in the manifest adds {report['setup']['lines']} line(s) of C++ to the generated set-up "
+                  "(`WstsSetup.cpp`), run once the surrogates are bound and the models attached, before the runtime "
+                  "starts." + (" Headers: " + ", ".join(f"`{h}`" for h in report["setup"]["headers"]) + "."
+                               if report["setup"]["headers"] else "")]
     lines += ["", "## Device models", ""]
     for model in report["models"]:
         address = f" address {model['address']:#x}" if model["kind"] == "i2c" else ""
@@ -2046,7 +2254,9 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
             raise WstsError(f"expected exactly one topology in {top_dir}, found: {names}. Set 'topology' in the manifest.")
         topology = local[0]
 
-        plan = make_plan(model, manifest, catalog, topology, roots, settings.framework_path)
+        # Wsts.SimRegister named for a component with port types of its own is written for it
+        manifest, adapted = adapt_register_surrogates(model, manifest, topology, output)
+        plan = make_plan(model, manifest, catalog, topology, roots, settings.framework_path, adapted)
         plan.warnings[:0] = early_warnings
         capacity: Dict[str, dict] = {}
         if plan.sim.added:
@@ -2169,8 +2379,11 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
                 elif path.suffix == ".fppi":
                     shutil.copy(path, target_dir / path.name)  # included relative to the FPP file
 
+        # Wsts.SimRegister with the ports of a flight component: a module of the overlay each
+        adapted_fpp = [registers.write(item, output, model.port_defs) for item in plan.adapted.values()]
+
         # ---- Validate the patched model and find what it needs ----
-        post_candidates = [c for c in candidates if c not in set(top_fpp) and c not in patchable] + list(copy_of)
+        post_candidates = [c for c in candidates if c not in set(top_fpp) and c not in patchable] + list(copy_of) + adapted_fpp
         fpp.locate_defs(work, post_candidates)
         # From here on a patched copy stands for its original: it is built in its place
         closure = [copy_of.get(f, f) for f in fpp.depend(work, patched_fpp)]
@@ -2451,7 +2664,11 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
                 return path.relative_to(root).as_posix()
         return path.name
 
+    adapted_headers = {item.name: item.header for item in plan.adapted.values()}
+
     def header_of(component: fpp.Component) -> str:
+        if component.name in adapted_headers:
+            return adapted_headers[component.name]  # in the overlay, which is a build root
         return include_path(component.file.with_suffix(".hpp"))
 
     # Flight code includes the headers of the drivers it configures: a subtopology's
@@ -2689,6 +2906,10 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         f'find_package(FPrime REQUIRED PATHS "${{CMAKE_CURRENT_LIST_DIR}}/{rel(settings.framework_path)}/cmake")',
         *redirect,
         "",
+        *(["",
+           f"# {registers.SURROGATE} with the port names and types of the flight components it stands in for",
+           *[f'add_fprime_subdirectory("${{CMAKE_CURRENT_LIST_DIR}}/{item.directory}")' for item in plan.adapted.values()]]
+          if plan.adapted else []),
         f'set(WSTS_FLIGHT_PROJECT "${{CMAKE_CURRENT_LIST_DIR}}/{rel(project_root)}")',
         *[
             f'add_fprime_subdirectory("${{WSTS_FLIGHT_PROJECT}}/{_rel(d, project_root)}")'

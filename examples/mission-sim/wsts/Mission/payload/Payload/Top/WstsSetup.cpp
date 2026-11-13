@@ -14,6 +14,7 @@ namespace {
 Sim::ImuModel model_imu;
 Wsts::RegisterMapI2c model_power;
 Wsts::LoopbackSpi model_adc;
+Wsts::RegisterFile model_fpga;
 Wsts::ScriptedByteStream model_tempSensor;
 Wsts::LinkByteStream link_hub;
 
@@ -36,6 +37,7 @@ void setup() {
     ::Payload::heaterPin.wstsBind("heaterPin", "");
     ::Payload::switchPin.wstsBind("switchPin", "");
     ::Payload::spiBus.wstsBind("spiBus", "");
+    ::Payload::fpgaRegs.wstsBind("fpgaRegs", "");
 
     // Device models
     (void)Wsts::configureModel(&model_imu, "endpoint", "i2cBus");
@@ -49,6 +51,21 @@ void setup() {
     (void)Wsts::configureModel(&model_adc, "endpoint", "spiBus");
     Wsts::Bus::get().attachSpi("spiBus", &model_adc);
     Wsts::registerModel("adc", &model_adc);
+    (void)Wsts::configureModel(&model_fpga, "endpoint", "fpgaRegs");
+    configure("fpga", Wsts::configureModel(&model_fpga, "reg.0x00", "0xF00D0001"), "reg.0x00");
+    configure("fpga", Wsts::configureModel(&model_fpga, "mask.0x00", "0"), "mask.0x00");
+    configure("fpga", Wsts::configureModel(&model_fpga, "reg.0x04", "0"), "reg.0x04");
+    configure("fpga", Wsts::configureModel(&model_fpga, "w1c.0x04", "1"), "w1c.0x04");
+    configure("fpga", Wsts::configureModel(&model_fpga, "reg.0x08", "0"), "reg.0x08");
+    configure("fpga", Wsts::configureModel(&model_fpga, "reg.0x0C", "215"), "reg.0x0C");
+    configure("fpga", Wsts::configureModel(&model_fpga, "reg.0x10", "0"), "reg.0x10");
+    configure("fpga", Wsts::configureModel(&model_fpga, "reg.0x14", "0"), "reg.0x14");
+    configure("fpga", Wsts::configureModel(&model_fpga, "irq.number", "1"), "irq.number");
+    configure("fpga", Wsts::configureModel(&model_fpga, "irq.period", "20"), "irq.period");
+    configure("fpga", Wsts::configureModel(&model_fpga, "irq.status", "0x04"), "irq.status");
+    configure("fpga", Wsts::configureModel(&model_fpga, "irq.bits", "0x1"), "irq.bits");
+    Wsts::Bus::get().attachRegister("fpgaRegs", &model_fpga);
+    Wsts::registerModel("fpga", &model_fpga);
     (void)Wsts::configureModel(&model_tempSensor, "endpoint", "sensorUart");
     configure("tempSensor", Wsts::configureModel(&model_tempSensor, "text", "$TEMP,21.5\n"), "text");
     configure("tempSensor", Wsts::configureModel(&model_tempSensor, "period", "20"), "period");

@@ -34,10 +34,29 @@ There are three places a deployment can be cut, and they trade effort against fi
 |---|---|---|---|
 | S1 topology | A driver instance, retyped to a surrogate with the same ports | Everything above the driver | Built |
 | S1b manager | A whole device-manager instance, replaced by a project surrogate | Everything above the manager | Built (same mechanism) |
+| S1r registers | A register interface component: what device drivers read and write memory-mapped registers through | Everything above it, the device drivers included | Built (same mechanism) |
 | S2 OSAL | An `Os_*` implementation (time, files, queues) | All F´ code, including drivers | Platform swap built; sim-specific implementations planned |
 | S3 OS API | The target OS's headers, implemented on POSIX | Project code that calls the OS directly | Planned |
 
 The seam is chosen per instance. The default is S1 from the surrogate catalog.
+
+The bus behind the surrogates carries five kinds of traffic: byte streams, I2C, SPI, GPIO
+and memory-mapped registers. The first four are the interfaces of F´'s own drivers. The
+fifth is for flight computers whose devices are FPGA blocks or SoC peripherals: there the
+"driver" of F´'s sense is a project component that reads and writes 32-bit registers
+through one **register interface component**, which also delivers the hardware's
+interrupts. Cutting at that component (S1r) keeps the device driver itself in the
+simulation, with its register sequences and its interrupt handling, and puts a model of
+the register block behind it. It is the lowest seam the toolkit offers: below a driver's
+ports, above the SoC. What is below it (the bus to the fabric, caches, DMA engines) is
+not modelled; see [fidelity.md](fidelity.md).
+
+A register interface component has port types of its own, and FPP connects a port only to
+a port of the same type, so no component of the toolkit can be connected in its place as
+it is. `Wsts.SimRegister` is therefore written again for the component the manifest names,
+with that component's port names and port types, into a module of the overlay
+(`WstsAdapted/<Component>/`). Which port is a read, a write or the interrupt is taken
+from the ports' signatures, so the toolkit knows no project's component by name.
 
 The same I2C device in flight and at the two topology seams, using the names of the example's
 `Payload` computer:
@@ -856,7 +875,8 @@ format, a recording loads as a scenario:
 
 - **stimulus** mode re-applies the recorded actions against the live models;
 - **responses** mode also replays what the devices answered (I2C/SPI read data, bytes
-  received, GPIO input changes) with the models bypassed, reproducing a run without them.
+  received, GPIO input changes, register values read and register interrupts) with the
+  models bypassed, reproducing a run without them.
 
 Replay is repeatable to tick granularity. It is not cycle-exact: see
 [fidelity.md](fidelity.md).

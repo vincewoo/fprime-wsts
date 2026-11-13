@@ -60,6 +60,15 @@ class Port:
 
 
 @dataclass
+class PortDef:
+    """A port type's signature. Types are the FPP names of built-in types (`U32`, `bool`),
+    or the name as written for anything else."""
+    name: str
+    params: List[Tuple[str, str, bool]] = field(default_factory=list)  # name, type, passed by reference
+    returns: Optional[str] = None
+
+
+@dataclass
 class Component:
     name: str
     kind: str  # passive, queued, active
@@ -171,6 +180,7 @@ class Model:
     instances: Dict[str, Instance]
     topologies: Dict[str, Topology]
     files: List[Path]  # every FPP file the analysis read
+    port_defs: Dict[str, PortDef] = field(default_factory=dict)  # by qualified port type name
 
 
 # ----------------------------------------------------------------------
@@ -601,8 +611,33 @@ def _port_name(port_instance: dict) -> str:
     return variant.get("name", "?")
 
 
+def _type_text(wrapper) -> Optional[str]:
+    """A type name AST node as text: `U32`, `F64`, `bool`, `string`, or a qualified name as written"""
+    if not isinstance(wrapper, dict) or "AstNode" not in wrapper:
+        return None
+    (variant, detail), = wrapper["AstNode"]["data"].items()
+    if variant in ("TypeNameInt", "TypeNameFloat"):
+        return next(iter(detail["name"]))
+    if variant == "TypeNameBool":
+        return "bool"
+    if variant == "TypeNameString":
+        return "string"
+    if variant == "TypeNameQualIdent":
+        return _qual_ident(detail["name"]["AstNode"]["data"])
+    return variant
+
+
+def _port_def(name: str, data: dict) -> PortDef:
+    params = []
+    for member in data.get("params", []):
+        param = member[1]["AstNode"]["data"]
+        params.append((param["name"], _type_text(param.get("typeName")) or "?", "Ref" in param.get("kind", {})))
+    return PortDef(name, params, _type_text(_some(data.get("returnType"))))
+
+
 def _build_model(ast: list, locations: dict, analysis: dict, files: List[Path]) -> Model:
     names: Dict[int, str] = {}  # definition node id -> qualified name
+    port_defs: Dict[str, PortDef] = {}
     component_kinds: Dict[int, str] = {}
     instance_defs: Dict[int, dict] = {}
     topology_defs: Dict[int, dict] = {}
@@ -622,6 +657,8 @@ def _build_model(ast: list, locations: dict, analysis: dict, files: List[Path]) 
             elif kind == "DefComponent":
                 (component_kind,) = data["kind"].keys()
                 component_kinds[node_id] = component_kind.lower()
+            elif kind == "DefPort":
+                port_defs[qualified] = _port_def(qualified, data)
             elif kind == "DefComponentInstance":
                 instance_defs[node_id] = data
             elif kind == "DefTopology":
@@ -772,7 +809,7 @@ def _build_model(ast: list, locations: dict, analysis: dict, files: List[Path]) 
                 topology.packet_sets.append(_position(locations, set_id))
         topologies[name] = topology
 
-    return Model(components, instances, topologies, files)
+    return Model(components, instances, topologies, files, port_defs)
 
 
 def _collect_node_data(tree, out: Dict[int, dict]) -> None:

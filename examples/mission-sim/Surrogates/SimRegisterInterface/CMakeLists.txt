@@ -1,0 +1,10 @@
+register_fprime_library(
+    AUTOCODER_INPUTS
+        "${CMAKE_CURRENT_LIST_DIR}/SimRegisterInterface.fpp"
+    SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/SimRegisterInterface.cpp"
+    HEADERS
+        "${CMAKE_CURRENT_LIST_DIR}/SimRegisterInterface.hpp"
+    DEPENDS
+        Wsts_Core
+)

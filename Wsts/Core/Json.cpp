@@ -217,6 +217,15 @@ std::int64_t JsonObj::num(const std::string& key, std::int64_t fallback) const {
     return (end != it->second.text.c_str()) ? static_cast<std::int64_t>(real) : fallback;
 }
 
+std::uint64_t JsonObj::unum(const std::string& key, std::uint64_t fallback) const {
+    const auto it = m_values.find(key);
+    if (it == m_values.end()) {
+        return fallback;
+    }
+    std::uint64_t value = 0;
+    return parseUInt(it->second.text, value) ? value : fallback;
+}
+
 double JsonObj::real(const std::string& key, double fallback) const {
     const auto it = m_values.find(key);
     if (it == m_values.end()) {
@@ -253,6 +262,13 @@ JsonObj& JsonObj::set(const std::string& key, const char* value) {
 
 JsonObj& JsonObj::setNum(const std::string& key, std::int64_t value) {
     m_values[key] = Value{std::to_string(value), false};
+    return *this;
+}
+
+JsonObj& JsonObj::setHex(const std::string& key, std::uint64_t value) {
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "0x%llx", static_cast<unsigned long long>(value));
+    m_values[key] = Value{buf, true};
     return *this;
 }
 
@@ -310,6 +326,20 @@ bool parseInt(const std::string& text, std::int64_t& out) {
     errno = 0;
     char* end = nullptr;
     const long long value = std::strtoll(text.c_str(), &end, 0);
+    if (errno != 0 || end == text.c_str() || *end != '\0') {
+        return false;
+    }
+    out = value;
+    return true;
+}
+
+bool parseUInt(const std::string& text, std::uint64_t& out) {
+    if (text.empty() || text[0] == '-') {
+        return false;
+    }
+    errno = 0;
+    char* end = nullptr;
+    const unsigned long long value = std::strtoull(text.c_str(), &end, 0);
     if (errno != 0 || end == text.c_str() || *end != '\0') {
         return false;
     }

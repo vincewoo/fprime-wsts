@@ -44,6 +44,11 @@ def _connect(address: str, timeout: float) -> socket.socket:
             time.sleep(0.1)
 
 
+def _number(value) -> int:
+    """A number of the protocol: JSON number, or a "0x..." string for 64-bit values"""
+    return int(value, 0) if isinstance(value, str) else int(value)
+
+
 class WstsBridge:
     """Connection to a running simulated deployment"""
 
@@ -61,6 +66,7 @@ class WstsBridge:
         self._events_changed = threading.Condition()
         self._i2c: Dict[Tuple[str, int], Callable[[bytes, int], Tuple[int, bytes]]] = {}
         self._spi: Dict[str, Callable[[bytes, int], Tuple[int, bytes]]] = {}
+        self._registers: Dict[str, Tuple[Callable, Optional[Callable]]] = {}
         self._closed = False
         self._reader = threading.Thread(target=self._read_loop, name="wsts-bridge", daemon=True)
         self._reader.start()
@@ -96,6 +102,8 @@ class WstsBridge:
                 kind = message.get("ev")
                 if kind in ("i2c_req", "spi_req"):
                     self._serve(kind, message)
+                elif kind == "reg_req":
+                    self._serve_register(message)
                 elif kind is not None:
                     with self._events_changed:
                         self._events.append(message)
@@ -126,6 +134,26 @@ class WstsBridge:
                 status, data = handler(write, length)
             except Exception:  # a failing model must not hang flight software
                 status, data = 5, b""
+        self._send({"op": "reply", "rid": message["rid"], "status": int(status), "data": bytes(data).hex()})
+
+    def _serve_register(self, message: dict) -> None:
+        """Answer a register access for a block this client is modelling"""
+        read_handler, write_handler = self._registers.get(message["endpoint"], (None, None))
+        offset = _number(message.get("offset", 0))
+        width = int(message.get("width", 4))
+        status, data = 5, b""
+        try:
+            if message.get("access") == "write":
+                if write_handler is not None:
+                    status = int(write_handler(offset, width, _number(message.get("value", 0))) or 0)
+                elif read_handler is not None:
+                    status = 0  # a block with only a read handler ignores writes
+            elif read_handler is not None:
+                answer = read_handler(offset, width)
+                status, value = answer if isinstance(answer, tuple) else (0, answer)
+                data = (int(value) & ((1 << (8 * width)) - 1)).to_bytes(width, "little")
+        except Exception:  # a failing model must not hang flight software
+            status, data = 5, b""
         self._send({"op": "reply", "rid": message["rid"], "status": int(status), "data": bytes(data).hex()})
 
     # ---- Requests ----
@@ -209,6 +237,15 @@ class WstsBridge:
     def i2c_reg_set(self, endpoint: str, addr: int, reg: int, value: int) -> None:
         self.request("i2c_reg_set", endpoint=endpoint, addr=addr, reg=reg, value=value)
 
+    def reg_set(self, endpoint: str, offset: int, value: int) -> None:
+        """Set a register of the register block on an endpoint, without a flight write"""
+        self.request("reg_set", endpoint=endpoint, offset=hex(offset), value=hex(value))
+
+    def raise_irq(self, endpoint: str, number: int = 0) -> None:
+        """Raise an interrupt of the register block on an endpoint. Flight software's handler
+        runs on the simulation's bridge thread, as it would in an interrupt context."""
+        self.request("irq_raise", endpoint=endpoint, number=number)
+
     def model_set(self, model: str, key: str, value) -> None:
         self.request("model_set", model=model, key=key, value=str(value))
 
@@ -288,6 +325,37 @@ class WstsBridge:
         """Become the SPI device on an endpoint"""
         self._spi[endpoint] = handler
         self.request("attach", endpoint=endpoint, kind="spi")
+
+    def serve_register(self, endpoint: str, read_handler: Callable, write_handler: Optional[Callable] = None) -> None:
+        """Become the register block on an endpoint, in place of any model there.
+
+        `read_handler(offset, width)` returns the value, or `(status, value)`; width is 4 or
+        8 bytes and status 0 is success. `write_handler(offset, width, value)` returns None
+        or a status; without one, writes are accepted and ignored. A handler that fails, or
+        does not answer within two seconds, gives flight software all ones on a read.
+        Raise the block's interrupts with `raise_irq`. The handlers run on this client's
+        reader thread: do not call the bridge from inside one.
+        """
+        self._registers[endpoint] = (read_handler, write_handler)
+        self.request("attach", endpoint=endpoint, kind="register")
+
+    def register_accesses(self, endpoint: str) -> List[dict]:
+        """Register reads, writes and interrupts seen on an endpoint since subscribe(), as
+        `{"rec": "reg_rd"|"reg_wr"|"reg_irq", "offset", "value", "status"}` (an interrupt
+        has "number" instead)"""
+        found = []
+        for message in self.events():
+            if message.get("endpoint") != endpoint or message.get("rec") not in ("reg_rd", "reg_wr", "reg_irq"):
+                continue
+            entry = {"rec": message["rec"], "tick": message.get("tick"), "src": message.get("src")}
+            if message["rec"] == "reg_irq":
+                entry["number"] = _number(message.get("number", 0))
+            else:
+                data = message.get("read" if message["rec"] == "reg_rd" else "write", "")
+                entry.update(offset=_number(message.get("offset", 0)), status=int(message.get("status", 0)),
+                             value=int.from_bytes(bytes.fromhex(data), "little"))
+            found.append(entry)
+        return found
 
 
 class WstsSystem:

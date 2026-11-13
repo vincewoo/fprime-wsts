@@ -426,6 +426,33 @@ bool Control::dispatch(const JsonObj& action, std::string& error) {
         this->post(SimEvent::INJECTED, endpoint, "i2c register", reg, value);
         return true;
     }
+    if (op == "reg_set") {
+        const std::string endpoint = action.str("endpoint");
+        if (!action.has("offset") || !action.has("value")) {
+            error = "reg_set needs 'offset' and 'value'";
+            return false;
+        }
+        const std::uint64_t offset = action.unum("offset");
+        const std::uint64_t value = action.unum("value");
+        if (!bus.registerPoke(endpoint, offset, value)) {
+            error = "no register block at '" + endpoint + "' that accepts a value at offset " + action.str("offset");
+            return false;
+        }
+        this->post(SimEvent::INJECTED, endpoint, "register", static_cast<std::uint32_t>(offset),
+                   static_cast<std::uint32_t>(value));
+        return true;
+    }
+    if (op == "irq_raise") {
+        const std::string endpoint = action.str("endpoint");
+        if (!bus.known(endpoint)) {
+            error = "unknown endpoint '" + endpoint + "'";
+            return false;
+        }
+        const auto number = static_cast<std::uint32_t>(action.unum("number"));
+        bus.registerInterrupt(endpoint, number, "inject");
+        this->post(SimEvent::INJECTED, endpoint, "interrupt", number);
+        return true;
+    }
     if (op == "model_set") {
         const std::string name = action.str("model");
         Model* model = nullptr;
@@ -480,7 +507,12 @@ bool Control::dispatch(const JsonObj& action, std::string& error) {
 bool Control::faultSet(const JsonObj& action, std::string& error) {
     Fault fault;
     fault.endpoint = action.str("endpoint");
-    if (!Bus::get().known(fault.endpoint)) {
+    // The interrupts of a register endpoint are a fault target of their own: "<endpoint>:irq"
+    const std::string suffix = Bus::interruptTarget("");
+    const bool interrupts = fault.endpoint.size() > suffix.size() &&
+                            fault.endpoint.compare(fault.endpoint.size() - suffix.size(), suffix.size(), suffix) == 0;
+    const std::string endpoint = interrupts ? fault.endpoint.substr(0, fault.endpoint.size() - suffix.size()) : fault.endpoint;
+    if (!Bus::get().known(endpoint)) {
         error = "unknown endpoint '" + fault.endpoint + "'";
         return false;
     }
@@ -644,7 +676,7 @@ bool Control::scenarioStart(std::string& error) {
     Bus& bus = Bus::get();
     if (m_scenarioMode == ReplayMode::RESPONSES) {
         // Recorded I2C/SPI responses are served in order, per endpoint and I2C address, from
-        // the first poll on
+        // the first poll on; recorded register reads per endpoint and offset
         bus.setReplay(true);
         for (const Step& step : m_steps) {
             const std::string rec = step.action.str("rec");
@@ -654,6 +686,15 @@ bool Control::scenarioStart(std::string& error) {
                 const auto addr = rec == "i2c" ? static_cast<std::uint32_t>(step.action.num("addr")) : 0U;
                 bus.queueReplayResponse(step.action.str("endpoint"), addr, static_cast<int>(step.action.num("status")),
                                         read);
+            } else if (rec == "reg_rd") {
+                Bytes read;
+                (void)fromHex(step.action.str("read"), read);
+                std::uint64_t value = 0;
+                for (std::size_t i = 0; i < read.size() && i < 8; i++) {
+                    value |= static_cast<std::uint64_t>(read[i]) << (8 * i);
+                }
+                bus.queueRegisterReplay(step.action.str("endpoint"), step.action.unum("offset"),
+                                        static_cast<int>(step.action.num("status")), value);
             }
         }
     }
@@ -710,6 +751,8 @@ void Control::scenarioRun() {
             bus.byteStreamInject(step.str("endpoint"), data, "replay");
         } else if (rec == "gpio_in") {
             bus.gpioSetInput(step.str("endpoint"), step.flag("level"), "replay");
+        } else if (rec == "reg_irq") {
+            bus.registerInterrupt(step.str("endpoint"), static_cast<std::uint32_t>(step.unum("number")), "replay");
         }
     }
     if (finished) {

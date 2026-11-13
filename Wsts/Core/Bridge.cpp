@@ -121,6 +121,35 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
         std::string m_endpoint;
     };
 
+    //! Register block whose behaviour is supplied by this client
+    class RemoteRegister : public RegisterDevice {
+      public:
+        RemoteRegister(Client& client, std::string endpoint) : m_client(client), m_endpoint(std::move(endpoint)) {}
+        int read(std::uint64_t offset, unsigned width, std::uint64_t& value) override {
+            JsonObj request;
+            request.set("ev", "reg_req").set("endpoint", m_endpoint).set("access", "read");
+            request.setHex("offset", offset).setNum("width", width);
+            Bytes data(width, 0);
+            const int status = m_client.rpc(request, data);
+            value = 0;
+            for (std::size_t i = 0; i < data.size() && i < 8; i++) {
+                value |= static_cast<std::uint64_t>(data[i]) << (8 * i);
+            }
+            return status;
+        }
+        int write(std::uint64_t offset, unsigned width, std::uint64_t value) override {
+            JsonObj request;
+            request.set("ev", "reg_req").set("endpoint", m_endpoint).set("access", "write");
+            request.setHex("offset", offset).setNum("width", width).setHex("value", value);
+            Bytes none;
+            return m_client.rpc(request, none);
+        }
+
+      private:
+        Client& m_client;
+        std::string m_endpoint;
+    };
+
     void readLoop() {
         std::string buffer;
         char chunk[4096];
@@ -142,6 +171,10 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
         // Detach anything this client was modelling, then release waiting transactions
         for (const std::string& endpoint : m_attached) {
             Bus::get().detach(endpoint);
+        }
+        // A register endpoint has one block: the one this client stood in for answers again
+        for (auto it = m_register.rbegin(); it != m_register.rend(); ++it) {
+            Bus::get().replaceRegister(it->endpoint, it->remote.get(), it->previous);
         }
         m_done.store(true);
         m_rpcCv.notify_all();
@@ -219,8 +252,13 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
         } else if (kind == "spi") {
             m_spi.emplace_back(new RemoteSpi(*this, endpoint));
             Bus::get().attachSpi(endpoint, m_spi.back().get());
+        } else if (kind == "register") {
+            std::unique_ptr<RemoteRegister> remote(new RemoteRegister(*this, endpoint));
+            RegisterDevice* previous = Bus::get().attachRegister(endpoint, remote.get());
+            m_register.push_back(AttachedRegister{endpoint, std::move(remote), previous});
+            return true;
         } else {
-            error = "attach supports kind i2c or spi; byte stream and GPIO models use subscribe plus "
+            error = "attach supports kind i2c, spi or register; byte stream and GPIO models use subscribe plus "
                     "inject_bytes / gpio_force";
             return false;
         }
@@ -240,6 +278,12 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
     std::uint32_t m_nextRid = 1;
     std::vector<std::unique_ptr<RemoteI2c>> m_i2c;
     std::vector<std::unique_ptr<RemoteSpi>> m_spi;
+    struct AttachedRegister {
+        std::string endpoint;
+        std::unique_ptr<RemoteRegister> remote;
+        RegisterDevice* previous;  //!< the block that was on the endpoint before
+    };
+    std::vector<AttachedRegister> m_register;
     std::vector<std::string> m_attached;
 };
 

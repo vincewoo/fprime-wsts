@@ -11,6 +11,10 @@ Behind the surrogates:
   - sensorUart the toolkit's Wsts::ScriptedByteStream, reporting once a second
   - heaterPin, switchPin
                Sim.SimLinuxGpio, the simulation project's mirror of Drv.LinuxGpioDriver
+  - fpgaRegs   the toolkit's Wsts::RegisterFile: the registers of the FPGA's housekeeping
+               block and its frame interrupt once a second. The register interface
+               component (of sensor-lib) is replaced by Wsts.SimRegister, written with that
+               component's ports; the driver above it, Components.FpgaMonitor, is flight code
 """
 
 import json
@@ -22,6 +26,11 @@ from conftest import T
 
 IMU_ADDR = 0x68
 POWER_ADDR = 0x40
+
+# Registers of the FPGA's housekeeping block (Components/FpgaMonitor/FpgaMonitor.hpp)
+REG_ID, REG_STATUS, REG_FRAME_COUNT, REG_TEMPERATURE, REG_HEARTBEAT, REG_LEDS = 0x00, 0x04, 0x08, 0x0C, 0x10, 0x14
+FPGA_ID = 0xF00D0001
+STATUS_FRAME_READY, STATUS_OVERRUN = 0x1, 0x2
 
 
 @pytest.fixture
@@ -36,7 +45,7 @@ def quiet_sensor(payload):
 
 def test_surrogates_are_bound(payload):
     status = payload.status()
-    assert set(status["endpoints"]) == {"i2cBus", "spiBus", "sensorUart", "heaterPin", "switchPin", "hubDriver"}
+    assert set(status["endpoints"]) == {"i2cBus", "spiBus", "sensorUart", "heaterPin", "switchPin", "hubDriver", "fpgaRegs"}
 
 
 def test_two_devices_answer_on_one_i2c_bus(payload):
@@ -55,6 +64,8 @@ def test_flight_telemetry_comes_from_models(gds):
     gds.assert_telemetry("Payload.power.Current", value=500, timeout=T)
     gds.assert_telemetry("Payload.sensor.Temperature", value=21.5, timeout=T)
     gds.assert_telemetry("Payload.adc.DetectorCounts", value=0, timeout=T)
+    # A register of the FPGA block, read by the flight driver through the register interface
+    gds.assert_telemetry("Payload.fpga.Temperature", value=21.5, timeout=T)
 
 
 def test_project_model_takes_engineering_units(gds, payload):
@@ -293,3 +304,167 @@ def test_spi_faults_then_a_device_model_in_python(gds, payload):
     # The external model has gone away. Unlike I2C, nothing reports it: with no device on
     # the bus MISO floats, and the transfer reads zeros
     gds.assert_telemetry("Payload.adc.DetectorCounts", value=0, timeout=T)
+
+
+# ----------------------------------------------------------------------
+# The register block behind fpgaRegs
+# ----------------------------------------------------------------------
+
+
+def test_flight_driver_reads_and_writes_the_register_block(gds, payload):
+    # At 10 Hz the driver reads the temperature register and writes the heartbeat
+    payload.advance(10)
+    payload.events(clear=True)
+    payload.advance(20)  # one second at 20 Hz
+    accesses = payload.register_accesses("fpgaRegs")
+    reads = [a for a in accesses if a["rec"] == "reg_rd" and a["offset"] == REG_TEMPERATURE]
+    assert len(reads) >= 9 and all(a["value"] == 215 and a["status"] == 0 for a in reads)
+    beats = [a["value"] for a in accesses if a["rec"] == "reg_wr" and a["offset"] == REG_HEARTBEAT]
+    assert len(beats) >= 9 and beats == list(range(beats[0], beats[0] + len(beats)))
+    assert not [a for a in accesses if a.get("offset") == REG_ID], "the identity is read until it is right, then no more"
+
+    # The register follows the model, and the telemetry the register
+    payload.reg_set("fpgaRegs", REG_TEMPERATURE, 305)
+    gds.assert_telemetry("Payload.fpga.Temperature", value=30.5, timeout=T)
+    payload.model_set("fpga", "reg.0x0C", 215)
+    gds.assert_telemetry("Payload.fpga.Temperature", value=21.5, timeout=T)
+
+    # A flight command becomes a register write
+    payload.events(clear=True)
+    gds.send_and_assert_command("Payload.fpga.FPGA_SET_LEDS", [0xA5], timeout=T)
+    gds.assert_event("Payload.fpga.LedsSet", [0xA5], timeout=T)
+    assert [a["value"] for a in payload.register_accesses("fpgaRegs") if a.get("offset") == REG_LEDS] == [0xA5]
+
+
+def test_register_interrupt_is_serviced_by_flight_software(gds, payload):
+    # The model sets "frame ready" and raises interrupt 1 once a second. The driver's
+    # handler queues the service; its own thread reads the status and clears it.
+    payload.events(clear=True)
+    payload.advance(45)
+    accesses = payload.register_accesses("fpgaRegs")
+    raised = [a for a in accesses if a["rec"] == "reg_irq"]
+    assert len(raised) >= 2 and all(a["number"] == 1 and a["src"] == "model" for a in raised)
+    status_reads = [a["value"] for a in accesses if a["rec"] == "reg_rd" and a["offset"] == REG_STATUS]
+    status_clears = [a["value"] for a in accesses if a["rec"] == "reg_wr" and a["offset"] == REG_STATUS]
+    assert len(status_reads) >= 2 and set(status_reads) == {STATUS_FRAME_READY}
+    assert status_clears == status_reads, "write 1 to clear what was read"
+    gds.assert_telemetry("Payload.fpga.Interrupts", timeout=T)
+
+    # Another cause in the status register, and an interrupt raised by hand
+    payload.reg_set("fpgaRegs", REG_FRAME_COUNT, 1234)
+    payload.reg_set("fpgaRegs", REG_STATUS, STATUS_FRAME_READY | STATUS_OVERRUN)
+    payload.raise_irq("fpgaRegs", 1)
+    gds.assert_event("Payload.fpga.FrameOverrun", timeout=T)
+    gds.assert_telemetry("Payload.fpga.FrameCount", value=1234, timeout=T)
+    payload.reg_set("fpgaRegs", REG_FRAME_COUNT, 0)
+
+
+def test_lost_and_duplicated_interrupts(payload):
+    # The interrupts of a register endpoint are a fault target of their own
+    payload.fault_set("fpgaRegs:irq", "drop")
+    payload.advance(5)
+    payload.events(clear=True)
+    payload.advance(45)
+    accesses = payload.register_accesses("fpgaRegs")
+    assert not [a for a in accesses if a["rec"] == "reg_irq"], "nothing reaches flight software"
+    assert not [a for a in accesses if a.get("offset") == REG_STATUS], "so the status is never serviced"
+    assert [a for a in accesses if a.get("offset") == REG_TEMPERATURE], "register traffic is not affected"
+    payload.fault_clear("fpgaRegs:irq")
+
+    payload.fault_set("fpgaRegs:irq", "duplicate", count=1)
+    payload.events(clear=True)
+    payload.raise_irq("fpgaRegs", 1)
+    payload.advance(4)
+    assert len([a for a in payload.register_accesses("fpgaRegs") if a["rec"] == "reg_irq" and a["src"] == "inject"]) == 2
+    assert payload.status()["active_faults"] == 0
+
+
+def test_register_faults_show_in_flight_telemetry_and_events(gds, payload):
+    # Stuck: every read returns the value, whatever the model holds. 50.0 degrees.
+    payload.fault_set("fpgaRegs", "stuck", arg=500, direction="to_flight")
+    gds.assert_event("Payload.wstsControl.FaultTriggered", timeout=T)
+    gds.assert_telemetry("Payload.fpga.Temperature", value=50.0, timeout=T)
+    payload.fault_clear("fpgaRegs")
+    gds.assert_telemetry("Payload.fpga.Temperature", value=21.5, timeout=T)
+
+    # Error: the reads fail. The register ports have no status, so flight software reads
+    # all ones, which the driver reports itself; the bus counts the failures.
+    errors = payload.status()["errors"]
+    gds.clear_histories()
+    payload.fault_set("fpgaRegs", "error", arg=3, count=4, direction="to_flight")
+    gds.assert_event("Payload.fpga.FpgaReadInvalid", [REG_TEMPERATURE], timeout=T)
+    gds.assert_event("Payload.fpga.FpgaIdMismatch", [0xFFFFFFFF], timeout=T)
+    gds.assert_event("Payload.wstsControl.FaultExpired", timeout=T)
+    gds.assert_event("Payload.fpga.FpgaIdentified", [FPGA_ID], timeout=T)
+    assert payload.status()["errors"] >= errors + 4
+    gds.assert_telemetry("Payload.wstsControl.BusErrors", timeout=T)
+    gds.assert_telemetry("Payload.fpga.Temperature", value=21.5, timeout=T)
+
+
+def test_register_commands_through_gds(gds, payload):
+    # REG_SET and IRQ_RAISE, as an operator sends them through the hub. 64-bit arguments.
+    gds.send_and_assert_command("Payload.wstsControl.REG_SET", ["fpgaRegs", REG_TEMPERATURE, 335], timeout=T)
+    gds.assert_telemetry("Payload.fpga.Temperature", value=33.5, timeout=T)
+    gds.send_and_assert_command("Payload.wstsControl.REG_SET", ["fpgaRegs", REG_TEMPERATURE, 215], timeout=T)
+    payload.events(clear=True)
+    gds.send_and_assert_command("Payload.wstsControl.IRQ_RAISE", ["fpgaRegs", 7], timeout=T)
+    payload.wait_for(lambda m: m.get("rec") == "reg_irq" and m.get("number") == 7 and m.get("src") == "inject")
+    # A register the block cannot take: the command fails and says why
+    gds.send_command("Payload.wstsControl.REG_SET", ["i2cBus", 0, 1])
+    gds.assert_event("Payload.wstsControl.ActionFailed", timeout=T)
+
+
+def test_register_traffic_is_recorded_and_replayed(gds, payload, tmp_path):
+    recording = tmp_path / "registers.jsonl"
+    payload.record_start(recording)
+    payload.advance(30)
+    payload.record_stop()
+    lines = [json.loads(line) for line in recording.read_text().splitlines()]
+    reads = [l for l in lines if l.get("rec") == "reg_rd" and l["endpoint"] == "fpgaRegs"]
+    assert {"offset": "0xc", "width": 4, "read": "d7000000", "status": 0} == {
+        key: reads[0][key] for key in ("offset", "width", "read", "status")}
+    assert any(l.get("rec") == "reg_wr" and l["offset"] == "0x10" for l in lines)
+    assert any(l.get("rec") == "reg_irq" and l["number"] == 1 for l in lines)
+
+    # Responses replay: the model is bypassed, flight software reads what was recorded
+    payload.model_set("fpga", "reg.0x0C", 400)
+    gds.assert_telemetry("Payload.fpga.Temperature", value=40.0, timeout=T)
+    gds.clear_histories()
+    payload.events(clear=True)
+    payload.scenario_load(recording, mode="responses")
+    payload.scenario_start()
+    payload.wait_for(lambda m: m.get("rec") == "reg_rd" and m.get("src") == "replay" and m.get("read") == "d7000000")
+    payload.wait_for(lambda m: m.get("rec") == "reg_irq" and m.get("src") == "replay")
+    while payload.status()["scenario_state"] == "running":
+        time.sleep(0.05)
+    gds.assert_telemetry("Payload.fpga.Temperature", value=40.0, timeout=T)
+    payload.model_set("fpga", "reg.0x0C", 215)
+    gds.assert_telemetry("Payload.fpga.Temperature", value=21.5, timeout=T)
+
+
+def test_python_register_model(gds, payload):
+    """An external process takes over as the FPGA block, and gives it back when it leaves"""
+    from fprime_wsts.bridge import WstsBridge
+
+    registers = {REG_ID: FPGA_ID, REG_STATUS: 0, REG_FRAME_COUNT: 77, REG_TEMPERATURE: 995}
+    writes = []
+
+    def read(offset, width):
+        return registers[offset] if offset in registers else (1, 0)
+
+    def write(offset, width, value):
+        writes.append((offset, value))
+        if offset == REG_STATUS:
+            registers[REG_STATUS] &= ~value
+
+    with WstsBridge(payload.address) as model:
+        model.serve_register("fpgaRegs", read, write)
+        gds.assert_telemetry("Payload.fpga.Temperature", value=99.5, timeout=T)
+        # Its interrupt, with a cause in its status register
+        registers[REG_STATUS] = STATUS_FRAME_READY
+        model.raise_irq("fpgaRegs", 1)
+        gds.assert_telemetry("Payload.fpga.FrameCount", value=77, timeout=T)
+        assert (REG_STATUS, STATUS_FRAME_READY) in writes
+        assert any(offset == REG_HEARTBEAT for offset, _ in writes)
+    # The external model has gone away: the block of the manifest answers again
+    gds.assert_telemetry("Payload.fpga.Temperature", value=21.5, timeout=T)

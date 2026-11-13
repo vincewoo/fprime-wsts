@@ -633,7 +633,9 @@ def test_headers_from_outside_the_build_roots(tmp_path):
 @needs_fpp
 def test_requirements_of_the_example(default, no_stub):
     clean = default.report["host_requirements"]
-    assert list(clean["system_headers"]) == ["getopt.h"], "Payload/Main.cpp; <board/revision.h> is in the simulation project"
+    # Payload/Main.cpp, and sensor-lib's register interface, which maps a device on the flight
+    # board; <board/revision.h> is in the simulation project
+    assert list(clean["system_headers"]) == ["fcntl.h", "getopt.h", "sys/mman.h", "unistd.h"]
     assert clean["libraries"] == {} and clean["packages"] == {} and clean["sdk_paths"] == []
     assert clean["search"]["include_directories"] == [os.path.relpath(SIM / "host" / "include", default.output)]
     modules = {m["module"]: m for m in clean["modules"]}
@@ -642,7 +644,7 @@ def test_requirements_of_the_example(default, no_stub):
     assert modules[UNITS]["has_stub_variant"] and "stub_variant" not in modules[UNITS]
     assert clean["flight_toolchain"] == "vxworks" and clean["flight_compiler"]["toolchain_file"].endswith("toolchain/vxworks.cmake")
     text = (default.output / "wsts-report.md").read_text()
-    assert "## What the build takes from the host" in text and "- System headers: `getopt.h`" in text
+    assert "## What the build takes from the host" in text and "- System headers: `fcntl.h`, `getopt.h`" in text
     assert "standard library headers include one another differently between compilers and versions" in text
     # Without the stub variant the Imager's SDK sources are what is compiled
     needed = no_stub.report["host_requirements"]
