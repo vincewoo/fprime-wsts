@@ -138,7 +138,7 @@ device models. [docs/design.md](docs/design.md) has more detailed diagrams of ea
   direct input/output injection; scenario files; recording and replay. The same actions are
   available as F´ commands (`Wsts.SimControl`, with its own events and telemetry), over a
   socket bridge, and in scenario files.
-- **A Python client and launcher** for tests and agents: `fprime-wsts run`, the `WstsBridge`
+- **A builder, a launcher and a Python client** for tests and agents: `fprime-wsts build`, `fprime-wsts run`, the `WstsBridge`
   class, and pytest fixtures.
 - **Multi-computer systems**: several deployments run as one simulated system, with the
   UART or Ethernet links between them carried by WSTS, one GDS on a merged dictionary, and
@@ -192,7 +192,7 @@ fprime-wsts check-host examples/mission-sim/wsts/Mission
 ```
 
 ```bash
-for e in cdh payload; do (cd examples/mission-sim/wsts/Mission/$e && fprime-util generate && fprime-util build); done
+fprime-wsts build examples/mission-sim/wsts/Mission
 ```
 
 ```bash

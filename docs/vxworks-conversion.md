@@ -14,7 +14,7 @@ fprime-wsts generate examples/mission-sim/wsts-system.yaml
 ```
 
 ```bash
-cd examples/mission-sim/wsts/Mission/cdh && fprime-util generate && fprime-util build
+fprime-wsts build examples/mission-sim/wsts/Mission --element cdh
 ```
 
 No VxWorks toolchain is involved at any point.

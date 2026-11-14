@@ -31,7 +31,7 @@ def find_artifacts(directory: Path):
     binaries = [p for p in directory.glob("build-artifacts/*/*/bin/*") if p.is_file() and os.access(p, os.X_OK)]
     if not binaries:
         raise WstsError(f"no built deployment under {directory}/build-artifacts. Build it first:\n"
-                       f"  cd {directory} && fprime-util generate && fprime-util build")
+                       f"  fprime-wsts build {directory}")
     binary = binaries[0]
     dictionaries = list(binary.parent.parent.glob("dict/*Dictionary.json"))
     return binary, (dictionaries[0] if dictionaries else None), json.loads(report.read_text())

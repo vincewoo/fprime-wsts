@@ -186,7 +186,7 @@ manifest overrides the placement; `control: none` leaves the instance out.
 Build each element once (they are separate F´ builds), then run the system directory:
 
 ```bash
-for e in cdh payload; do (cd examples/mission-sim/wsts/Mission/$e && fprime-util generate && fprime-util build); done
+fprime-wsts build examples/mission-sim/wsts/Mission
 ```
 
 ```bash

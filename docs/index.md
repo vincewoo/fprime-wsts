@@ -108,7 +108,7 @@ builds. The hand-written topology code and `Main.cpp` compile unchanged.
 ```bash
 fprime-wsts generate my-mission-sim/wsts.yaml          # write the overlay project
 cd my-mission-sim/wsts/MyDeployment
-fprime-util generate && fprime-util build              # build it with the host toolchain
+fprime-wsts build                                     # build it with the host toolchain
 fprime-wsts run . --gds-gui                            # run it, with the GDS in a browser
 ```
 

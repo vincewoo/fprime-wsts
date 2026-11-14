@@ -40,6 +40,7 @@ Each fix belongs in one of three places:
 | `… registers CONFIGURATION_OVERRIDES directly` | The override call is in `library.cmake` | Move it to `config/CMakeLists.txt` and `add_fprime_subdirectory()` it |
 | `uses FPP files from the simulation project … but it has no library.cmake` | Simulation modules with no build | Add a `library.cmake` |
 | `base ID … for instance …` from FPP | A simulator instance's IDs collide | Move the simulator's base ID; flight IDs never move |
+| `…yaml:<line>:<column>: not valid YAML` | A syntax error in a manifest or catalog | Fix it at the place named: an unclosed `[` or `{`, a tab, a missing space after `:` |
 | A Python traceback instead of `fprime-wsts: error:` | A toolkit bug | Report it with the traceback and the manifest |
 
 ## Host check
@@ -52,15 +53,15 @@ Each fix belongs in one of three places:
 | A `REQUIRED` package | Install it, or `cmake.cache: {<Pkg>_DIR: …}` |
 | A false positive | `host.ignore: [<name>]` |
 
-## Configure (`fprime-util generate`)
+## Configure (`fprime-wsts build`, or `fprime-util generate`)
 
 | Symptom | Fix |
 |---|---|
-| `build directory … already exists` | Run only `fprime-util build`, or `fprime-util generate -f` |
+| `build directory … already exists` | Use `fprime-wsts build`, which configures only when it has to. By hand: run only `fprime-util build`, or `fprime-util generate -f` |
 | `Cannot find source file` on an SDK path | The SDK warning from `generate`: `cmake.stub_variants`, or one of its other options |
 | A library's `library.cmake` stops: a variable is not set | `cmake.cache: {VAR: value}`; if it needs a function first, `cmake.include_early` |
 | A target defined twice | `cmake.exclude_subdirectories` on the duplicate |
-| A changed `cmake.cache` value has no effect | The build directory cached the old one: `fprime-util generate -f` |
+| A changed `cmake.cache` value has no effect | The build directory cached the old one. `fprime-wsts build` configures again by itself; for a directory made by hand, `fprime-wsts build --fresh` or `fprime-util generate -f` |
 | `restrict_platforms` stops configuration | A platform library's module is added on the host: `cmake.exclude_subdirectories` |
 
 ## Compile and link
@@ -92,7 +93,7 @@ Each fix belongs in one of three places:
 
 ## Getting more detail
 
-- **Logs:** `<dir>/wsts-logs/sim.log` and `gds.log` (per element for a system).
+- **Logs:** `<dir>/wsts-logs/sim.log`, `gds.log` and `build.log` (per element for a system).
 - **The report:** `wsts-report.md` says what was replaced and what was kept.
 - **A recording:** `--record run.jsonl` logs every bus transaction with its status.
 - **A backtrace:** run the binary under `gdb` from the generated directory, with
