@@ -565,7 +565,8 @@ def test_build_line_has_the_configure_options(tmp_path, capsys, monkeypatch):
     (sim / "payload.yaml").write_text(text.replace("  cache:\n", "  cache:\n    CMAKE_BUILD_TYPE: Debug\n"))
     assert main(["generate", str(sim / "payload.yaml"), "--output", str(tmp_path / "out")]) == 0
     printed = capsys.readouterr().out
-    assert f"Build it with: cd {tmp_path / 'out'} && fprime-util generate -DCMAKE_BUILD_TYPE=Debug && fprime-util build" in printed
+    assert f"Build it with: fprime-wsts build {tmp_path / 'out'}" in printed, "which passes the option itself"
+    assert f"(by hand: cd {tmp_path / 'out'} && fprime-util generate -DCMAKE_BUILD_TYPE=Debug && fprime-util build)" in printed
     assert (tmp_path / "out" / "wsts-host.md").is_file(), "the host check of this machine, beside the report"
     assert main(["generate", str(sim / "payload.yaml"), "--output", str(tmp_path / "out"), "--check"]) == 0, \
         "which is not part of what --check compares"
@@ -628,6 +629,33 @@ def test_headers_from_outside_the_build_roots(tmp_path):
     assert needs["png.h"] == [{"module": "Cam", "file": "project/Cam/Cam.hpp", "line": 1}], "through the module's header"
     assert needs["zmq.h"][0]["file"] == "lib/Algo/include/algo/filter.h", "and through a library's header"
     assert needs["revb/io.h"][0]["condition"] == "#ifdef BOARD_REV_B"
+
+
+def test_unit_test_sources_ask_nothing_of_the_host(tmp_path):
+    """The simulated build never builds a module's unit tests, whichever variant it reads:
+    what only they include or link (GoogleTest) is not a requirement. It used to be one
+    whenever the framework's googletest submodule was not checked out."""
+    module = write_cmake(tmp_path / "Cam", (
+        "if (BUILD_TESTING)\n"
+        "    register_fprime_library(SOURCES \"${CMAKE_CURRENT_LIST_DIR}/Stub.cpp\")\n"
+        "    register_fprime_ut(SOURCES \"${CMAKE_CURRENT_LIST_DIR}/test/ut/StubTest.cpp\" DEPENDS -lgmock)\n"
+        "else ()\n"
+        "    register_fprime_library(SOURCES \"${CMAKE_CURRENT_LIST_DIR}/Sdk.cpp\")\n"
+        "endif ()\n"))
+    (module / "test" / "ut").mkdir(parents=True)
+    (module / "Stub.cpp").write_text("#include <unistd.h>\n")
+    (module / "Sdk.cpp").write_text("#include <vendor/sdk.h>\n")
+    (module / "test" / "ut" / "StubTest.cpp").write_text("#include <gtest/gtest.h>\n")
+    for stub, expected in ((True, ["Stub.cpp"]), (False, ["Sdk.cpp"])):
+        tree = flight_cmake.read_tree(module / "CMakeLists.txt", stub_variants=[module] if stub else [])
+        sources = hostcheck.module_sources(tree, lambda path: "Cam")
+        assert [source.name for source, _ in sources] == expected
+        assert hostcheck.scan_cmake(tree, lambda path: "Cam", lambda path: path.name)["libraries"] == {}
+    # A module that names no sources compiles what is in its directory, not its tests'
+    bare = write_cmake(tmp_path / "Bare", "register_fprime_ut(SOURCES test/ut/T.cpp)\nregister_fprime_module()\n")
+    (bare / "Bare.cpp").write_text("")
+    tree = flight_cmake.read_tree(bare / "CMakeLists.txt")
+    assert [source.name for source, _ in hostcheck.module_sources(tree, lambda path: "Bare")] == ["Bare.cpp"]
 
 
 @needs_fpp

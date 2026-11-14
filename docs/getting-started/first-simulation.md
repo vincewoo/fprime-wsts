@@ -74,7 +74,7 @@ compiled. For the example it should report nothing missing.
 Each computer is a separate F´ build:
 
 ```bash
-for e in cdh payload; do (cd examples/mission-sim/wsts/Mission/$e && fprime-util generate && fprime-util build); done
+fprime-wsts build examples/mission-sim/wsts/Mission
 ```
 
 No VxWorks toolchain is involved: Cdh is built with the host compiler against the F´

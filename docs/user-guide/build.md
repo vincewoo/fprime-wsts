@@ -38,25 +38,41 @@ host:
 
 ## Build
 
-The overlay is an ordinary F´ project:
-
 ```bash
-cd my-mission-sim/wsts/MyDeployment
+fprime-wsts build my-mission-sim/wsts/MyDeployment
 ```
 
-```bash
-fprime-util generate && fprime-util build -j"$(nproc)"
-```
+It runs CMake's configure step (`fprime-util generate`) when there is no build directory
+yet, then `fprime-util build`. Given a system directory it builds every element, one after
+another; given a manifest it runs `fprime-wsts generate` first. The executable is under
+`build-artifacts/`, as for any F´ deployment, but you will normally start it with
+[`fprime-wsts run`](run.md).
 
-The executable is under `build-artifacts/`, as for any F´ deployment, but you will
-normally start it with [`fprime-wsts run`](run.md).
+| Option | Meaning |
+|---|---|
+| `-j N` | Parallel build jobs (default: the number of processors) |
+| `--element NAME` | Build only this element of a system (repeatable) |
+| `--fresh` | Configure again from nothing, removing the build directory |
+| `-D NAME=VALUE` | A CMake option for the configure step, such as `-D CMAKE_BUILD_TYPE=Debug` |
+| `--keep-going` | Build the remaining elements of a system after one fails |
+| `--json` | Print a summary instead of the build output |
 
-!!! warning "After regenerating"
+Run it again after every `fprime-wsts generate`: it does not configure a second time unless
+it has to. A build directory caches some settings and never reads them again (`cmake.cache`
+of the manifest, values carried over from the flight project, the `-D` options), so when
+one of those has changed the command removes the build directory and configures again,
+and says so. The whole output is in `wsts-logs/build.log` (`wsts-logs/<element>/build.log`
+for a system). When a build fails, the exit status is 1 and the compiler, linker and CMake
+errors are listed at the end, and under `errors` in the `--json` summary.
 
-    `fprime-util generate` fails if the build directory already exists. After a
-    `fprime-wsts generate`, run only `fprime-util build`. After changing `cmake.cache` in
-    the manifest, regenerate the build directory with `fprime-util generate -f`: CMake
-    keeps the value it cached.
+!!! note "Building by hand"
+
+    The overlay is an ordinary F´ project, so `fprime-util generate && fprime-util build`
+    in its directory works too. `fprime-util generate` fails if the build directory
+    already exists: after a `fprime-wsts generate`, run only `fprime-util build`. After
+    changing `cmake.cache` in the manifest, regenerate the build directory with
+    `fprime-util generate -f`: CMake keeps the value it cached. A build directory made
+    this way is used by `fprime-wsts build` as it is, until `--fresh`.
 
 ## Host bridges
 
@@ -128,7 +144,7 @@ for you; the report lists the statements that are not. `cmake.cache` cannot chan
 or pass the option when configuring:
 
 ```bash
-fprime-util generate -DCMAKE_BUILD_TYPE=Debug
+fprime-wsts build my-mission-sim/wsts/MyDeployment -D CMAKE_BUILD_TYPE=Debug
 ```
 
 ### More CMake keys

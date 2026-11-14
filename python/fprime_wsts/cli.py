@@ -11,7 +11,7 @@ from . import __version__
 from .fpp import WstsError
 
 
-def cmd_generate(args: argparse.Namespace) -> int:
+def cmd_generate(args: argparse.Namespace, hint: bool = True) -> int:
     from .generate import generate
     from .manifest import load_manifest
     from .system import find_project, generate_system, is_system_manifest, load_system
@@ -39,10 +39,10 @@ def cmd_generate(args: argparse.Namespace) -> int:
                       f"{link['b']['element']}.{link['b']['endpoint']}")
         options = {name: report.get("configure_options", []) for name, report in reports.items()}
         if any(options.values()):
-            build = "Build each element with: cd {0}/<element> && fprime-util generate <options> && fprime-util build\n" + \
+            by_hand = "cd {0}/<element> && fprime-util generate <options> && fprime-util build\n" + \
                 "\n".join(f"  options for {name}: {' '.join(values)}" for name, values in options.items() if values)
         else:
-            build = "Build each element with: cd {0}/<element> && fprime-util generate && fprime-util build"
+            by_hand = "cd {0}/<element> && fprime-util generate && fprime-util build"
         what = "Simulated system"
     else:
         manifest = load_manifest(manifest_path)
@@ -55,7 +55,8 @@ def cmd_generate(args: argparse.Namespace) -> int:
             _print_report(result.report)
             _host_summary(result.report, result.output, write=not args.check)
         options = "".join(f" {option}" for option in result.report.get("configure_options", []))
-        what, build = "Simulated deployment", f"Build it with: cd {{0}} && fprime-util generate{options} && fprime-util build"
+        what, by_hand = "Simulated deployment", f"cd {{0}} && fprime-util generate{options} && fprime-util build"
+    args.result_output = result.output  # for `fprime-wsts build <manifest>`
     for notice in notices:
         print(f"note: {notice}", file=sys.stderr)
     if args.check:
@@ -69,7 +70,9 @@ def cmd_generate(args: argparse.Namespace) -> int:
         return 0
     if not args.json:
         print(f"{what} written to {result.output}")
-        print(build.format(result.output))
+        if hint:
+            print(f"Build it with: fprime-wsts build {result.output}")
+            print(f"  (by hand: {by_hand.format(result.output)})")
     return 0
 
 
@@ -166,6 +169,12 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_build(args: argparse.Namespace) -> int:
+    from .build import build_cli
+
+    return build_cli(args)
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     from .runner import run_cli
 
@@ -198,6 +207,25 @@ def main(argv=None) -> int:
     check_host.add_argument("--project", help="flight F Prime project root, for a manifest (default: as for generate)")
     check_host.add_argument("--json", action="store_true", help="print the result as JSON")
     check_host.set_defaults(handler=cmd_check_host)
+
+    build = commands.add_parser(
+        "build", help="configure and build a generated simulated deployment, or every element of a generated system; "
+                      "given a manifest, generate first. Exit status 1 when a build fails")
+    build.add_argument("target", nargs="?", default=".",
+                       help="a generated simulation deployment or system directory, or a deployment or system manifest "
+                            "(default: the current directory)")
+    build.add_argument("-j", "--jobs", type=int, help="parallel build jobs (default: the number of processors)")
+    build.add_argument("--fresh", action="store_true",
+                       help="configure again from nothing, removing the build directory (fprime-util generate -f)")
+    build.add_argument("--element", action="append", metavar="NAME", help="build only this element of a system (repeatable)")
+    build.add_argument("-D", dest="define", action="append", metavar="NAME=VALUE",
+                       help="CMake option for the configure step, e.g. -D CMAKE_BUILD_TYPE=Debug (repeatable); "
+                            "a change configures again")
+    build.add_argument("--keep-going", action="store_true", help="build the remaining elements after one fails")
+    build.add_argument("--project", help="flight F Prime project root, for a manifest (default: as for generate)")
+    build.add_argument("--json", action="store_true",
+                       help="print a JSON summary instead of the build output, which goes to the log")
+    build.set_defaults(handler=cmd_build)
 
     report = commands.add_parser("report", help="show the fidelity report of a generated deployment")
     report.add_argument("directory", nargs="?", default=".")

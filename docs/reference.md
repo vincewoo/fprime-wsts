@@ -6,6 +6,7 @@
 |---|---|
 | `fprime-wsts generate <wsts.yaml> [--project DIR] [--output DIR] [--check] [--json]` | Create or refresh a simulated deployment. `--project` defaults to the manifest's `project`, else the nearest `settings.ini` above the manifest. `--check` writes nothing and exits 1 if the output is out of date |
 | `fprime-wsts generate <wsts-system.yaml> [--output DIR] [--check] [--json]` | The same for every element of a [system](systems.md), plus `wsts-system.json` |
+| `fprime-wsts build [DIR or manifest] [-j N] [--element NAME]... [--fresh] [-D NAME=VALUE]... [--keep-going] [--project DIR] [--json]` | Configure and build a generated deployment, or every element of a generated system; given a manifest, `generate` first. The configure step (`fprime-util generate`, with the report's `configure_options` and the `-D` options) runs when there is no build directory, when one was left unfinished, with `--fresh`, and when what a build directory caches has changed since this command configured it (the overlay's cache entries, its `settings.ini`, the options; recorded in `wsts-build.json` in the build directory). A build directory configured by hand is used as it is. Output goes to `DIR/wsts-logs/build.log` (`wsts-logs/<element>/build.log` for a system). Exit status 1 when a build fails; it stops at the first element that fails unless `--keep-going` |
 | `fprime-wsts run [DIR] [--gds] [--gds-gui] [--gds-port P] [--gds-gui-port P] [--gds-gui-addr A] [--scenario F] [--scenario-mode stimulus\|responses] [--record F] [--duration S] [--bridge ADDR] [--files-dir DIR] [--env NAME=VALUE]... [--json]` | Run a built simulated deployment, optionally with the GDS. `--gds` is headless; `--gds-gui` starts the browser GUI (implies `--gds`) and prints its URL. Logs go to `DIR/wsts-logs`. `--env` sets an environment variable of the deployment, over the manifest's `run.env` |
 | `fprime-wsts run [SYSTEM DIR] [--gds] [--gds-gui] [--duration S] [--env [ELEMENT.]NAME=VALUE]... [--json]` | Run every element of a generated system, with their links, and optionally one GDS on the ground element with the merged dictionary. `--env NAME=VALUE` goes to every element, `--env payload.NAME=VALUE` to one |
 | `fprime-wsts check-host <DIR or manifest> [--project DIR] [--json]` | List what the host must provide for the simulated build (system headers, libraries, packages, SDK files, sanitizer runtime) and whether it does, with the host and flight compilers. Compiles nothing of the project. Exit status 1 when something is missing; a check that cannot be made is a warning. Given a generated directory it also writes `wsts-host.md` and `wsts-host.json` there |
@@ -13,6 +14,12 @@
 | `fprime-wsts scaffold <Component> --output DIR [--project DIR] [--name NAME]` | Start a mirror surrogate for a flight component |
 
 Errors the user can fix are printed as `fprime-wsts: error: …` with exit code 2.
+
+`fprime-wsts build --json` prints `{output, ok, elements: {<name>: {directory, configure, reason,
+stage, exit_code, seconds, log, binary}}}` and sends the build output to the log only.
+`configure` is `configure`, `reconfigure` or `keep`, with the `reason`; `stage` is the step
+reached (`configure` or `build`). An element that failed has `errors` in place of `binary`:
+the compiler, linker and CMake error lines of its log, at most 20.
 
 `fprime-wsts run --json` prints one summary when the run ends: `deployment`, `exit_code`,
 `exited_early`, `interrupted`, `seconds`, `logs`, `gds_gui`, `final_status`. When the
@@ -478,7 +485,7 @@ the cache itself: `CMAKE_<LANG>_FLAGS…`, `CMAKE_<LANG>_COMPILER`, the linker f
 the generator warns. Compiler flags go under `cmake.cxx_flags`. The others are passed when
 configuring, as `fprime-util generate -DNAME=VALUE` (directly: after `--`, and for a value
 with a space in it, `fprime-util` takes the text for the name of a toolchain); the report
-lists them as `configure_options`, and the build command that `generate` prints has them.
+lists them as `configure_options`, and `fprime-wsts build` passes them.
 
 ## System manifest (`wsts-system.yaml`)
 

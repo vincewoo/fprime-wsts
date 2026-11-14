@@ -31,12 +31,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import yaml
-
 from . import fpp
 from .fpp import WstsError
 from .generate import ID_BLOCK, Result, generate, symlink_notice
-from .manifest import LinkEnd, Manifest, _int, load_manifest
+from .manifest import LinkEnd, Manifest, _int, load_manifest, read_yaml
 
 SYSTEM_FILE = "wsts-system.json"
 SYSTEM_KEYS = {"system", "ground", "elements", "links", "output"}
@@ -102,14 +100,14 @@ def is_system_manifest(path: Path) -> bool:
     """Whether a manifest file describes a system rather than a single deployment"""
     if not path.is_file():
         raise WstsError(f"manifest not found: {path}")
-    data = yaml.safe_load(path.read_text()) or {}
-    return isinstance(data, dict) and ("system" in data or "elements" in data)
+    data = read_yaml(path)
+    return ("system" in data or "elements" in data)
 
 
 def load_system(path: Path) -> SystemManifest:
     if not path.is_file():
         raise WstsError(f"system manifest not found: {path}")
-    return parse_system(yaml.safe_load(path.read_text()) or {}, path)
+    return parse_system(read_yaml(path, "system manifest"), path)
 
 
 def parse_system(data: dict, path: Optional[Path] = None) -> SystemManifest:

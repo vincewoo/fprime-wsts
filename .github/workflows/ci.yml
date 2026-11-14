@@ -38,10 +38,7 @@ jobs:
           cd Wsts/Core && fprime-util check -j"$(nproc)"
 
       - name: Build the simulated Mission system (a VxWorks and a Linux computer joined by a hub)
-        run: |
-          for element in cdh payload; do
-            (cd examples/mission-sim/wsts/Mission/$element && fprime-util generate && fprime-util build -j"$(nproc)")
-          done
+        run: fprime-wsts build examples/mission-sim/wsts/Mission
 
       - name: End-to-end tests, Mission system
         run: |

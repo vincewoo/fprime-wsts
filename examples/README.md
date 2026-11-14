@@ -36,7 +36,7 @@ fprime-wsts generate examples/mission-sim/wsts-system.yaml
 ```
 
 ```bash
-for e in cdh payload; do (cd examples/mission-sim/wsts/Mission/$e && fprime-util generate && fprime-util build); done
+fprime-wsts build examples/mission-sim/wsts/Mission
 ```
 
 ```bash

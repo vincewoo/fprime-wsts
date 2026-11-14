@@ -77,3 +77,25 @@ def test_in_tree_manifest_paths_are_relative_to_the_project():
     manifest = parse_manifest({"deployment": "Dep"})
     assert manifest.sim_root is None and manifest.project_root() is None
     assert manifest.resolve_sim("cat.yaml", Path("/proj")) == Path("/proj/cat.yaml").resolve()
+
+
+def test_a_file_that_is_not_yaml_is_an_error_of_the_user(tmp_path, capsys):
+    """Not a traceback: the file, the line and the column, as for any other mistake in a manifest"""
+    from fprime_wsts.cli import main
+    from fprime_wsts.system import is_system_manifest, load_system
+
+    broken = tmp_path / "wsts.yaml"
+    broken.write_text("deployment: [Payload\nkeep: [comDriver]\n")
+    for load in (load_manifest, load_catalog, is_system_manifest, load_system):
+        with pytest.raises(WstsError, match=r"wsts\.yaml:2:5: not valid YAML: expected ',' or '\]'"):
+            load(broken)
+    assert main(["generate", str(broken)]) == 2
+    assert "fprime-wsts: error: " in capsys.readouterr().err
+    a_list = tmp_path / "list.yaml"
+    a_list.write_text("- deployment: Payload\n")
+    with pytest.raises(WstsError, match="is a YAML mapping .* not a list"):
+        load_manifest(a_list)
+    empty = tmp_path / "empty.yaml"
+    empty.write_text("# nothing yet\n")
+    with pytest.raises(WstsError, match="'deployment' is required"):
+        load_manifest(empty)

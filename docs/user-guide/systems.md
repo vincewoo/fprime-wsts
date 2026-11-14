@@ -88,7 +88,7 @@ target different platforms. Build each element (they are separate F´ builds), t
 system directory:
 
 ```bash
-for e in cdh payload; do (cd my-mission-sim/wsts/Mission/$e && fprime-util generate && fprime-util build); done
+fprime-wsts build my-mission-sim/wsts/Mission
 ```
 
 ```bash

@@ -98,7 +98,7 @@ jobs:
       - run: pip install -r fprime-wsts/lib/fprime/requirements.txt -e ./fprime-wsts/python pytest
       - run: fprime-wsts generate my-mission/sim/wsts.yaml
       - run: fprime-wsts check-host my-mission/sim/wsts/MyDeployment
-      - run: cd my-mission/sim/wsts/MyDeployment && fprime-util generate && fprime-util build -j"$(nproc)"
+      - run: fprime-wsts build my-mission/sim/wsts/MyDeployment
       - run: |
           D=my-mission/sim/wsts/MyDeployment
           pytest my-mission/sim/tests -p fprime_wsts.pytest_plugin --wsts-deployment $D --wsts-gds \
