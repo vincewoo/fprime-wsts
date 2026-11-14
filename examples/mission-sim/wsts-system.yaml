@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../schemas/wsts-system.schema.json
 # WSTS system manifest for Mission: two flight computers joined by an F Prime hub.
 #
 #   ground  <--TCP-->  Cdh (VxWorks)  <==hub over Ethernet==>  Payload (Linux)

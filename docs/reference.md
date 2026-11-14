@@ -42,7 +42,10 @@ reported the same way, with `error` in the summary and exit code 2.
 
 ## Manifest (`wsts.yaml`)
 
-Only `deployment` is required.
+Only `deployment` is required. An unknown key is an error, which names the key that was
+probably meant (`substitutes`: did you mean `substitute`?) or the section it belongs under
+(`stub_variants` goes under `cmake:`). `schemas/wsts.schema.json` and
+`schemas/wsts-system.schema.json` describe the two manifest files for editors.
 
 A manifest either lives in the flight project, or names the flight project with `project`
 and makes its own directory a standalone **simulation project** (see

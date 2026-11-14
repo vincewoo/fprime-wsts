@@ -37,11 +37,14 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from . import fpp, registers
+from .cli import format_warning
 from .fpp import WstsError
 from .generate import generate, read_registration
 from .manifest import DEFAULT_CATALOG, TOOLKIT_ROOT, load_catalog, parse_manifest
 
 WSTS_ROOT = TOOLKIT_ROOT
+#: Where editors find the schemas of the manifests (completion and checking while typing)
+SCHEMAS = "https://raw.githubusercontent.com/vincewoo/fprime-wsts/main/schemas/"
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "wsts-logs", "logs", "build-artifacts"}
 MAX_DEPTH = 4
@@ -490,6 +493,7 @@ def element_name(deployment: str) -> str:
 def starter_manifest(project_root: Path, d: dict, sim_dir: Path, system: bool) -> str:
     rel_project = os.path.relpath(project_root, sim_dir)
     lines = [
+        f"# yaml-language-server: $schema={SCHEMAS}wsts.schema.json",
         f"# WSTS manifest for {d['name']} (starter written by fprime-wsts init).",
         "# Every TODO is a decision that needs someone who knows the project: see the user guide,",
         "# \"Survey the deployment\" (docs/user-guide/survey.md) and \"Write the manifest\".",
@@ -552,7 +556,8 @@ def starter_manifest(project_root: Path, d: dict, sim_dir: Path, system: bool) -
 
 
 def starter_system(elements: List[Tuple[str, str]], hints: dict, name: str = "TODO") -> str:
-    lines = ["# WSTS system manifest (starter written by fprime-wsts init).",
+    lines = [f"# yaml-language-server: $schema={SCHEMAS}wsts-system.schema.json",
+             "# WSTS system manifest (starter written by fprime-wsts init).",
              f"system: {name}", ""]
     if hints["ground_candidates"]:
         lines.append(f"ground: {element_name(hints['ground_candidates'][0])}   # element the GDS connects to")
@@ -636,7 +641,7 @@ def render(report: dict) -> str:
                     out.append(f"- trial generation succeeded: {len(trial['substitutions'])} substitution(s), "
                                f"{len(trial['warnings'])} warning(s)")
                     for w in trial["warnings"]:
-                        out.append(f"  - warning: {w}")
+                        out.append(format_warning(w, indent="  "))
                     if trial["configure_options"]:
                         out.append(f"  - configure options: {' '.join(trial['configure_options'])}")
         out.append("")

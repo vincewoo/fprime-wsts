@@ -1,0 +1,517 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/vincewoo/fprime-wsts/main/schemas/wsts.schema.json",
+  "title": "fprime-wsts deployment manifest (wsts.yaml)",
+  "type": "object",
+  "properties": {
+    "project": {
+      "type": "string",
+      "description": "Flight project root, relative to this file. Makes this file's directory a standalone simulation project"
+    },
+    "deployment": {
+      "type": "string",
+      "description": "Deployment directory (the one containing Top/), relative to the flight project"
+    },
+    "topology": {
+      "type": "string",
+      "description": "Qualified topology name; only needed if Top/ defines more than one"
+    },
+    "output": {
+      "type": "string",
+      "description": "Output directory. Default: wsts/<deployment> in the simulation project, else in the flight project"
+    },
+    "keep": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Instances never substituted, e.g. the ground link (comDriver)"
+    },
+    "substitute": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "instance": {
+            "type": "string",
+            "description": "An instance name; qualified names (SensorLink.uart) always work"
+          },
+          "component": {
+            "type": "string",
+            "description": "Every instance of this component (Module.Component)"
+          },
+          "with": {
+            "type": "string",
+            "description": "The surrogate component, e.g. Wsts.SimByteStream"
+          },
+          "endpoint": {
+            "type": "string",
+            "description": "Bus endpoint name (default: the instance's base name); 'none' if the surrogate does not use the bus"
+          },
+          "options": {
+            "type": "string",
+            "description": "Passed to the surrogate's wstsBind()"
+          },
+          "ports": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "description": "Flight port name -> surrogate port name; an empty value drops the connection"
+          },
+          "queue_size": {
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "For a queued or active surrogate replacing an instance without a queue"
+          },
+          "stack_size": {
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "Active surrogates only"
+          },
+          "priority": {
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "Active surrogates only"
+          },
+          "cpu": {
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "Active surrogates only"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "with"
+        ]
+      },
+      "description": "Explicit choices of surrogate; override the catalog"
+    },
+    "models": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Used by model_set / MODEL_SET"
+          },
+          "class": {
+            "type": "string",
+            "description": "C++ class, e.g. Wsts::RegisterMapI2c"
+          },
+          "header": {
+            "type": "string",
+            "description": "Header that declares it (default Wsts/Core/Models.hpp)"
+          },
+          "endpoint": {
+            "type": "string",
+            "description": "The bus endpoint it answers on"
+          },
+          "kind": {
+            "enum": [
+              "bytestream",
+              "i2c",
+              "spi",
+              "gpio",
+              "register",
+              "none"
+            ]
+          },
+          "address": {
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "I2C address (i2c only)"
+          },
+          "params": {
+            "type": "object",
+            "description": "Each becomes model.set(key, value) at start-up"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "class",
+          "endpoint",
+          "kind"
+        ]
+      },
+      "description": "In-process C++ device models"
+    },
+    "simulators": {
+      "type": "object",
+      "properties": {
+        "topologies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Subtopologies to add whole, by qualified name"
+        },
+        "instances": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Single instances to add, by qualified name"
+        },
+        "headers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Headers the phase code of those instances needs"
+        },
+        "connections": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "'<source> -> <target>' between added instances and flight ones"
+        }
+      },
+      "additionalProperties": false,
+      "description": "F Prime instances the simulation adds"
+    },
+    "devices": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "instance": {
+            "type": "string",
+            "description": "An instance of Wsts.BusByteStreamDevice"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "options": {
+            "type": "string",
+            "description": "Passed to wstsServe()"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "instance",
+          "endpoint"
+        ]
+      },
+      "description": "Adapter instances that are the device on a bus endpoint"
+    },
+    "clocks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "instance": {
+            "type": "string",
+            "description": "An instance of Wsts.SimCycle added by simulators"
+          },
+          "hz": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Cycles per second of simulated time, 0.001 to 100000"
+          },
+          "options": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "instance",
+          "hz"
+        ]
+      },
+      "description": "Rates of the simulation's own cycle sources"
+    },
+    "control": {
+      "oneOf": [
+        {
+          "enum": [
+            "none",
+            false,
+            true
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "base_id": {
+              "type": [
+                "integer",
+                "string"
+              ],
+              "description": "Default: first 0x1000 block above all flight IDs"
+            }
+          },
+          "additionalProperties": false
+        }
+      ],
+      "description": "The wstsControl instance, or 'none' to leave it out"
+    },
+    "bridge": {
+      "type": "string",
+      "pattern": "^(none|tcp:([^:]+:)?[0-9]+|unix:.+)$",
+      "description": "tcp:<port> | tcp:<host>:<port> | unix:<path> | none"
+    },
+    "tick_hz": {
+      "type": [
+        "integer",
+        "string"
+      ],
+      "description": "Only used when no tick source was substituted"
+    },
+    "catalogs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Project surrogate catalogs, searched before the built-in one"
+    },
+    "sources": {
+      "type": "object",
+      "properties": {
+        "fpp": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Topology model files (default: Top/CMakeLists.txt AUTOCODER_INPUTS)"
+        },
+        "topology": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Hand-written topology sources (default: Top/CMakeLists.txt SOURCES)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "main": {
+      "type": "object",
+      "properties": {
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "generate": {
+          "type": "boolean",
+          "description": "Write a Linux main() for a deployment that has none"
+        },
+        "declarations": {
+          "type": "string",
+          "description": "C++ declarations of the entry points"
+        },
+        "start": {
+          "type": "string",
+          "description": "C++ expression that starts the deployment; hostname and port come from -a and -p"
+        },
+        "stop": {
+          "type": "string",
+          "description": "C++ expression that stops it"
+        }
+      },
+      "additionalProperties": false,
+      "description": "How the deployment starts"
+    },
+    "setup": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "headers": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ],
+      "description": "C++ run by the generated set-up, after models are attached and before the runtime starts"
+    },
+    "cmake": {
+      "type": "object",
+      "properties": {
+        "extra_subdirectories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Modules with no FPP model that components depend on"
+        },
+        "exclude_subdirectories": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Modules to leave out, wherever they are added"
+        },
+        "depends": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Extra link dependencies of the topology module"
+        },
+        "cache": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "array"
+            ]
+          },
+          "description": "CMake cache variables, set before F Prime reads the libraries; a list becomes a CMake list"
+        },
+        "include": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "CMake files included after all modules, before the deployment"
+        },
+        "include_early": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "CMake files included before the framework and libraries are read"
+        },
+        "stub_variants": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Module directories read with BUILD_TESTING set: their stub variant"
+        },
+        "cxx_flags": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          ],
+          "description": "Flags of the host C++ compiler: a list for every module, or {<module directory>: [flags]}"
+        }
+      },
+      "additionalProperties": false,
+      "description": "What the simulated build needs beyond the model"
+    },
+    "libraries": {
+      "type": "object",
+      "properties": {
+        "keep": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Flight libraries to build although nothing in the model uses them"
+        },
+        "drop": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sim": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Further libraries of the simulation, relative to the simulation project"
+        }
+      },
+      "additionalProperties": false
+    },
+    "run": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          },
+          "description": "Environment of the simulated deployment; a value starting ./ or ../ is a path relative to this file"
+        }
+      },
+      "additionalProperties": false
+    },
+    "fpp_exclude": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "FPP files to leave out of the analysis (glob patterns)"
+    },
+    "defines": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Compile definitions, in addition to WSTS_SIM=1"
+    },
+    "host": {
+      "type": "object",
+      "properties": {
+        "ignore": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Names the host check does not report: a header, -l<library>, a package, an SDK entry"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "deployment"
+  ]
+}

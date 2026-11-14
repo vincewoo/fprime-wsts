@@ -142,12 +142,33 @@ def cmd_check_host(args: argparse.Namespace) -> int:
     return 0 if all(result["ok"] for result in results.values()) else 1
 
 
+def format_warning(text: str, width: int = 0, indent: str = "  ") -> str:
+    """A warning of the generator laid out for a terminal: wrapped, and with the ways out it
+    lists ("Either a; or b; or c.") one to a line. The report keeps it as one sentence."""
+    import shutil
+    import textwrap
+
+    width = width or max(60, min(shutil.get_terminal_size((100, 24)).columns, 110))
+    head, either, rest = text.partition(" Either ")
+    options = [option.strip() for option in rest.rstrip(".").split("; or ")] if either and "; or " in rest else []
+    if not options:
+        head = text
+    lines = textwrap.wrap(f"warning: {head}", width, initial_indent=indent, subsequent_indent=indent + "  ",
+                          break_long_words=False, break_on_hyphens=False)
+    if options:
+        lines.append(f"{indent}  Ways out:")
+        for option in options:
+            lines += textwrap.wrap(option[0].upper() + option[1:], width, initial_indent=f"{indent}    - ",
+                                   subsequent_indent=f"{indent}      ", break_long_words=False, break_on_hyphens=False)
+    return "\n".join(lines)
+
+
 def _print_report(report: dict) -> None:
     for sub in report["substitutions"]:
         endpoint = f"endpoint '{sub['endpoint']}'" if sub["endpoint"] is not None else "no bus endpoint"
         print(f"  {sub['instance']}: {sub['flight_component']} -> {sub['surrogate']} [{sub['chosen_by']}] {endpoint}")
     for warning in report["warnings"]:
-        print(f"  warning: {warning}")
+        print(format_warning(warning))
     dictionary = report["dictionary"]
     removed = sum(len(v) for v in dictionary["removed"].values())
     added = sum(len(v) for v in dictionary["added"].values())

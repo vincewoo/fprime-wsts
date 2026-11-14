@@ -1,0 +1,100 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/vincewoo/fprime-wsts/main/schemas/wsts-system.schema.json",
+  "title": "fprime-wsts system manifest (wsts-system.yaml)",
+  "type": "object",
+  "properties": {
+    "system": {
+      "type": "string",
+      "description": "A name for the system (an identifier)"
+    },
+    "ground": {
+      "type": "string",
+      "description": "Element the GDS connects to; default: the first"
+    },
+    "output": {
+      "type": "string",
+      "description": "Default: wsts/<system>, relative to this file"
+    },
+    "elements": {
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "The element's deployment manifest"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "manifest": {
+                "type": "string",
+                "description": "Deployment manifest, relative to this file"
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": [
+                    "integer",
+                    "string"
+                  ]
+                },
+                "minItems": 2,
+                "maxItems": 2,
+                "description": "IDs routed to this element; its WSTS instances go inside"
+              },
+              "bridge": {
+                "type": "string",
+                "description": "Default: the manifest's, else tcp:50100, tcp:50101, ..."
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "manifest"
+            ]
+          }
+        ]
+      },
+      "description": "Element name -> deployment manifest"
+    },
+    "links": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Also the name faults are addressed by"
+          },
+          "kind": {
+            "enum": [
+              "bytestream"
+            ]
+          },
+          "a": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*\\..+$",
+            "description": "<element>.<instance>: a byte stream driver instance"
+          },
+          "b": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*\\..+$",
+            "description": "<element>.<instance>: a byte stream driver instance"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "a",
+          "b"
+        ]
+      },
+      "description": "Links between elements"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "system",
+    "elements"
+  ]
+}
