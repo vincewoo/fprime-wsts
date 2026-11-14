@@ -175,6 +175,18 @@ def cmd_build(args: argparse.Namespace) -> int:
     return build_cli(args)
 
 
+def cmd_survey(args: argparse.Namespace) -> int:
+    from .survey import survey_cli
+
+    return survey_cli(args)
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    from .survey import init_cli
+
+    return init_cli(args)
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     from .runner import run_cli
 
@@ -191,6 +203,27 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="fprime-wsts", description="F Prime Workstation Test Set (WSTS) toolkit")
     parser.add_argument("--version", action="version", version=__version__)
     commands = parser.add_subparsers(dest="command", required=True)
+
+    survey = commands.add_parser(
+        "survey", help="list what in the deployments of a flight project touches hardware, and what the generator "
+                       "would do with each; writes nothing")
+    survey.add_argument("dirs", nargs="*", help="flight project roots, or directories that hold them (default: the current directory)")
+    survey.add_argument("--deployment", action="append", default=[], metavar="NAME",
+                        help="only deployments with this directory name (repeatable)")
+    survey.add_argument("--no-trial", action="store_true", help="skip the trial generation with a minimal manifest")
+    survey.add_argument("--json", action="store_true", help="print the survey as JSON")
+    survey.set_defaults(handler=cmd_survey)
+
+    init = commands.add_parser(
+        "init", help="start a simulation project for a flight project: survey it, then write a starter manifest per "
+                     "deployment (and a system manifest for several); never overwrites")
+    init.add_argument("project", help="flight F Prime project root")
+    init.add_argument("--output", help="simulation project directory (default: <project>-sim beside the flight project)")
+    init.add_argument("--deployment", action="append", default=[], metavar="NAME",
+                      help="only deployments with this directory name (repeatable; default: all)")
+    init.add_argument("--no-trial", action="store_true", help="skip the trial generation with a minimal manifest")
+    init.add_argument("--json", action="store_true", help="print the survey and what was written as JSON")
+    init.set_defaults(handler=cmd_init)
 
     generate = commands.add_parser("generate", help="create a simulated deployment from a flight deployment, or a simulated system from several")
     generate.add_argument("manifest", help="deployment manifest (wsts.yaml), or a system manifest naming several")

@@ -208,6 +208,10 @@ merged dictionary. Add `--gds-gui` for the GDS's browser GUI instead of the head
 `fprime-wsts run` prints its URL (`http://127.0.0.1:5000/` by default). No VxWorks toolchain
 is involved at any point.
 
+To start on a flight project of your own, `fprime-wsts init ../my-mission` surveys it and
+writes a simulation project with starter manifests beside it; the
+[user guide](https://vincewoo.github.io/fprime-wsts/) takes it from there.
+
 ## Driving a simulation
 
 From Python (tests, scripts, agents):
