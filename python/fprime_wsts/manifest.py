@@ -93,13 +93,33 @@ def _attributes(entry: dict, what: str) -> Dict[str, str]:
     return found
 
 
+def read_yaml(path: Path, what: str = "manifest") -> dict:
+    """The mapping a YAML file holds. A file that is not YAML, or not a mapping, is an error
+    the user can fix: it is reported with the file and the place, not as a traceback."""
+    try:
+        data = yaml.safe_load(path.read_text())
+    except yaml.YAMLError as error:
+        mark = getattr(error, "problem_mark", None)
+        place = f":{mark.line + 1}:{mark.column + 1}" if mark is not None else ""
+        problem = getattr(error, "problem", None) or str(error)
+        context = getattr(error, "context", None)
+        raise WstsError(f"{path}{place}: not valid YAML: {problem}" + (f" ({context})" if context else "")) from None
+    except UnicodeDecodeError as error:
+        raise WstsError(f"{path}: not a text file ({error.reason} at byte {error.start})") from None
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        raise WstsError(f"{path}: a {what} is a YAML mapping (key: value lines), not a {type(data).__name__}")
+    return data
+
+
 def load_catalog(path: Path) -> List[Surrogate]:
     if not path.is_file():
         raise WstsError(
             f"surrogate catalog not found: {path}. fprime-wsts must run from a source checkout; "
             "install it with 'pip install -e ./python'"
         )
-    data = yaml.safe_load(path.read_text()) or {}
+    data = read_yaml(path, "surrogate catalog")
     surrogates = []
     for entry in data.get("surrogates", []):
         if "surrogate" not in entry:
@@ -362,8 +382,7 @@ def _cxx_flags(value, where: str) -> Dict[str, List[str]]:
 def load_manifest(path: Path) -> Manifest:
     if not path.is_file():
         raise WstsError(f"manifest not found: {path}")
-    data = yaml.safe_load(path.read_text()) or {}
-    return parse_manifest(data, path)
+    return parse_manifest(read_yaml(path), path)
 
 
 def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
