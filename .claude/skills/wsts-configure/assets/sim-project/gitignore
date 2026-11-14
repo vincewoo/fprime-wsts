@@ -1,0 +1,7 @@
+# Generated simulated deployments (fprime-wsts generate): build artifacts
+/wsts/
+# Logs of the wsts-configure skill's build loop
+build-wsts-loop/
+# Run output
+wsts-logs/
+*.wsts-rec.jsonl
