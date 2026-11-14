@@ -193,6 +193,105 @@ def cmd_run(args: argparse.Namespace) -> int:
     return run_cli(args)
 
 
+def _bridges(directory: Path, element=None) -> dict:
+    """{name: bridge address} of the simulation running from a generated directory: every
+    element of a system (or the one asked for), or the one deployment"""
+    from .bridge import WstsSystem, bridge_address  # noqa: F401
+    from .runner import read_run_file
+    from .system import SYSTEM_FILE
+
+    directory = directory.resolve()
+    if (directory / SYSTEM_FILE).is_file():
+        description = json.loads((directory / SYSTEM_FILE).read_text())
+        running = (read_run_file(directory) or {}).get("elements", {})
+        found = {e["name"]: running.get(e["name"], e["bridge"]) for e in description["elements"]}
+        if element is not None:
+            if element not in found:
+                raise WstsError(f"--element {element}: not an element of {directory} (elements: {', '.join(found)})")
+            found = {element: found[element]}
+    elif (directory / "wsts-report.json").is_file():
+        if element is not None:
+            raise WstsError(f"--element {element}: {directory} is a single deployment")
+        found = {directory.name: bridge_address(directory)}
+    else:
+        raise WstsError(f"{directory} is not a generated simulation deployment or system (no wsts-report.json or "
+                        f"{SYSTEM_FILE})")
+    off = [name for name, address in found.items() if address == "none"]
+    if off:
+        raise WstsError(f"the bridge of {', '.join(off)} is off (bridge: none in the manifest)")
+    return found
+
+
+def _field(text: str):
+    """NAME=VALUE of an action. The value is a JSON value where it reads as one (3, true,
+    "0x10"), else text, in which \\n, \\r, \\t and \\xNN stand for those characters."""
+    name, separator, value = text.partition("=")
+    if not separator or not name.isidentifier():
+        raise WstsError(f"'{text}': expected FIELD=VALUE, for example endpoint=i2cBus")
+    try:
+        return name, json.loads(value)
+    except ValueError:
+        pass
+    try:
+        return name, value.encode("latin-1", "backslashreplace").decode("unicode_escape")
+    except UnicodeDecodeError:
+        return name, value
+
+
+# Actions that mean something for every element of a system at once
+SYSTEM_WIDE = ("pause", "resume", "set_rate", "status", "fault_clear")
+
+
+def _send(found: dict, op: str, fields: dict, timeout: float) -> dict:
+    from .bridge import BridgeError, WstsBridge
+
+    answers = {}
+    for name, address in found.items():
+        try:
+            with WstsBridge(address, connect_timeout=timeout) as bridge:
+                answer = bridge.status() if op == "status" and not fields else bridge.request(op, **fields)
+        except BridgeError as error:
+            raise WstsError(f"{name} ({address}): {error}"
+                            + ("" if "connect" not in str(error) else
+                               ": is the simulation running? Start it with `fprime-wsts run`")) from None
+        answer.pop("id", None)
+        answers[name] = answer
+    return answers
+
+
+def cmd_ctl(args: argparse.Namespace) -> int:
+    """Send one action to a running simulation through its bridge"""
+    fields = dict(_field(text) for text in args.fields)
+    found = _bridges(Path(args.directory), args.element)
+    if len(found) > 1 and args.op not in SYSTEM_WIDE:
+        raise WstsError(f"'{args.op}' goes to one element of a system: add --element with one of {', '.join(found)} "
+                        f"(only {', '.join(SYSTEM_WIDE)} go to every element)")
+    answers = _send(found, args.op, fields, args.timeout)
+    print(json.dumps(answers if len(answers) > 1 else next(iter(answers.values())), indent=2))
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    """Where a running simulation is: tick, run state, faults, bus counters"""
+    answers = _send(_bridges(Path(args.directory), args.element), "status", {}, args.timeout)
+    if args.json:
+        print(json.dumps(answers if len(answers) > 1 else next(iter(answers.values())), indent=2))
+        return 0
+    for name, status in answers.items():
+        state = "paused" if status.get("paused") else "running"
+        links = f", links {status['links_up']}/{status['links']} up" if status.get("links") else ""
+        print(f"{name}: {state} at tick {status.get('tick')}, rate {status.get('rate')}{links}")
+        print(f"  bus: {status.get('transactions')} transaction(s), {status.get('bytes')} byte(s), "
+              f"{status.get('errors')} error(s); faults: {status.get('active_faults')} active, "
+              f"{status.get('fault_hits')} hit(s)")
+        print(f"  scenario: {status.get('scenario_state')}"
+              + (f" (step {status.get('scenario_step')} of {status.get('scenario_steps')})"
+                 if status.get("scenario_steps") else "")
+              + f"; recording: {'yes' if status.get('recording') else 'no'}")
+        print(f"  endpoints: {', '.join(status.get('endpoints', [])) or 'none'}")
+    return 0
+
+
 def cmd_scaffold(args: argparse.Namespace) -> int:
     from .scaffold import scaffold_cli
 
@@ -274,6 +373,10 @@ def main(argv=None) -> int:
     run.add_argument("--gds-gui-port", type=int, default=5000, help="port of the GDS browser GUI (default 5000)")
     run.add_argument("--gds-gui-addr", default="127.0.0.1",
                      help="address the GDS browser GUI is served on (default 127.0.0.1; use 0.0.0.0 to reach it from another machine)")
+    run.add_argument("--auto-ports", action="store_true",
+                     help="use free ports for the bridge(s), the GDS link and the GDS browser GUI in place of the fixed "
+                          "ones, so that several runs fit on one machine; the addresses are printed, are in --json, and "
+                          "are in <log directory>/wsts-run.json while the run is up")
     run.add_argument("--bridge", help="bridge address override, e.g. tcp:50100")
     run.add_argument("--scenario", help="scenario file to play from start-up")
     run.add_argument("--scenario-mode", choices=["stimulus", "responses"], default="stimulus")
@@ -286,6 +389,29 @@ def main(argv=None) -> int:
                           "(repeatable; for a system, <element>.NAME=VALUE sets it for one element)")
     run.add_argument("--json", action="store_true", help="print a JSON summary when the run ends")
     run.set_defaults(handler=cmd_run)
+
+    status = commands.add_parser("status", help="show the state of a running simulation: tick, run state, faults, bus counters")
+    status.add_argument("directory", nargs="?", default=".", help="generated simulation deployment or system directory")
+    status.add_argument("--element", help="one element of a system (default: all)")
+    status.add_argument("--timeout", type=float, default=2.0, help="seconds to wait for the bridge (default 2)")
+    status.add_argument("--json", action="store_true")
+    status.set_defaults(handler=cmd_status)
+
+    ctl = commands.add_parser(
+        "ctl", help="send one action to a running simulation through its bridge, e.g. "
+                    "`fprime-wsts ctl DIR fault_set endpoint=i2cBus kind=error arg=3 count=5`",
+        description="Send one action to a running simulation through its bridge and print the answer. The actions "
+                    "and their fields are those of scenario files (docs/reference.md, 'Actions'): pause, resume, "
+                    "set_rate, fault_set, fault_clear, inject_bytes, gpio_force, gpio_get, i2c_reg_set, reg_set, "
+                    "irq_raise, model_set, record_start, record_stop, scenario_load, scenario_start, scenario_stop, "
+                    "log, status.")
+    ctl.add_argument("directory", help="generated simulation deployment or system directory")
+    ctl.add_argument("op", help="the action, e.g. fault_set")
+    ctl.add_argument("fields", nargs="*", metavar="FIELD=VALUE",
+                     help="fields of the action, e.g. endpoint=i2cBus kind=error arg=3; in text, \\n is a newline")
+    ctl.add_argument("--element", help="the element of a system the action is for")
+    ctl.add_argument("--timeout", type=float, default=2.0, help="seconds to wait for the bridge (default 2)")
+    ctl.set_defaults(handler=cmd_ctl)
 
     scaffold = commands.add_parser("scaffold", help="create a surrogate component that mirrors a flight component")
     scaffold.add_argument("component", help="FPP name of the component to mirror, e.g. Drv.LinuxSpiDriver")

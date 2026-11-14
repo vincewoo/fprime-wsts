@@ -22,8 +22,31 @@ def pytest_addoption(parser):
     group.addoption("--wsts-gds", action="store_true", help="also start a headless fprime-gds")
     group.addoption("--wsts-bridge", help="bridge address (default: taken from the deployment, else tcp:50100)")
     group.addoption("--wsts-system", help="generated system directory to start for the session (several elements)")
+    group.addoption("--wsts-auto-ports", action="store_true",
+                    help="start the simulation and its GDS on free ports, so that several test sessions fit on one machine")
     group.addoption("--wsts-env", action="append", metavar="NAME=VALUE",
                     help="environment variable for the simulated deployment (repeatable), as for `fprime-wsts run --env`")
+
+
+def pytest_configure(config):
+    """With --wsts-auto-ports the GDS started here and fprime-gds's test API (its
+    `fprime_test_api` fixture, which reads these options) meet on sockets of this session"""
+    config._wsts_zmq = None
+    if config.getoption("--wsts-auto-ports") and config.getoption("--wsts-gds"):
+        import tempfile
+
+        directory = tempfile.mkdtemp(prefix="wsts-gds-")
+        config._wsts_zmq = [f"ipc://{directory}/in", f"ipc://{directory}/out"]
+        for namespace in (config.option, getattr(config, "known_args_namespace", None)):
+            if namespace is not None and not getattr(namespace, "zmq_transport", None):
+                namespace.zmq_transport = list(config._wsts_zmq)
+
+
+def pytest_unconfigure(config):
+    import shutil
+
+    for url in getattr(config, "_wsts_zmq", None) or []:
+        shutil.rmtree(Path(url[len("ipc://"):]).parent, ignore_errors=True)
 
 
 @pytest.fixture(scope="session")
@@ -35,7 +58,9 @@ def wsts_simulation(request):
         return
     simulation = Simulation(Path(directory), gds=request.config.getoption("--wsts-gds"),
                             bridge=request.config.getoption("--wsts-bridge"),
-                            env=parse_env(request.config.getoption("--wsts-env")).get(None, {}))
+                            env=parse_env(request.config.getoption("--wsts-env")).get(None, {}),
+                            auto_ports=request.config.getoption("--wsts-auto-ports"),
+                            zmq_transport=request.config._wsts_zmq)
     simulation.start()
     yield simulation
     simulation.stop()
@@ -62,7 +87,9 @@ def wsts_system_simulation(request):
     if not directory:
         raise pytest.UsageError("this test needs --wsts-system <generated system directory>")
     system = SystemSimulation(Path(directory), gds=request.config.getoption("--wsts-gds"),
-                              env=request.config.getoption("--wsts-env"))
+                              env=request.config.getoption("--wsts-env"),
+                              auto_ports=request.config.getoption("--wsts-auto-ports"),
+                              zmq_transport=request.config._wsts_zmq)
     system.start()
     yield system
     system.stop()

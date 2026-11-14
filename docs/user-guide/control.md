@@ -2,7 +2,8 @@
 
 Everything you can do to a running simulation is an **action**, and every action is
 available three ways: as an F´ command on `wstsControl` from the GDS, as a call on the
-Python bridge, and as a line in a scenario file.
+Python bridge, and as a line in a scenario file. From a shell, `fprime-wsts ctl <dir> <action>
+field=value …` sends one through the bridge ([Run](run.md#looking-in-from-another-terminal)).
 
 ```mermaid
 flowchart LR

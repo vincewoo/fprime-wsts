@@ -149,3 +149,60 @@ def test_unreachable_bridge():
         WstsBridge("tcp:1", connect_timeout=0.3)
     with pytest.raises(BridgeError, match="unrecognized"):
         WstsBridge("carrier-pigeon", connect_timeout=0.3)
+
+
+# ----------------------------------------------------------------------
+# The bridge from the command line: fprime-wsts status, fprime-wsts ctl
+# ----------------------------------------------------------------------
+
+
+def generated(directory, sim):
+    directory.mkdir()
+    (directory / "wsts-report.json").write_text(json.dumps({"bridge": f"tcp:{sim.port}"}))
+    return directory
+
+
+def test_ctl_sends_one_action(tmp_path, sim, capsys):
+    from fprime_wsts.cli import main
+
+    out = generated(tmp_path / "Dep", sim)
+    assert main(["ctl", str(out), "fault_set", "endpoint=i2cBus", "kind=error", "arg=3", "count=5"]) == 0
+    assert sim.requests[-1] == {"id": 1, "op": "fault_set", "endpoint": "i2cBus", "kind": "error", "arg": 3, "count": 5}
+    assert json.loads(capsys.readouterr().out) == {"ok": True}
+
+
+def test_ctl_text_values_and_refusals(tmp_path, sim, capsys):
+    from fprime_wsts.cli import main
+
+    out = generated(tmp_path / "Dep", sim)
+    assert main(["ctl", str(out), "bogus", r"text=$TEMP,48.0\n", "level=true", "value=0x10"]) == 2
+    assert sim.requests[-1] == {"id": 1, "op": "bogus", "text": "$TEMP,48.0\n", "level": True, "value": "0x10"}
+    assert "unknown op 'bogus'" in capsys.readouterr().err
+    assert main(["ctl", str(out), "pause", "nonsense"]) == 2
+    assert "expected FIELD=VALUE" in capsys.readouterr().err
+    assert main(["ctl", str(out), "pause", "--element", "cdh"]) == 2
+    assert "is a single deployment" in capsys.readouterr().err
+
+
+def test_status_of_a_running_simulation_and_of_none(tmp_path, sim, capsys):
+    from fprime_wsts.cli import main
+
+    out = generated(tmp_path / "Dep", sim)
+    assert main(["status", str(out)]) == 0
+    printed = capsys.readouterr().out
+    assert "Dep: running at tick 1" in printed and "endpoints: a, b" in printed
+    (out / "wsts-report.json").write_text(json.dumps({"bridge": "tcp:1"}))
+    assert main(["status", str(out), "--timeout", "0.2"]) == 2
+    assert "is the simulation running?" in capsys.readouterr().err
+    assert main(["status", str(tmp_path)]) == 2
+
+
+def test_an_action_for_one_element_of_a_system_needs_its_name(tmp_path, capsys):
+    from fprime_wsts.cli import main
+
+    (tmp_path / "wsts-system.json").write_text(json.dumps({"system": "S", "ground": "cdh", "elements": [
+        {"name": "cdh", "directory": "cdh", "bridge": "tcp:1"}, {"name": "payload", "directory": "payload", "bridge": "tcp:2"}]}))
+    assert main(["ctl", str(tmp_path), "gpio_force", "endpoint=pin", "level=true"]) == 2
+    assert "add --element with one of cdh, payload" in capsys.readouterr().err
+    assert main(["ctl", str(tmp_path), "pause", "--element", "radio"]) == 2
+    assert "not an element" in capsys.readouterr().err

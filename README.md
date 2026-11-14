@@ -228,6 +228,12 @@ with WstsBridge("tcp:50101") as sim:                   # the Payload computer
     print(sim.gpio_get("heaterPin"), sim.status())
 ```
 
+From a shell, while it runs:
+
+```bash
+fprime-wsts ctl examples/mission-sim/wsts/Mission --element payload fault_set endpoint=i2cBus kind=error arg=3 count=5
+```
+
 From the ground system, with the commands on the `wstsControl` instance: `SIM_PAUSE`,
 `SIM_RESUME`, `SIM_SET_RATE`, `FAULT_SET`, `FAULT_CLEAR`, `INJECT_BYTES`, `INJECT_TEXT`,
 `GPIO_FORCE`, `I2C_REG_SET`, `REG_SET`, `IRQ_RAISE`, `MODEL_SET`, `SCENARIO_LOAD`, `SCENARIO_START`,

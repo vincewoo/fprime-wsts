@@ -123,6 +123,11 @@ starts the deployment and a headless GDS, runs for 30 seconds, and prints a JSON
 deployment exits on its own; if it stopped on an F´ assert, the summary has
 `assert: {file, line, instances}` and the kept instance to substitute is named. Logs: `<generated dir>/wsts-logs/sim.log` and `gds.log`.
 
+While a run is up, `fprime-wsts status <dir>` prints where it is and `fprime-wsts ctl <dir> <op>
+field=value …` sends one action through the bridge (`--element` for one element of a system).
+`--auto-ports` (`--wsts-auto-ports` in pytest) takes free ports for the bridge and the GDS, so
+runs do not collide; the addresses in use are in `wsts-logs/wsts-run.json` while it runs.
+
 For a GDS you can open in a browser (a human, or a browser-automation agent), use
 `--gds-gui` instead of `--gds`: fprime-gds then serves its web UI on `--gds-gui-port`
 (default 5000) at `--gds-gui-addr` (default `127.0.0.1`), and `fprime-wsts run` prints the

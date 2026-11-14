@@ -18,6 +18,7 @@ pytest tests -p fprime_wsts.pytest_plugin --wsts-deployment my-mission-sim/wsts/
 | `--wsts-gds` | Also start a headless GDS, for `fprime_test_api` |
 | `--wsts-bridge ADDR` | The bridge address (default: the deployment's, else `tcp:50100`) |
 | `--wsts-system DIR` | Start a whole [system](systems.md) instead |
+| `--wsts-auto-ports` | Start the simulation and its GDS on free ports, with GDS sockets of their own, so several test sessions fit on one machine. `fprime_test_api` is pointed at that GDS |
 | `--wsts-env NAME=VALUE` | An environment variable for the deployment (repeatable) |
 | `--dictionary FILE` | fprime-gds's option: the dictionary its test API uses |
 

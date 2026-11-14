@@ -49,6 +49,22 @@ def _number(value) -> int:
     return int(value, 0) if isinstance(value, str) else int(value)
 
 
+def _running(directory) -> Optional[dict]:
+    from .runner import read_run_file
+
+    return read_run_file(directory)
+
+
+def bridge_address(directory) -> str:
+    """The bridge address of the simulated deployment in a generated directory: the one its
+    run is using when one is up (`wsts-logs/wsts-run.json`), else the manifest's"""
+    running = _running(directory)
+    if running and running.get("bridge"):
+        return running["bridge"]
+    with open(os.path.join(os.fspath(directory), "wsts-report.json")) as file:
+        return json.load(file).get("bridge", "none")
+
+
 class WstsBridge:
     """Connection to a running simulated deployment"""
 
@@ -373,10 +389,15 @@ class WstsSystem:
     def __init__(self, system, connect_timeout: float = 10.0, request_timeout: float = 5.0):
         if not isinstance(system, dict):
             path = os.fspath(system)
+            running = None
             if os.path.isdir(path):
+                running = _running(path)
                 path = os.path.join(path, "wsts-system.json")
             with open(path) as file:
                 system = json.load(file)
+            # A run started with free ports (`fprime-wsts run --auto-ports`) says where it is
+            for element in system["elements"]:
+                element["bridge"] = (running or {}).get("elements", {}).get(element["name"], element["bridge"])
         self.description = system
         self.name: str = system["system"]
         self.ground: str = system["ground"]

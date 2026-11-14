@@ -210,8 +210,45 @@ def _link_established(port: int) -> bool:
     return False
 
 
+RUN_FILE = "wsts-run.json"  # in the log directory while a run is up: where its bridge and GDS are
+
+
+def free_port() -> int:
+    """A TCP port nothing listens on at the moment, from the range the system hands out"""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def auto_bridge(bridge: str) -> str:
+    """A TCP bridge address on a free port of the same host; other kinds stay as they are"""
+    if not bridge.startswith("tcp:"):
+        return bridge
+    host = bridge[4:].rpartition(":")[0]
+    return f"tcp:{host + ':' if host else ''}{free_port()}"
+
+
+def write_run_file(log_dir: Path, content: dict) -> None:
+    (log_dir / RUN_FILE).write_text(json.dumps({"pid": os.getpid(), **content}, indent=2) + "\n")
+
+
+def read_run_file(directory: Path) -> Optional[dict]:
+    """What a run of a generated directory left in its log directory, while it is up: the
+    addresses it really uses. None when nothing is running there (the file is removed when
+    a run stops, and one left by a run that was killed names a process that is gone)."""
+    for path in (Path(directory) / "wsts-logs" / RUN_FILE, Path(directory) / RUN_FILE):
+        try:
+            content = json.loads(path.read_text())
+            os.kill(int(content["pid"]), 0)
+        except (OSError, ValueError, KeyError):
+            continue
+        return content
+    return None
+
+
 def gds_command(executable: str, dictionary: Path, gds_port: int, log_dir: Path,
-                gui_port: Optional[int] = None, gui_addr: str = "127.0.0.1") -> List[str]:
+                gui_port: Optional[int] = None, gui_addr: str = "127.0.0.1",
+                zmq_transport: Optional[List[str]] = None) -> List[str]:
     """The `fprime-gds` command line: headless, or with its browser GUI on `gui_port`.
 
     `-n` keeps fprime-gds from running a deployment of its own: the simulation is started
@@ -221,6 +258,10 @@ def gds_command(executable: str, dictionary: Path, gds_port: int, log_dir: Path,
     """
     command = [executable, "-n", "--dictionary", str(dictionary), "--ip-port", str(gds_port),
                "--logs", str(log_dir), "--log-directly"]
+    if zmq_transport:
+        # The GDS's own processes meet on two sockets that are otherwise the same for every
+        # GDS of a user: a second GDS on the machine needs a pair of its own
+        command += ["--zmq-transport", *zmq_transport]
     if gui_port is None:
         command += ["-g", "none"]
     else:
@@ -237,7 +278,8 @@ class Simulation:
                  bridge: Optional[str] = None,
                  scenario: Optional[str] = None, scenario_mode: str = "stimulus", record: Optional[str] = None,
                  log_dir: Optional[Path] = None, files_dir: Optional[Path] = None,
-                 dictionary: Optional[Path] = None, env: Optional[Dict[str, str]] = None):
+                 dictionary: Optional[Path] = None, env: Optional[Dict[str, str]] = None,
+                 auto_ports: bool = False, zmq_transport: Optional[List[str]] = None):
         self.directory = Path(directory).resolve()
         self.binary, self.dictionary, self.report = find_artifacts(self.directory)
         if dictionary is not None:
@@ -247,6 +289,20 @@ class Simulation:
         self.gds = gds
         self.gds_port = gds_port
         self.gds_gui = gds_gui  # browser GUI port; None keeps the GDS headless
+        self.zmq_transport = zmq_transport
+        self._zmq_dir: Optional[str] = None
+        self.owns_run_file = True  # an element of a system leaves the run file to the system
+        if auto_ports:
+            # Free ports in place of the fixed ones, so that runs on one machine do not meet.
+            # A bridge address the caller gave is used as given.
+            if bridge is None:
+                self.bridge = auto_bridge(self.bridge)
+            if gds:
+                self.gds_port = free_port()
+                self.gds_gui = free_port() if gds_gui else None
+                if self.zmq_transport is None:
+                    self._zmq_dir = tempfile.mkdtemp(prefix="wsts-gds-")
+                    self.zmq_transport = [f"ipc://{self._zmq_dir}/in", f"ipc://{self._zmq_dir}/out"]
         self.gds_gui_addr = gds_gui_addr
         self.scenario = scenario
         self.scenario_mode = scenario_mode
@@ -271,7 +327,7 @@ class Simulation:
             shutil.rmtree(self.log_dir / "gds", ignore_errors=True)
             gds_log = open(self.log_dir / "gds.log", "w")
             command = gds_command(executable, self.dictionary, self.gds_port, self.log_dir / "gds",
-                                  self.gds_gui, self.gds_gui_addr)
+                                  self.gds_gui, self.gds_gui_addr, self.zmq_transport)
             self._processes.append(subprocess.Popen(command, stdout=gds_log, stderr=subprocess.STDOUT,
                                                     cwd=self.log_dir, start_new_session=True))
             arguments = ["-a", "127.0.0.1", "-p", str(self.gds_port)]
@@ -320,7 +376,16 @@ class Simulation:
                 # Best effort: the URL only means something once the HTML app answers, and
                 # that app is a child of the GDS, so a failure shows in the GDS log
                 _wait_for_port(self.gds_gui, 15)
+        if self.owns_run_file:
+            write_run_file(self.log_dir, self.addresses())
         return self
+
+    def addresses(self) -> dict:
+        """Where this run can be reached: its bridge, and its GDS when it has one"""
+        found: dict = {"bridge": self.bridge}
+        if self.gds:
+            found.update(gds_port=self.gds_port, gds_gui=self.gds_gui_url, zmq_transport=self.zmq_transport)
+        return found
 
     def assertion(self) -> Optional[dict]:
         """The F Prime assert the deployment's log ends with, if any (see `explain_assert`)"""
@@ -367,6 +432,11 @@ class Simulation:
             if process is self.sim:
                 code = process.returncode
         self._processes.clear()
+        if self.owns_run_file:
+            (self.log_dir / RUN_FILE).unlink(missing_ok=True)
+        if self._zmq_dir:
+            shutil.rmtree(self._zmq_dir, ignore_errors=True)
+            self._zmq_dir = None
         return code
 
     def __enter__(self) -> "Simulation":
@@ -402,7 +472,8 @@ class SystemSimulation:
     browser GUI)"""
 
     def __init__(self, directory: Path, gds: bool = False, gds_port: int = 50000, log_dir: Optional[Path] = None,
-                 env: Optional[List[str]] = None, gds_gui: Optional[int] = None, gds_gui_addr: str = "127.0.0.1"):
+                 env: Optional[List[str]] = None, gds_gui: Optional[int] = None, gds_gui_addr: str = "127.0.0.1",
+                 auto_ports: bool = False, zmq_transport: Optional[List[str]] = None):
         from .system import load_description
 
         self.directory = Path(directory).resolve()
@@ -420,6 +491,12 @@ class SystemSimulation:
         self._link_dir: Optional[str] = None
         # NAME=VALUE for every element, <element>.NAME=VALUE for one
         self.env = parse_env(env, [element["name"] for element in self.description["elements"]])
+        self.auto_ports = auto_ports
+        self.zmq_transport = zmq_transport
+        if auto_ports:
+            # The description is what clients connect by: it gets the addresses of this run
+            for element in self.description["elements"]:
+                element["bridge"] = auto_bridge(element["bridge"])
 
     def merge_dictionaries(self) -> Path:
         """One dictionary for the whole system, as the ground system uses for deployments
@@ -467,17 +544,29 @@ class SystemSimulation:
                     bridge=element["bridge"], log_dir=self.log_dir / name,
                     dictionary=self.dictionary if is_ground else None,
                     env={**self.env.get(None, {}), **self.env.get(name, {}), "WSTS_LINK_DIR": self._link_dir},
+                    auto_ports=self.auto_ports,  # the GDS's ports; the bridge is chosen already
+                    zmq_transport=self.zmq_transport if is_ground else None,
                 )
+                simulation.owns_run_file = False
                 self.elements[name] = simulation
                 try:
                     simulation.start()
                 except WstsError as error:
                     raise WstsError(f"element '{name}': {error}") from None
             self._wait_for_links()
+            write_run_file(self.log_dir, self.addresses())
         except BaseException:
             self.stop()
             raise
         return self
+
+    def addresses(self) -> dict:
+        """Where this run can be reached: each element's bridge, and the GDS on the ground element"""
+        found: dict = {"elements": {name: simulation.bridge for name, simulation in self.elements.items()}}
+        ground = self.elements.get(self.ground)
+        if self.gds and ground:
+            found.update(gds_port=ground.gds_port, gds_gui=ground.gds_gui_url, zmq_transport=ground.zmq_transport)
+        return found
 
     def _wait_for_links(self, timeout: float = 20.0) -> None:
         from .bridge import BridgeError, WstsBridge
@@ -519,6 +608,7 @@ class SystemSimulation:
 
     def stop(self) -> Dict[str, Optional[int]]:
         codes = {name: simulation.stop() for name, simulation in reversed(list(self.elements.items()))}
+        (self.log_dir / RUN_FILE).unlink(missing_ok=True)
         if self._link_dir:
             shutil.rmtree(self._link_dir, ignore_errors=True)
             self._link_dir = None
@@ -540,13 +630,15 @@ def run_system_cli(args) -> int:
     system = SystemSimulation(Path(args.directory), gds=gds, gds_port=args.gds_port,
                               gds_gui=args.gds_gui_port if args.gds_gui else None,
                               gds_gui_addr=args.gds_gui_addr,
-                              log_dir=Path(args.log_dir) if args.log_dir else None, env=getattr(args, "env", None))
+                              log_dir=Path(args.log_dir) if args.log_dir else None, env=getattr(args, "env", None),
+                              auto_ports=getattr(args, "auto_ports", False))
     system.start()
     if not args.json:
         bridges = ", ".join(f"{name} {simulation.bridge}" for name, simulation in system.elements.items())
         print(f"system {system.name} running: bridges {bridges}; logs {system.log_dir}")
         if gds:
-            print(f"GDS listening for element '{system.ground}' on port {args.gds_port}, dictionary {system.dictionary}")
+            print(f"GDS listening for element '{system.ground}' on port {system.elements[system.ground].gds_port}, "
+                  f"dictionary {system.dictionary}")
         if args.gds_gui:
             print(f"GDS browser GUI for element '{system.ground}' at {system.gds_gui_url}")
     statuses: Dict[str, dict] = {}
@@ -578,9 +670,11 @@ def run_system_cli(args) -> int:
         "logs": str(system.log_dir),
         "dictionary": str(system.dictionary) if system.dictionary else None,
         "gds_gui": system.gds_gui_url,
+        "gds_port": system.elements[system.ground].gds_port if gds else None,
         "elements": {
             name: {
                 "deployment": simulation.binary.name,
+                "bridge": simulation.bridge,
                 "exit_code": codes.get(name),
                 "exited_early": name in crashed,
                 "logs": str(simulation.log_dir),
@@ -621,7 +715,8 @@ def run_cli(args) -> int:
                             scenario=args.scenario, scenario_mode=args.scenario_mode, record=args.record,
                             log_dir=Path(args.log_dir) if args.log_dir else None,
                             files_dir=Path(args.files_dir) if args.files_dir else None,
-                            env=parse_env(getattr(args, "env", None)).get(None, {}))
+                            env=parse_env(getattr(args, "env", None)).get(None, {}),
+                            auto_ports=getattr(args, "auto_ports", False))
     try:
         simulation.start()
     except StartError as error:
@@ -643,7 +738,7 @@ def run_cli(args) -> int:
     if not args.json:
         print(f"simulation running: {simulation.binary.name} (bridge {simulation.bridge}, logs {simulation.log_dir})")
         if gds:
-            print(f"GDS listening for the deployment on port {args.gds_port}")
+            print(f"GDS listening for the deployment on port {simulation.gds_port}")
         if args.gds_gui:
             print(f"GDS browser GUI at {simulation.gds_gui_url}")
     status = {}
@@ -673,6 +768,8 @@ def run_cli(args) -> int:
         "interrupted": interrupted,
         "seconds": round(time.monotonic() - simulation.started, 2),
         "logs": str(simulation.log_dir),
+        "bridge": simulation.bridge,
+        "gds_port": simulation.gds_port if gds else None,
         "gds_gui": simulation.gds_gui_url,
         "final_status": status,
         **({"assert": _assert_summary(assertion)} if assertion else {}),
