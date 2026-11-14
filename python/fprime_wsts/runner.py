@@ -192,6 +192,18 @@ def _wait_for_port(port: int, timeout: float, process: Optional[subprocess.Popen
     return False
 
 
+def _wait_for_path(path: str, timeout: float, process: Optional[subprocess.Popen] = None) -> bool:
+    """Wait until a Unix socket exists; gives up early when `process`, which was to make it, has exited"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if os.path.exists(path):
+            return True
+        if process is not None and process.poll() is not None:
+            return False
+        time.sleep(0.1)
+    return False
+
+
 def _link_established(port: int) -> bool:
     """True once some local TCP connection to `port` is established.
 
@@ -328,8 +340,9 @@ class Simulation:
             gds_log = open(self.log_dir / "gds.log", "w")
             command = gds_command(executable, self.dictionary, self.gds_port, self.log_dir / "gds",
                                   self.gds_gui, self.gds_gui_addr, self.zmq_transport)
-            self._processes.append(subprocess.Popen(command, stdout=gds_log, stderr=subprocess.STDOUT,
-                                                    cwd=self.log_dir, start_new_session=True))
+            self._gds_process = subprocess.Popen(command, stdout=gds_log, stderr=subprocess.STDOUT,
+                                                 cwd=self.log_dir, start_new_session=True)
+            self._processes.append(self._gds_process)
             arguments = ["-a", "127.0.0.1", "-p", str(self.gds_port)]
         env = dict(os.environ)
         # Defaults from the manifest (`run.env`), then what this run was given
@@ -340,6 +353,13 @@ class Simulation:
             env[name] = value
         env.update(self.extra_env)
         env["WSTS_BRIDGE"] = self.bridge
+        # Python device models of the manifest (`run.models`): the deployment starts paused,
+        # and is resumed once they are on their endpoints
+        models = [str((self.directory / file).resolve()) for file in defaults.get("models", [])]
+        if models:
+            if not self.bridge.startswith(("tcp:", "unix:")):
+                raise WstsError(f"run.models needs the bridge, and this run has none (bridge {self.bridge})")
+            env["WSTS_START_PAUSED"] = "1"
         env.setdefault("WSTS_DIR", str(self.files_dir))
         if self.scenario:
             env["WSTS_SCENARIO"] = str(Path(self.scenario).resolve())
@@ -358,10 +378,12 @@ class Simulation:
                 self.stop()
                 raise self._start_error(f"the simulation did not open its bridge on {self.bridge}", code,
                                         self.log_dir / "sim.log")
+        if models:
+            self._start_models(models)
         if self.gds:
             # The deployment's TCP client retries until the GDS is listening
             deadline = time.monotonic() + 30
-            gds_process = self._processes[0]
+            gds_process = self._gds_process
             while not _link_established(self.gds_port):
                 if gds_process.poll() is not None:
                     self.stop()
@@ -386,6 +408,38 @@ class Simulation:
         if self.gds:
             found.update(gds_port=self.gds_port, gds_gui=self.gds_gui_url, zmq_transport=self.zmq_transport)
         return found
+
+    def _start_models(self, files: List[str], timeout: float = 20.0) -> None:
+        """Start the Python device models, wait until they are on their endpoints, then let
+        the deployment run"""
+        from .bridge import BridgeError, WstsBridge
+        from .models import READY
+
+        if self.bridge.startswith("unix:") and not _wait_for_path(self.bridge[5:], 15, self.sim):
+            code = self.sim.poll()
+            self.stop()
+            raise self._start_error(f"the simulation did not open its bridge on {self.bridge}", code,
+                                    self.log_dir / "sim.log")
+        log_path = self.log_dir / "models.log"
+        log = open(log_path, "w")
+        process = subprocess.Popen([sys.executable, "-u", "-m", "fprime_wsts.models", "--bridge", self.bridge, *files],
+                                   stdout=log, stderr=subprocess.STDOUT, cwd=self.log_dir, start_new_session=True)
+        self._processes.insert(0, process)  # stopped after the deployment, which it serves
+        deadline = time.monotonic() + timeout
+        while READY not in log_path.read_text(errors="replace"):
+            if process.poll() is not None or time.monotonic() >= deadline:
+                why = "did not attach in time" if process.poll() is None else f"stopped (exit code {process.returncode})"
+                said = [line for line in log_path.read_text(errors="replace").splitlines() if line.strip()]
+                self.stop()
+                raise WstsError(f"the Python device models {why}" + (f": {said[-1]}" if said else "")
+                                + f"; see {log_path}")
+            time.sleep(0.05)
+        try:
+            with WstsBridge(self.bridge) as bridge:
+                bridge.resume()
+        except BridgeError as error:
+            self.stop()
+            raise WstsError(f"could not resume the simulation after attaching its Python models: {error}") from None
 
     def assertion(self) -> Optional[dict]:
         """The F Prime assert the deployment's log ends with, if any (see `explain_assert`)"""

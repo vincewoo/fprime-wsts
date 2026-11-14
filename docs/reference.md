@@ -144,6 +144,7 @@ run:
   env:                               # environment of the simulated deployment when it is run
     SIM_PROFILE: ./profiles/calm.txt # ./ or ../ : a path relative to this file
     SIM_SEED: 42
+  models: [models/thermo.py]         # Python device models started with the run (each defines serve(sim))
 fpp_exclude: ["*/Experimental/*"]    # FPP files to leave out of the analysis
 defines: [MY_SIM_FLAG]               # compile definitions, in addition to WSTS_SIM=1
 host:
@@ -653,7 +654,13 @@ Newline-delimited JSON. A client sends `{"id": n, "op": …}` and receives
 Byte stream and GPIO models need no `attach`: subscribe, watch `bs_tx` / `gpio_out`
 records, and answer with `inject_bytes` / `gpio_force`.
 
-`fprime_wsts.bridge.WstsBridge` wraps all of this (`serve_i2c`, `serve_spi`,
+`run.models` in the manifest names Python files that define `serve(sim)`; `fprime-wsts run`
+starts them in one process (`python -m fprime_wsts.models --bridge <address> <file>...`, log
+in `wsts-logs/models.log`) against a deployment started paused, and resumes it when every
+`serve` has returned. The report lists them under `run.models`.
+
+`fprime_wsts.bridge.WstsBridge` wraps all of this (`step`, `serve_i2c`, `serve_spi`,
+`serve_bytestream`, `serve_gpio`,
 `serve_register`, `raise_irq`, `reg_set`, `register_accesses`). `fprime_wsts.bridge.WstsSystem` holds one
 `WstsBridge` per element of a system and addresses faults by link name.
 
@@ -665,6 +672,7 @@ records, and answer with `inject_bytes` / `gpio_force`.
 | `WSTS_SCENARIO`, `WSTS_SCENARIO_MODE` | Scenario to load and start at start-up |
 | `WSTS_RECORD` | File to record to from start-up |
 | `WSTS_DIR` | Base directory for relative scenario and recording paths |
+| `WSTS_START_PAUSED` | `1`: start paused. `fprime-wsts run` sets it for a deployment with `run.models`, and resumes once they are attached |
 | any in `run.env` or `--env` | Set by `fprime-wsts run` and the pytest plugin for the simulator components' phase code |
 | `WSTS_LINK_DIR` | Directory of the link sockets of a system (`<link>.sock`). Set by `fprime-wsts run`; without it links stay down |
 

@@ -478,6 +478,14 @@
             ]
           },
           "description": "Environment of the simulated deployment; a value starting ./ or ../ is a path relative to this file"
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "\\.py$"
+          },
+          "description": "Python files with device models, relative to this file. Each defines serve(sim); fprime-wsts run starts them with the deployment and attaches them through the bridge"
         }
       },
       "additionalProperties": false

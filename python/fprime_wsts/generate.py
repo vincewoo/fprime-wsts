@@ -1990,6 +1990,8 @@ def render_report(report: dict) -> str:
         for name, value in report.get("run", {}).get("env", {}).items():
             lines.append(f"- Environment: `{name}={value}`"
                          + (" (a path relative to this directory)" if name in report["run"]["env_paths"] else ""))
+        for file in report.get("run", {}).get("models", []):
+            lines.append(f"- Python device models started with the run: `{file}`")
     if report.get("testing_variants"):
         lines += ["", "## Modules that change under BUILD_TESTING", "",
                   "Modules of this build whose `CMakeLists.txt` does something else when `BUILD_TESTING` is set. "
@@ -3160,6 +3162,17 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
             else:
                 env[name] = value
         report["run"] = {"env": env, "env_paths": paths}
+    if manifest.run_models:
+        if manifest.bridge == "none":
+            raise WstsError("run.models needs the bridge, which is how a Python model reaches the simulation: "
+                            "set bridge: (for example tcp:50100)")
+        files = []
+        for entry in manifest.run_models:
+            path = manifest.resolve_sim(entry, project_root)
+            if not path.is_file():
+                raise WstsError(f"run.models: {entry} not found ({path})")
+            files.append(rel(path))
+        report.setdefault("run", {"env": {}, "env_paths": []})["models"] = files
     report["reused_sources"] = {
         k: [rel(Path(p)) if os.path.isabs(p) else p for p in v] for k, v in reused.items()
     }

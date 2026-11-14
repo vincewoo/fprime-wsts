@@ -280,6 +280,9 @@ class Manifest:
     cmake_include: List[str] = field(default_factory=list)
     cmake_include_early: List[str] = field(default_factory=list)
     run_env: Dict[str, str] = field(default_factory=dict)  # environment of the simulated deployment
+    # Python files with device models that `fprime-wsts run` starts with the deployment and
+    # attaches through the bridge, relative to the manifest
+    run_models: List[str] = field(default_factory=list)
     keep_libraries: List[str] = field(default_factory=list)
     drop_libraries: List[str] = field(default_factory=list)
     fpp_exclude: List[str] = field(default_factory=list)
@@ -326,7 +329,7 @@ HOST_KEYS = {"ignore"}
 ALL_MODULES = ""
 CLOCK_KEYS = {"instance", "hz", "options"}
 LIBRARY_KEYS = {"keep", "drop", "sim"}
-RUN_KEYS = {"env"}
+RUN_KEYS = {"env", "models"}
 MAX_CLOCK_HZ = 100000.0  # Wsts::CycleClock::MAX_HZ
 ENV_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
 SUBSTITUTE_KEYS = {"instance", "component", "with", "endpoint", "options", "ports", *ATTRIBUTE_KEYS}
@@ -552,6 +555,11 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
         if not re.fullmatch(ENV_NAME, str(name)):
             raise WstsError(f"{where}: run.env: '{name}' is not an environment variable name")
         manifest.run_env[str(name)] = "" if value is None else str(value)
+    models = run.get("models") or []
+    if not isinstance(models, list) or not all(isinstance(entry, str) and entry.endswith(".py") for entry in models):
+        raise WstsError(f"{where}: run.models must be a list of Python files (each defines serve(sim)), relative to "
+                        "the manifest")
+    manifest.run_models = [str(entry) for entry in models]
 
     cmake = data.get("cmake") or {}
     unknown = set(cmake) - CMAKE_KEYS
