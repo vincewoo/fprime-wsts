@@ -1,0 +1,3 @@
+# Builds the documentation site (mkdocs.yml at the repository root)
+mkdocs==1.6.1
+mkdocs-material==9.6.23
