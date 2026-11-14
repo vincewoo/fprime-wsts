@@ -205,8 +205,17 @@ names (`Payload.instrument.TAKE_SAMPLE`, `Cdh.wstsControl.SIM_PAUSE`,
 Add `--gds-gui` to serve that GDS's browser GUI on the ground element and print its URL
 (`--gds-gui-port`, default 5000; `--gds-gui-addr`, default `127.0.0.1`).
 
-`--scenario`, `--record`, `--bridge` and `--files-dir` apply to a single deployment and
-are rejected for a system.
+Scenarios and recordings are per element, since each element has its own ticks:
+
+```bash
+fprime-wsts run examples/mission-sim/wsts/Mission --scenario payload=overtemp.jsonl --record run1.jsonl
+```
+
+`--scenario <element>=<file>` plays a scenario on one element from start-up (once per
+element; `--scenario-mode` is for all of them). `--record <element>=<file>` records one
+element; a plain `--record run1.jsonl` records every element, to `run1.cdh.jsonl` and
+`run1.payload.jsonl`. `--bridge` and `--files-dir` apply to a single deployment and are
+rejected for a system.
 
 An element can still be run by itself with `fprime-wsts run <system>/<element>`: its links
 then stay down, as with the other computer switched off.
@@ -251,4 +260,5 @@ for the session; the `wsts_system` fixture is a `WstsSystem`, and fprime-gds's
 - **No link timing.** Bytes arrive as fast as the host delivers them; add latency with a
   `delay` fault. Bytes sent while the peer is not connected are lost.
 - **Not built yet:** GPIO links (discretes between computers), datagram semantics and
-  connection state for socket links, system-wide scenarios and merged recordings.
+  connection state for socket links, one scenario or recording for the whole system (they
+  are per element).

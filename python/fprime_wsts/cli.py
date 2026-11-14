@@ -378,9 +378,12 @@ def main(argv=None) -> int:
                           "ones, so that several runs fit on one machine; the addresses are printed, are in --json, and "
                           "are in <log directory>/wsts-run.json while the run is up")
     run.add_argument("--bridge", help="bridge address override, e.g. tcp:50100")
-    run.add_argument("--scenario", help="scenario file to play from start-up")
+    run.add_argument("--scenario", action="append", metavar="[ELEMENT=]FILE",
+                     help="scenario file to play from start-up; for a system, <element>=<file>, once per element")
     run.add_argument("--scenario-mode", choices=["stimulus", "responses"], default="stimulus")
-    run.add_argument("--record", help="record bus traffic and actions to this file")
+    run.add_argument("--record", action="append", metavar="[ELEMENT=]FILE",
+                     help="record bus traffic and actions to this file; for a system, <element>=<file> for one "
+                          "element, or a plain file to record every element to <stem>.<element>.<suffix>")
     run.add_argument("--duration", type=float, help="stop after this many seconds (default: run until interrupted)")
     run.add_argument("--log-dir", help="directory for logs (default: <directory>/wsts-logs)")
     run.add_argument("--files-dir", help="directory for relative scenario/recording paths (default: the log directory)")

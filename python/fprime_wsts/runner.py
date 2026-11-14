@@ -466,6 +466,40 @@ def parse_env(entries, elements: Optional[List[str]] = None) -> Dict[Optional[st
     return found
 
 
+def per_element(option: str, values, elements: List[str], spread: bool = False) -> Dict[str, str]:
+    """`--scenario` and `--record` of a system run: `<element>=<file>`, once per element.
+    With `spread`, a plain `<file>` stands for one file per element, `<stem>.<element><suffix>`."""
+    found: Dict[str, str] = {}
+    # An element's own file first, wherever it is on the command line: it wins over a plain one
+    for value in sorted(values or [], key=lambda v: "=" not in str(v)):
+        element, separator, path = str(value).partition("=")
+        if separator and element in elements and path:
+            if element in found:
+                raise WstsError(f"--{option} is given twice for element '{element}'")
+            found[element] = path
+        elif spread and not separator:
+            target = Path(value)
+            for name in elements:
+                found.setdefault(name, str(target.with_name(f"{target.stem}.{name}{target.suffix}")))
+        else:
+            raise WstsError(f"--{option} {value}: for a system, say which element it is for: "
+                            f"--{option} <element>=<file>, with one of the elements {', '.join(elements)}"
+                            + ("" if not spread else f"; a plain --{option} <file> records every element, each to "
+                                                     "<file stem>.<element>.<suffix>"))
+    return found
+
+
+def one_value(option: str, values) -> Optional[str]:
+    """`--scenario` and `--record` of a single deployment: one file"""
+    if not values:
+        return None
+    if isinstance(values, str):
+        return values
+    if len(values) > 1:
+        raise WstsError(f"--{option} is given {len(values)} times: a single deployment plays and records one file")
+    return values[0]
+
+
 class SystemSimulation:
     """A running system: one simulated deployment per element, joined by their links, with
     an optional GDS on the ground element using the merged dictionary (headless, or with its
@@ -473,7 +507,9 @@ class SystemSimulation:
 
     def __init__(self, directory: Path, gds: bool = False, gds_port: int = 50000, log_dir: Optional[Path] = None,
                  env: Optional[List[str]] = None, gds_gui: Optional[int] = None, gds_gui_addr: str = "127.0.0.1",
-                 auto_ports: bool = False, zmq_transport: Optional[List[str]] = None):
+                 auto_ports: bool = False, zmq_transport: Optional[List[str]] = None,
+                 scenarios: Optional[Dict[str, str]] = None, scenario_mode: str = "stimulus",
+                 records: Optional[Dict[str, str]] = None):
         from .system import load_description
 
         self.directory = Path(directory).resolve()
@@ -493,6 +529,9 @@ class SystemSimulation:
         self.env = parse_env(env, [element["name"] for element in self.description["elements"]])
         self.auto_ports = auto_ports
         self.zmq_transport = zmq_transport
+        self.scenarios = dict(scenarios or {})  # element -> scenario file played from start-up
+        self.scenario_mode = scenario_mode
+        self.records = dict(records or {})  # element -> file its bus traffic and actions are recorded to
         if auto_ports:
             # The description is what clients connect by: it gets the addresses of this run
             for element in self.description["elements"]:
@@ -542,6 +581,8 @@ class SystemSimulation:
                     self.directory / element["directory"], gds=self.gds and is_ground, gds_port=self.gds_port,
                     gds_gui=self.gds_gui if is_ground else None, gds_gui_addr=self.gds_gui_addr,
                     bridge=element["bridge"], log_dir=self.log_dir / name,
+                    scenario=self.scenarios.get(name), scenario_mode=self.scenario_mode,
+                    record=self.records.get(name),
                     dictionary=self.dictionary if is_ground else None,
                     env={**self.env.get(None, {}), **self.env.get(name, {}), "WSTS_LINK_DIR": self._link_dir},
                     auto_ports=self.auto_ports,  # the GDS's ports; the bridge is chosen already
@@ -622,16 +663,22 @@ class SystemSimulation:
 
 
 def run_system_cli(args) -> int:
-    for option in ("bridge", "scenario", "record", "files_dir"):
+    from .system import load_description
+
+    for option in ("bridge", "files_dir"):
         if getattr(args, option):
             raise WstsError(f"--{option.replace('_', '-')} applies to a single deployment and is not supported when "
                             "running a system; drive the elements through their bridges instead")
+    names = [element["name"] for element in load_description(Path(args.directory).resolve())["elements"]]
+    scenarios = per_element("scenario", args.scenario, names)
+    records = per_element("record", args.record, names, spread=True)
     gds = args.gds or args.gds_gui
     system = SystemSimulation(Path(args.directory), gds=gds, gds_port=args.gds_port,
                               gds_gui=args.gds_gui_port if args.gds_gui else None,
                               gds_gui_addr=args.gds_gui_addr,
                               log_dir=Path(args.log_dir) if args.log_dir else None, env=getattr(args, "env", None),
-                              auto_ports=getattr(args, "auto_ports", False))
+                              auto_ports=getattr(args, "auto_ports", False),
+                              scenarios=scenarios, scenario_mode=args.scenario_mode, records=records)
     system.start()
     if not args.json:
         bridges = ", ".join(f"{name} {simulation.bridge}" for name, simulation in system.elements.items())
@@ -675,6 +722,7 @@ def run_system_cli(args) -> int:
             name: {
                 "deployment": simulation.binary.name,
                 "bridge": simulation.bridge,
+                **({"record": str(Path(records[name]).resolve())} if name in records else {}),
                 "exit_code": codes.get(name),
                 "exited_early": name in crashed,
                 "logs": str(simulation.log_dir),
@@ -712,7 +760,8 @@ def run_cli(args) -> int:
     simulation = Simulation(Path(args.directory), gds=gds, gds_port=args.gds_port,
                             gds_gui=args.gds_gui_port if args.gds_gui else None,
                             gds_gui_addr=args.gds_gui_addr, bridge=args.bridge,
-                            scenario=args.scenario, scenario_mode=args.scenario_mode, record=args.record,
+                            scenario=one_value("scenario", args.scenario), scenario_mode=args.scenario_mode,
+                            record=one_value("record", args.record),
                             log_dir=Path(args.log_dir) if args.log_dir else None,
                             files_dir=Path(args.files_dir) if args.files_dir else None,
                             env=parse_env(getattr(args, "env", None)).get(None, {}),

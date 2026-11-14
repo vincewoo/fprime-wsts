@@ -101,3 +101,25 @@ def test_a_run_says_where_it_is_while_it_is_up(tmp_path):
     content = json.loads((tmp_path / "wsts-logs" / "wsts-run.json").read_text())
     (tmp_path / "wsts-logs" / "wsts-run.json").write_text(json.dumps({**content, "pid": 2 ** 22 + 12345}))
     assert read_run_file(tmp_path) is None and bridge_address(tmp_path) == "tcp:50100"
+
+
+def test_scenarios_and_recordings_of_a_system_are_per_element():
+    import pytest
+
+    from fprime_wsts.fpp import WstsError
+    from fprime_wsts.runner import one_value, per_element
+
+    names = ["cdh", "payload"]
+    assert per_element("scenario", ["payload=over.jsonl"], names) == {"payload": "over.jsonl"}
+    assert per_element("record", ["runs/r1.jsonl"], names, spread=True) == {
+        "cdh": "runs/r1.cdh.jsonl", "payload": "runs/r1.payload.jsonl"}
+    for order in (["r.jsonl", "cdh=c.jsonl"], ["cdh=c.jsonl", "r.jsonl"]):
+        assert per_element("record", order, names, spread=True) == {"cdh": "c.jsonl", "payload": "r.payload.jsonl"}, \
+            "an element's own file wins over the plain one"
+    with pytest.raises(WstsError, match="say which element it is for"):
+        per_element("scenario", ["over.jsonl"], names)
+    with pytest.raises(WstsError, match="given twice"):
+        per_element("scenario", ["cdh=a", "cdh=b"], names)
+    assert one_value("scenario", None) is None and one_value("record", ["a.jsonl"]) == "a.jsonl"
+    with pytest.raises(WstsError, match="one file"):
+        one_value("record", ["a", "b"])
