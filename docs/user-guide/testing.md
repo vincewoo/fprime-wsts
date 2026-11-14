@@ -72,6 +72,8 @@ Patterns that keep tests reliable:
 - **Assert on outcomes, with timeouts.** Ticks pace the run, not the test; wait for the
   event or the channel value, not for a number of seconds.
 - **Use `wsts.advance(n)`** to wait for `n` simulation ticks when a test needs time to pass.
+- **Use `wsts.pause()` and `wsts.step(n)`** when the test must decide how far time goes: set up
+  inputs while nothing runs, then run exactly `n` ticks. The fixture resumes after the test.
 - **Silence free-running models** before injecting a value they would overwrite
   (`model_set(..., "period", 0)`), and restore them after.
 - **Clear histories** at the start of a test: an event from the previous test can arrive

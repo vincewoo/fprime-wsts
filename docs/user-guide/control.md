@@ -25,6 +25,7 @@ flowchart LR
 | Action | `wstsControl` command | Python (`WstsBridge`) | Effect |
 |---|---|---|---|
 | `pause`, `resume` | `SIM_PAUSE`, `SIM_RESUME` | `pause()`, `resume()` | Stop / restart the simulation tick, and with it the flight rate groups |
+| `step` | `SIM_STEP` | `step(5)` | Run for that many ticks, then pause again |
 | `set_rate` | `SIM_SET_RATE` | `set_rate(2.0)` | Simulated time per wall-clock time (0.01–1000) |
 | `fault_set` | `FAULT_SET` | `fault_set(endpoint, kind, …)` | Arm a fault on an endpoint |
 | `fault_clear` | `FAULT_CLEAR` | `fault_clear("*")` | Remove faults |
@@ -42,6 +43,24 @@ The bridge also answers queries: `status()` (tick, run state, faults, bus counte
 endpoints), `gpio_get(endpoint)` (the level flight last wrote), `bytes_sent(endpoint)`,
 `register_accesses(endpoint)`, and with `subscribe()` a stream of every bus transaction
 and action (`events()`, `wait_for(predicate)`).
+
+## Stepping
+
+Pause the simulation, set up what flight software should meet, and let it run for exactly
+as many ticks as the test needs:
+
+```python
+sim.pause()
+sim.i2c_reg_set("i2cBus", 0x40, 0x02, 0x10)     # while nothing runs
+sim.step(5)                                      # five ticks of the flight rate groups, then paused again
+assert sim.gpio_get("heaterPin") is False
+```
+
+`step()` returns when the simulation has paused again, with the tick it stopped at. The
+ticks are still paced by the wall clock and the time scale (`set_rate(100)` makes a step
+quick), and within a tick the flight threads run as the host schedules them: this is
+control over how far time goes, not yet the deterministic stepped time of the
+[roadmap](../design.md#roadmap).
 
 ## Faults
 

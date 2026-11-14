@@ -278,6 +278,47 @@ TEST_F(CoreTest, RejectsBadActions) {
     EXPECT_FALSE(run("{broken", &error));
 }
 
+TEST_F(CoreTest, StepRunsForSomeTicksAndPauses) {
+    Control& control = Control::get();
+    // A tick source takes a tick only while the simulation is not paused
+    auto ticks = [&control](int tries) {
+        int taken = 0;
+        for (int i = 0; i < tries; i++) {
+            if (!control.paused()) {
+                control.onTick();
+                taken++;
+            }
+        }
+        return taken;
+    };
+    EXPECT_EQ(ticks(2), 2);
+    ASSERT_TRUE(run(R"({"op": "pause"})"));
+    ASSERT_TRUE(run(R"({"op": "step", "ticks": 3})"));
+    EXPECT_FALSE(control.paused());
+    EXPECT_EQ(control.status().stepping, 3u);
+    EXPECT_EQ(ticks(10), 3) << "three ticks, then paused";
+    EXPECT_TRUE(control.paused());
+    EXPECT_EQ(control.status().tick, 5u);
+    EXPECT_EQ(control.status().stepping, 0u);
+    EXPECT_EQ(control.status().toJson().num("stepping", -1), 0);
+
+    // One tick by default; a resume ends a step that is under way, and so does a pause
+    ASSERT_TRUE(run(R"({"op": "step"})"));
+    EXPECT_EQ(ticks(10), 1);
+    ASSERT_TRUE(run(R"({"op": "step", "ticks": 5})"));
+    EXPECT_EQ(ticks(2), 2);
+    ASSERT_TRUE(run(R"({"op": "resume"})"));
+    EXPECT_EQ(ticks(10), 10) << "no pause after the remaining three";
+    ASSERT_TRUE(run(R"({"op": "step", "ticks": 5})"));
+    ASSERT_TRUE(run(R"({"op": "pause"})"));
+    ASSERT_TRUE(run(R"({"op": "resume"})"));
+    EXPECT_EQ(ticks(10), 10);
+
+    std::string error;
+    EXPECT_FALSE(control.execLine(R"({"op": "step", "ticks": 0})", error));
+    EXPECT_NE(error.find("ticks must be"), std::string::npos);
+}
+
 TEST_F(CoreTest, PauseRateAndModels) {
     Wsts::ScriptedByteStream sensor;
     ASSERT_TRUE(sensor.set("endpoint", "uart"));

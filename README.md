@@ -134,7 +134,7 @@ device models. [docs/design.md](docs/design.md) has more detailed diagrams of ea
 - **`fprime-wsts generate`**: finds the hardware instances in a topology, retypes them to
   surrogates, wires in the WSTS control component, and writes a buildable overlay project.
   Hand-written topology code is reused unchanged.
-- **Simulation control**: pause, resume and time scale; fault injection on any bus endpoint;
+- **Simulation control**: pause, resume, stepping by ticks and time scale; fault injection on any bus endpoint;
   direct input/output injection; scenario files; recording and replay. The same actions are
   available as F´ commands (`Wsts.SimControl`, with its own events and telemetry), over a
   socket bridge, and in scenario files.
@@ -235,7 +235,7 @@ fprime-wsts ctl examples/mission-sim/wsts/Mission --element payload fault_set en
 ```
 
 From the ground system, with the commands on the `wstsControl` instance: `SIM_PAUSE`,
-`SIM_RESUME`, `SIM_SET_RATE`, `FAULT_SET`, `FAULT_CLEAR`, `INJECT_BYTES`, `INJECT_TEXT`,
+`SIM_RESUME`, `SIM_STEP`, `SIM_SET_RATE`, `FAULT_SET`, `FAULT_CLEAR`, `INJECT_BYTES`, `INJECT_TEXT`,
 `GPIO_FORCE`, `I2C_REG_SET`, `REG_SET`, `IRQ_RAISE`, `MODEL_SET`, `SCENARIO_LOAD`, `SCENARIO_START`,
 `SCENARIO_STOP`, `RECORD_START`, `RECORD_STOP`.
 

@@ -211,6 +211,24 @@ class WstsBridge:
     def set_rate(self, rate: float) -> None:
         self.request("set_rate", rate=rate)
 
+    def step(self, ticks: int = 1, wait: bool = True, timeout: float = 30.0) -> int:
+        """Run the simulation for `ticks` ticks, then pause it. From a paused simulation the
+        count is exact: flight software runs for that many ticks and stops. With `wait`,
+        block until it has paused again and return the tick it stopped at."""
+        target = self.status()["tick"] + ticks
+        self.request("step", ticks=int(ticks))
+        if not wait:
+            return target
+        deadline = time.monotonic() + timeout
+        while True:
+            status = self.status()
+            if status["paused"] and not status.get("stepping"):
+                return status["tick"]
+            if time.monotonic() >= deadline:
+                raise BridgeError(f"the simulation did not finish a step of {ticks} tick(s) within {timeout} s "
+                                  f"(at tick {status['tick']}, {status.get('stepping')} to go)")
+            time.sleep(0.01)
+
     def wait_for_tick(self, tick: int, timeout: float = 30.0) -> int:
         """Block until the simulation reaches `tick`. Returns the tick reached."""
         deadline = time.monotonic() + timeout

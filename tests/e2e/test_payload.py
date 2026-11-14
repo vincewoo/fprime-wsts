@@ -171,6 +171,27 @@ def test_wsts_commands_through_gds(gds, payload):
     payload.i2c_reg_set("i2cBus", POWER_ADDR, 0x03, 0x60)
 
 
+def test_step_runs_flight_software_for_exact_ticks(gds, payload):
+    payload.pause()
+    start = payload.status()["tick"]
+    payload.events(clear=True)
+    assert payload.step(5) == start + 5
+    status = payload.status()
+    assert status["paused"] and status["stepping"] == 0
+    time.sleep(0.5)
+    assert payload.status()["tick"] == start + 5, "paused again: no sixth tick"
+    # Flight software ran in those ticks, and in no later one: the IMU was read
+    reads = [m for m in payload.events() if m.get("rec") == "i2c" and m.get("addr") == IMU_ADDR]
+    assert reads and all(m["tick"] <= start + 5 for m in reads)
+    # By command: the step ends in a pause, which the ground sees as SimPaused at that tick
+    gds.send_command("Payload.wstsControl.SIM_STEP", [3])
+    # (an earlier SimPaused may still be on its way through the hub: the one for this tick)
+    gds.assert_event("Payload.wstsControl.SimPaused", args=[start + 8], timeout=T)
+    assert payload.status()["tick"] == start + 8 and payload.status()["paused"]
+    payload.resume()
+    payload.advance(5)
+
+
 def test_pause_and_resume_by_command(gds, payload):
     # Pausing Payload stops its rate groups, but not the hub: its events still reach the
     # ground through Cdh, which keeps running, and commands still reach it

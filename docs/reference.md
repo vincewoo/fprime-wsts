@@ -559,6 +559,7 @@ Used identically by the bridge, scenario files and (through its commands) `Wsts.
 | `op` | Fields | Effect |
 |---|---|---|
 | `pause`, `resume` | | Stop / restart the simulation tick |
+| `step` | `ticks`=1 | Run until the tick count is `ticks` higher, then pause (`SimPaused`). Exact from a paused simulation and from a scenario; `pause` or `resume` ends a step under way. `status` has `stepping`, the ticks still to go |
 | `set_rate` | `rate` (0.01–1000) | Simulated time per wall-clock time |
 | `fault_set` | `endpoint`, `kind`, `dir`=`both`, `arg`=0, `count`=0, `ticks`=0 | Arm a fault; `count`/`ticks` of 0 mean unbounded |
 | `fault_clear` | `endpoint`=`*` | Remove faults |
@@ -666,7 +667,7 @@ records, and answer with `inject_bytes` / `gpio_force`.
 
 ## `Wsts.SimControl`
 
-Commands mirror the actions (see the README); `REG_SET` (`endpoint`, `offset`, `value`,
+Commands mirror the actions (see the README); `SIM_STEP` (`ticks`) is `step`; `REG_SET` (`endpoint`, `offset`, `value`,
 both 64 bits) and `IRQ_RAISE` (`endpoint`, `number`) are those of the register kind. Events: `SimPaused`, `SimResumed`,
 `SimRateSet`, `FaultArmed`, `FaultTriggered` (first application of a fault only),
 `FaultExpired`, `FaultsCleared`, `Injected`, `ScenarioLoaded`, `ScenarioStarted`,
