@@ -85,6 +85,46 @@ What to look at first:
 
 Logs are in `<dir>/wsts-logs/`: `sim.log` for the deployment, `gds.log` for the GDS.
 
+## Several runs on one machine
+
+The bridge, the GDS link and the GDS GUI have fixed ports by default (the manifest's
+`bridge`, 50000, 5000), so a second run on the same machine, or two CI jobs on one runner,
+would collide. `--auto-ports` takes free ports instead and gives the GDS sockets of its own:
+
+```bash
+fprime-wsts run my-mission-sim/wsts/MyDeployment --gds --auto-ports
+```
+
+The addresses are printed at start-up, are in the `--json` summary (`bridge`, `gds_port`,
+`gds_gui`), and are in `wsts-logs/wsts-run.json` while the run is up. Use a `--log-dir` per
+run when two runs share one generated directory.
+
+## Looking in from another terminal
+
+```bash
+fprime-wsts status my-mission-sim/wsts/MyDeployment
+```
+
+```
+MyDeployment: running at tick 412, rate 1
+  bus: 6180 transaction(s), 42310 byte(s), 0 error(s); faults: 0 active, 0 hit(s)
+  scenario: idle; recording: no
+  endpoints: i2cBus, sensorUart, heaterPin
+```
+
+`fprime-wsts ctl` sends any [action](control.md) the same way, with no Python and no GDS:
+
+```bash
+fprime-wsts ctl my-mission-sim/wsts/MyDeployment fault_set endpoint=i2cBus kind=error arg=3 count=5
+```
+
+```bash
+fprime-wsts ctl my-mission-sim/wsts/MyDeployment inject_bytes endpoint=sensorUart 'text=$TEMP,48.0\n'
+```
+
+Both find the run through its directory, whichever ports it uses. For a system, give the
+system directory; `--element payload` picks one element.
+
 ## When flight software asserts
 
 The most common first-run failure is a component the simulation kept that touches

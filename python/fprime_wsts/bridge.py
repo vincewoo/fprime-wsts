@@ -49,6 +49,22 @@ def _number(value) -> int:
     return int(value, 0) if isinstance(value, str) else int(value)
 
 
+def _running(directory) -> Optional[dict]:
+    from .runner import read_run_file
+
+    return read_run_file(directory)
+
+
+def bridge_address(directory) -> str:
+    """The bridge address of the simulated deployment in a generated directory: the one its
+    run is using when one is up (`wsts-logs/wsts-run.json`), else the manifest's"""
+    running = _running(directory)
+    if running and running.get("bridge"):
+        return running["bridge"]
+    with open(os.path.join(os.fspath(directory), "wsts-report.json")) as file:
+        return json.load(file).get("bridge", "none")
+
+
 class WstsBridge:
     """Connection to a running simulated deployment"""
 
@@ -67,6 +83,11 @@ class WstsBridge:
         self._i2c: Dict[Tuple[str, int], Callable[[bytes, int], Tuple[int, bytes]]] = {}
         self._spi: Dict[str, Callable[[bytes, int], Tuple[int, bytes]]] = {}
         self._registers: Dict[str, Tuple[Callable, Optional[Callable]]] = {}
+        # Handlers of what flight software sends on byte stream and GPIO endpoints. They run
+        # on a thread of their own, so that they may call the bridge (inject a reply).
+        self._watchers: Dict[Tuple[str, str], Callable] = {}
+        self._watched: "queue.Queue[Optional[Tuple[Callable, dict]]]" = queue.Queue()
+        self._watcher: Optional[threading.Thread] = None
         self._closed = False
         self._reader = threading.Thread(target=self._read_loop, name="wsts-bridge", daemon=True)
         self._reader.start()
@@ -105,6 +126,10 @@ class WstsBridge:
                 elif kind == "reg_req":
                     self._serve_register(message)
                 elif kind is not None:
+                    watcher = self._watchers.get((message.get("rec"), message.get("endpoint"))) \
+                        if message.get("src") == "flight" else None
+                    if watcher is not None:
+                        self._watched.put((watcher, message))
                     with self._events_changed:
                         self._events.append(message)
                         self._events_changed.notify_all()
@@ -117,8 +142,37 @@ class WstsBridge:
             pass
         finally:
             self._closed = True
+            self._watched.put(None)
             with self._events_changed:
                 self._events_changed.notify_all()
+
+    def _watch_loop(self) -> None:
+        while True:
+            item = self._watched.get()
+            if item is None:
+                return
+            handler, message = item
+            try:
+                handler(message)
+            except BridgeError:
+                if self._closed:
+                    return
+            except Exception:  # a failing model is reported and does not end the others
+                import traceback
+
+                traceback.print_exc()
+
+    def _watch(self, rec: str, endpoint: str, handler: Callable[[dict], None]) -> None:
+        self._watchers[(rec, endpoint)] = handler
+        if self._watcher is None:
+            self._watcher = threading.Thread(target=self._watch_loop, name="wsts-models", daemon=True)
+            self._watcher.start()
+        self.subscribe()
+
+    def wait_closed(self, timeout: Optional[float] = None) -> bool:
+        """Block until the simulation has closed the connection (it stopped). True if it has."""
+        self._reader.join(timeout)
+        return not self._reader.is_alive()
 
     def _serve(self, kind: str, message: dict) -> None:
         """Answer a transaction for a device this client is modelling"""
@@ -194,6 +248,24 @@ class WstsBridge:
 
     def set_rate(self, rate: float) -> None:
         self.request("set_rate", rate=rate)
+
+    def step(self, ticks: int = 1, wait: bool = True, timeout: float = 30.0) -> int:
+        """Run the simulation for `ticks` ticks, then pause it. From a paused simulation the
+        count is exact: flight software runs for that many ticks and stops. With `wait`,
+        block until it has paused again and return the tick it stopped at."""
+        target = self.status()["tick"] + ticks
+        self.request("step", ticks=int(ticks))
+        if not wait:
+            return target
+        deadline = time.monotonic() + timeout
+        while True:
+            status = self.status()
+            if status["paused"] and not status.get("stepping"):
+                return status["tick"]
+            if time.monotonic() >= deadline:
+                raise BridgeError(f"the simulation did not finish a step of {ticks} tick(s) within {timeout} s "
+                                  f"(at tick {status['tick']}, {status.get('stepping')} to go)")
+            time.sleep(0.01)
 
     def wait_for_tick(self, tick: int, timeout: float = 30.0) -> int:
         """Block until the simulation reaches `tick`. Returns the tick reached."""
@@ -339,6 +411,23 @@ class WstsBridge:
         self._registers[endpoint] = (read_handler, write_handler)
         self.request("attach", endpoint=endpoint, kind="register")
 
+    def serve_bytestream(self, endpoint: str, handler: Callable[[bytes], Optional[bytes]]) -> None:
+        """Become the device on a byte stream endpoint: `handler(data)` is called with what
+        flight software sends, and what it returns (bytes, or None for nothing) is delivered
+        to flight software as the device's answer. Send at other times with `inject_bytes`.
+        The handler runs on a thread of this client, one call at a time, and may call the
+        bridge. Subscribes, if this client has not yet."""
+        def on_record(message: dict) -> None:
+            answer = handler(bytes.fromhex(message.get("data", "")))
+            if answer:
+                self.inject_bytes(endpoint, bytes(answer))
+        self._watch("bs_tx", endpoint, on_record)
+
+    def serve_gpio(self, endpoint: str, handler: Callable[[bool], None]) -> None:
+        """Be told each level flight software writes to a GPIO output pin: `handler(level)`.
+        The handler may call the bridge, for example to drive an input with `gpio_force`."""
+        self._watch("gpio_out", endpoint, lambda message: handler(bool(message.get("level"))))
+
     def register_accesses(self, endpoint: str) -> List[dict]:
         """Register reads, writes and interrupts seen on an endpoint since subscribe(), as
         `{"rec": "reg_rd"|"reg_wr"|"reg_irq", "offset", "value", "status"}` (an interrupt
@@ -373,10 +462,15 @@ class WstsSystem:
     def __init__(self, system, connect_timeout: float = 10.0, request_timeout: float = 5.0):
         if not isinstance(system, dict):
             path = os.fspath(system)
+            running = None
             if os.path.isdir(path):
+                running = _running(path)
                 path = os.path.join(path, "wsts-system.json")
             with open(path) as file:
                 system = json.load(file)
+            # A run started with free ports (`fprime-wsts run --auto-ports`) says where it is
+            for element in system["elements"]:
+                element["bridge"] = (running or {}).get("elements", {}).get(element["name"], element["bridge"])
         self.description = system
         self.name: str = system["system"]
         self.ground: str = system["ground"]

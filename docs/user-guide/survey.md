@@ -4,13 +4,19 @@ Before writing anything, find out what in your deployment touches hardware, and 
 starts. Most of it `fprime-wsts` handles on its own; the survey tells you which few things
 you will have to say in the manifest.
 
-!!! tip "Let the generator survey for you"
+!!! tip "Let the toolkit survey for you"
 
-    You can skip ahead and run `fprime-wsts generate` on a manifest that names only the
-    deployment (steps [2](simulation-project.md) and [3](manifest.md)). It lists what it
-    replaced, what it kept, and stops on anything it cannot decide. Come back to this page
-    to understand its answers. The [`wsts-configure` agent skill](agents.md) does this
-    survey and interview for you.
+    ```bash
+    fprime-wsts survey my-mission
+    ```
+
+    lists, for every deployment of the project, the instances that touch hardware and what
+    the generator would do with each (replaced from the catalog, kept, or yours to decide),
+    which byte stream drivers are the ground link, a hub link or a device, how the
+    deployment starts, and the result of a trial generation. It writes nothing.
+    [`fprime-wsts init`](simulation-project.md) makes the same survey and writes starter
+    manifests from it. Come back to this page to understand the answers. The
+    [`wsts-configure` agent skill](agents.md) does the survey and the interview for you.
 
 ## What to look for
 

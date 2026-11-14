@@ -280,6 +280,9 @@ class Manifest:
     cmake_include: List[str] = field(default_factory=list)
     cmake_include_early: List[str] = field(default_factory=list)
     run_env: Dict[str, str] = field(default_factory=dict)  # environment of the simulated deployment
+    # Python files with device models that `fprime-wsts run` starts with the deployment and
+    # attaches through the bridge, relative to the manifest
+    run_models: List[str] = field(default_factory=list)
     keep_libraries: List[str] = field(default_factory=list)
     drop_libraries: List[str] = field(default_factory=list)
     fpp_exclude: List[str] = field(default_factory=list)
@@ -326,7 +329,7 @@ HOST_KEYS = {"ignore"}
 ALL_MODULES = ""
 CLOCK_KEYS = {"instance", "hz", "options"}
 LIBRARY_KEYS = {"keep", "drop", "sim"}
-RUN_KEYS = {"env"}
+RUN_KEYS = {"env", "models"}
 MAX_CLOCK_HZ = 100000.0  # Wsts::CycleClock::MAX_HZ
 ENV_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
 SUBSTITUTE_KEYS = {"instance", "component", "with", "endpoint", "options", "ports", *ATTRIBUTE_KEYS}
@@ -336,6 +339,28 @@ CMAKE_KEYS = {"extra_subdirectories", "exclude_subdirectories", "depends", "cach
               "stub_variants", "cxx_flags"}
 CONNECTION_END = r"([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+)\s*(?:\[\s*(\d+)\s*\])?"
 CACHE_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
+
+
+#: Keys that belong in a section of the manifest, for a key written at the top instead
+NESTED_KEYS = {key: section for section, keys in (
+    ("cmake", CMAKE_KEYS), ("libraries", LIBRARY_KEYS), ("simulators", SIMULATOR_KEYS), ("run", RUN_KEYS),
+    ("host", HOST_KEYS)) for key in keys}
+
+
+def unknown_keys(unknown, known, nested: Optional[Dict[str, str]] = None) -> str:
+    """Keys a manifest should not have, each with the key that was probably meant"""
+    import difflib
+
+    named = []
+    for key in sorted(str(k) for k in unknown):
+        close = difflib.get_close_matches(key, [str(k) for k in known], n=1, cutoff=0.6)
+        if close:
+            named.append(f"{key} (did you mean '{close[0]}'?)")
+        elif nested and key in nested:
+            named.append(f"{key} (it goes under '{nested[key]}:')")
+        else:
+            named.append(key)
+    return ", ".join(named)
 
 
 def parse_connection(text: str, where: str) -> ConnectionSpec:
@@ -389,7 +414,7 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
     where = str(path) if path else "manifest"
     unknown = set(data) - KNOWN_KEYS
     if unknown:
-        raise WstsError(f"{where}: unknown key(s): {', '.join(sorted(unknown))}")
+        raise WstsError(f"{where}: unknown key(s): {unknown_keys(unknown, KNOWN_KEYS, NESTED_KEYS)}")
     if "deployment" not in data:
         raise WstsError(f"{where}: 'deployment' is required (the deployment directory, relative to the project root)")
     manifest = Manifest(path=path, deployment=str(data["deployment"]).strip("/"))
@@ -410,7 +435,7 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
         unknown = set(entry) - SUBSTITUTE_KEYS
         if unknown:
             raise WstsError(f"{where}: 'substitute' entry for {entry.get('instance') or entry.get('component')}: "
-                            f"unknown key(s): {', '.join(sorted(unknown))}")
+                            f"unknown key(s): {unknown_keys(unknown, SUBSTITUTE_KEYS)}")
         manifest.substitutions.append(
             Substitution(
                 surrogate=entry["with"],
@@ -429,7 +454,7 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
         raise WstsError(f"{where}: 'simulators' must be a mapping with any of: {', '.join(sorted(SIMULATOR_KEYS))}")
     unknown = set(simulators) - SIMULATOR_KEYS
     if unknown:
-        raise WstsError(f"{where}: simulators: unknown key(s): {', '.join(sorted(unknown))}")
+        raise WstsError(f"{where}: simulators: unknown key(s): {unknown_keys(unknown, SIMULATOR_KEYS)}")
     manifest.simulators = SimulatorsSpec(
         instances=[str(i).replace("$", "") for i in simulators.get("instances") or []],
         topologies=[str(i).replace("$", "") for i in simulators.get("topologies") or []],
@@ -444,7 +469,7 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
             raise WstsError(f"{where}: each 'devices' entry needs 'instance' and 'endpoint'")
         unknown = set(entry) - DEVICE_KEYS
         if unknown:
-            raise WstsError(f"{where}: device {entry['instance']}: unknown key(s): {', '.join(sorted(unknown))}")
+            raise WstsError(f"{where}: device {entry['instance']}: unknown key(s): {unknown_keys(unknown, DEVICE_KEYS)}")
         manifest.devices.append(DeviceSpec(str(entry["instance"]).replace("$", ""), str(entry["endpoint"]),
                                            str(entry.get("options", ""))))
 
@@ -496,7 +521,7 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
     setup = setup or {}
     unknown = set(setup) - SETUP_KEYS if isinstance(setup, dict) else {"(neither C++ text nor a mapping)"}
     if unknown:
-        raise WstsError(f"{where}: setup: unknown key(s): {', '.join(sorted(unknown))}. 'setup' is C++ text, or a "
+        raise WstsError(f"{where}: setup: unknown key(s): {unknown_keys(unknown, SETUP_KEYS)}. 'setup' is C++ text, or a "
                         f"mapping with {' and '.join(sorted(SETUP_KEYS))}")
     headers = setup.get("headers") or []
     if not isinstance(headers, list) or not all(isinstance(h, str) and h.strip() for h in headers):
@@ -510,7 +535,7 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
             raise WstsError(f"{where}: each 'clocks' entry needs 'instance' and 'hz'")
         unknown = set(entry) - CLOCK_KEYS
         if unknown:
-            raise WstsError(f"{where}: clock {entry['instance']}: unknown key(s): {', '.join(sorted(unknown))}")
+            raise WstsError(f"{where}: clock {entry['instance']}: unknown key(s): {unknown_keys(unknown, CLOCK_KEYS)}")
         try:
             hz = float(entry["hz"])
         except (TypeError, ValueError):
@@ -525,16 +550,21 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
     run = data.get("run") or {}
     unknown = set(run) - RUN_KEYS if isinstance(run, dict) else {"(not a mapping)"}
     if unknown:
-        raise WstsError(f"{where}: run: unknown key(s): {', '.join(sorted(unknown))}")
+        raise WstsError(f"{where}: run: unknown key(s): {unknown_keys(unknown, RUN_KEYS)}")
     for name, value in (run.get("env") or {}).items():
         if not re.fullmatch(ENV_NAME, str(name)):
             raise WstsError(f"{where}: run.env: '{name}' is not an environment variable name")
         manifest.run_env[str(name)] = "" if value is None else str(value)
+    models = run.get("models") or []
+    if not isinstance(models, list) or not all(isinstance(entry, str) and entry.endswith(".py") for entry in models):
+        raise WstsError(f"{where}: run.models must be a list of Python files (each defines serve(sim)), relative to "
+                        "the manifest")
+    manifest.run_models = [str(entry) for entry in models]
 
     cmake = data.get("cmake") or {}
     unknown = set(cmake) - CMAKE_KEYS
     if unknown:
-        raise WstsError(f"{where}: cmake: unknown key(s): {', '.join(sorted(unknown))}")
+        raise WstsError(f"{where}: cmake: unknown key(s): {unknown_keys(unknown, CMAKE_KEYS)}")
     for name, value in (cmake.get("cache") or {}).items():
         if not re.fullmatch(CACHE_NAME, str(name)):
             raise WstsError(f"{where}: cmake.cache: '{name}' is not a CMake variable name")
@@ -560,7 +590,7 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
     host = data.get("host") or {}
     unknown = set(host) - HOST_KEYS if isinstance(host, dict) else {"(not a mapping)"}
     if unknown:
-        raise WstsError(f"{where}: host: unknown key(s): {', '.join(sorted(unknown))}")
+        raise WstsError(f"{where}: host: unknown key(s): {unknown_keys(unknown, HOST_KEYS)}")
     ignore = host.get("ignore") or []
     if not isinstance(ignore, list):
         raise WstsError(f"{where}: host.ignore must be a list of header, library (-l<name>) and package names")
@@ -569,7 +599,7 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
     libraries = data.get("libraries") or {}
     unknown = set(libraries) - LIBRARY_KEYS
     if unknown:
-        raise WstsError(f"{where}: libraries: unknown key(s): {', '.join(sorted(unknown))}")
+        raise WstsError(f"{where}: libraries: unknown key(s): {unknown_keys(unknown, LIBRARY_KEYS)}")
     manifest.sim_libraries = [str(d) for d in libraries.get("sim") or []]
     manifest.keep_libraries = [str(d) for d in libraries.get("keep", [])]
     manifest.drop_libraries = [str(d) for d in libraries.get("drop", [])]

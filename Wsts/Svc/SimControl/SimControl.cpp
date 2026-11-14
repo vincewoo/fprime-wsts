@@ -149,6 +149,11 @@ void SimControl::SIM_SET_RATE_cmdHandler(FwOpcodeType opCode, U32 cmdSeq, F32 ra
     this->run(opCode, cmdSeq, action.set("op", "set_rate").setReal("rate", static_cast<double>(rate)));
 }
 
+void SimControl::SIM_STEP_cmdHandler(FwOpcodeType opCode, U32 cmdSeq, U32 ticks) {
+    JsonObj action;
+    this->run(opCode, cmdSeq, action.set("op", "step").setNum("ticks", ticks));
+}
+
 void SimControl::FAULT_SET_cmdHandler(FwOpcodeType opCode,
                                       U32 cmdSeq,
                                       const Fw::CmdStringArg& endpoint,

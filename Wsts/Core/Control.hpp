@@ -95,6 +95,7 @@ struct SimEvent {
 struct SimStatus {
     std::uint64_t tick = 0;
     bool paused = false;
+    std::uint64_t stepping = 0;  //!< ticks left of a `step`, after which the simulation pauses
     double rate = 1.0;
     std::uint32_t activeFaults = 0;
     ScenarioState scenarioState = ScenarioState::IDLE;
@@ -199,6 +200,7 @@ class Control : public BusObserver {
 
     std::atomic<std::uint64_t> m_tick{0};
     std::atomic<bool> m_paused{false};
+    std::atomic<std::uint64_t> m_stepUntil{0};  //!< tick at which a `step` pauses; 0: not stepping
     std::atomic<double> m_rate{1.0};
     std::atomic<bool> m_hasTickSource{false};
 

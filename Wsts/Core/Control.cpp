@@ -47,6 +47,7 @@ JsonObj SimEvent::toJson() const {
 JsonObj SimStatus::toJson() const {
     JsonObj obj;
     obj.setNum("tick", static_cast<std::int64_t>(tick)).setBool("paused", paused).setReal("rate", rate);
+    obj.setNum("stepping", static_cast<std::int64_t>(stepping));
     obj.setNum("active_faults", activeFaults);
     obj.set("scenario_state", SCENARIO_STATE_NAMES[static_cast<std::uint8_t>(scenarioState)]);
     obj.setNum("scenario_step", scenarioStep).setNum("scenario_steps", scenarioSteps);
@@ -87,6 +88,7 @@ void Control::reset() {
     }
     m_tick.store(0);
     m_paused.store(false);
+    m_stepUntil.store(0);
     m_rate.store(1.0);
     m_hasTickSource.store(false);
     {
@@ -128,6 +130,14 @@ void Control::onTick() {
     }
     this->notifyListeners(false);
     this->grantClocks();
+
+    // The last tick of a `step`: pause here, so that the next tick is not taken. A pause,
+    // a resume or another step that arrives meanwhile sets the target itself.
+    std::uint64_t until = m_stepUntil.load();
+    if (until != 0 && tick >= until && m_stepUntil.compare_exchange_strong(until, 0)) {
+        m_paused.store(true);
+        this->post(SimEvent::PAUSED, "", "", static_cast<std::uint32_t>(tick));
+    }
 }
 
 void Control::onIdle() {
@@ -292,6 +302,8 @@ SimStatus Control::status() {
     SimStatus status;
     status.tick = m_tick.load();
     status.paused = m_paused.load();
+    const std::uint64_t until = m_stepUntil.load();
+    status.stepping = until > status.tick ? until - status.tick : 0;
     status.rate = m_rate.load();
     status.activeFaults = Bus::get().activeFaults();
     status.scenarioState = m_scenarioState.load();
@@ -371,12 +383,27 @@ bool Control::dispatch(const JsonObj& action, std::string& error) {
     const std::string op = action.str("op");
     Bus& bus = Bus::get();
 
+    if (op == "step") {
+        const std::int64_t ticks = action.num("ticks", 1);
+        if (ticks < 1 || ticks > 1000000000) {
+            error = "ticks must be between 1 and 1000000000";
+            return false;
+        }
+        // Run until the tick count is this much higher, then pause. Counted from the tick
+        // the simulation is at: exact from a paused simulation and from a scenario step.
+        m_stepUntil.store(m_tick.load() + static_cast<std::uint64_t>(ticks));
+        m_paused.store(false);
+        this->post(SimEvent::RESUMED, "", "", static_cast<std::uint32_t>(m_tick.load()));
+        return true;
+    }
     if (op == "pause") {
+        m_stepUntil.store(0);
         m_paused.store(true);
         this->post(SimEvent::PAUSED, "", "", static_cast<std::uint32_t>(m_tick.load()));
         return true;
     }
     if (op == "resume") {
+        m_stepUntil.store(0);
         m_paused.store(false);
         this->post(SimEvent::RESUMED, "", "", static_cast<std::uint32_t>(m_tick.load()));
         return true;

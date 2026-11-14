@@ -99,3 +99,31 @@ def test_a_file_that_is_not_yaml_is_an_error_of_the_user(tmp_path, capsys):
     empty.write_text("# nothing yet\n")
     with pytest.raises(WstsError, match="'deployment' is required"):
         load_manifest(empty)
+
+
+def test_a_warning_with_ways_out_is_laid_out_for_a_terminal():
+    from fprime_wsts.cli import format_warning
+
+    text = ("module Components/Imager links '${SDK_ROOT}/lib/libcamsdk.a': SDK_ROOT is not set in the simulated build. "
+            "The topology needs the module for Payload.imager. Either take the module's stub variant (cmake: "
+            "{stub_variants: [Components/Imager]}); or substitute that instance; or leave the module out.")
+    lines = format_warning(text, width=80).splitlines()
+    assert lines[0].startswith("  warning: module Components/Imager links") and all(len(line) <= 80 for line in lines)
+    assert "    Ways out:" in lines
+    bullets = [line.strip() for line in lines if line.strip().startswith("- ")]
+    assert [b.split()[1] for b in bullets] == ["Take", "Substitute", "Leave"], "one way out to a bullet"
+    assert " ".join(line.strip() for line in lines).count("Components/Imager") == 2, "nothing is lost"
+    plain = format_warning("cmake.cache sets CMAKE_BUILD_TYPE, which project() has cached already.", width=100)
+    assert plain == "  warning: cmake.cache sets CMAKE_BUILD_TYPE, which project() has cached already."
+
+
+@pytest.mark.parametrize("data, message", [
+    ({"deployment": "D", "substitutes": []}, r"unknown key\(s\): substitutes \(did you mean 'substitute'\?\)"),
+    ({"deployment": "D", "stub_variants": ["A"]}, r"stub_variants \(it goes under 'cmake:'\)"),
+    ({"deployment": "D", "cmake": {"stub_variant": ["A"]}}, r"cmake: unknown key\(s\): stub_variant \(did you mean 'stub_variants'\?\)"),
+    ({"deployment": "D", "zzz": 1, "modles": []}, r"unknown key\(s\): modles \(did you mean 'models'\?\), zzz$"),
+    ({"deployment": "D", "substitute": [{"instance": "a", "with": "B", "endpiont": "x"}]}, r"did you mean 'endpoint'"),
+])
+def test_an_unknown_key_names_the_one_that_was_meant(data, message):
+    with pytest.raises(WstsError, match=message):
+        parse_manifest(data)

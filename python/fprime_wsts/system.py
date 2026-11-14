@@ -34,7 +34,7 @@ from typing import Dict, List, Optional, Tuple
 from . import fpp
 from .fpp import WstsError
 from .generate import ID_BLOCK, Result, generate, symlink_notice
-from .manifest import LinkEnd, Manifest, _int, load_manifest, read_yaml
+from .manifest import LinkEnd, Manifest, _int, load_manifest, read_yaml, unknown_keys
 
 SYSTEM_FILE = "wsts-system.json"
 SYSTEM_KEYS = {"system", "ground", "elements", "links", "output"}
@@ -114,7 +114,7 @@ def parse_system(data: dict, path: Optional[Path] = None) -> SystemManifest:
     where = str(path) if path else "system manifest"
     unknown = set(data) - SYSTEM_KEYS
     if unknown:
-        raise WstsError(f"{where}: unknown key(s): {', '.join(sorted(unknown))}")
+        raise WstsError(f"{where}: unknown key(s): {unknown_keys(unknown, SYSTEM_KEYS)}")
     if "system" not in data:
         raise WstsError(f"{where}: 'system' is required (a name for the system)")
     elements = data.get("elements") or {}
@@ -135,7 +135,7 @@ def parse_system(data: dict, path: Optional[Path] = None) -> SystemManifest:
             raise WstsError(f"{where}: element '{name}' needs 'manifest' (its deployment's wsts.yaml)")
         unknown = set(entry) - ELEMENT_KEYS
         if unknown:
-            raise WstsError(f"{where}: element '{name}': unknown key(s): {', '.join(sorted(unknown))}")
+            raise WstsError(f"{where}: element '{name}': unknown key(s): {unknown_keys(unknown, ELEMENT_KEYS)}")
         spec = ElementSpec(name=name, manifest=(system.root / str(entry["manifest"])).resolve())
         if entry.get("bridge") is not None:
             spec.bridge = str(entry["bridge"])
@@ -169,7 +169,7 @@ def parse_system(data: dict, path: Optional[Path] = None) -> SystemManifest:
             raise WstsError(f"{where}: each link needs 'name', 'a' and 'b'")
         unknown = set(entry) - LINK_KEYS
         if unknown:
-            raise WstsError(f"{where}: link '{entry['name']}': unknown key(s): {', '.join(sorted(unknown))}")
+            raise WstsError(f"{where}: link '{entry['name']}': unknown key(s): {unknown_keys(unknown, LINK_KEYS)}")
         link = LinkSpec(name=str(entry["name"]), kind=str(entry.get("kind", "bytestream")).lower(),
                         a=end(str(entry["name"]), "a", entry["a"]), b=end(str(entry["name"]), "b", entry["b"]))
         if not LINK_NAME.fullmatch(link.name):

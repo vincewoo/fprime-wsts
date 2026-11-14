@@ -36,6 +36,12 @@ void Runtime::start(const RuntimeConfig& config) {
         return;
     }
     Control& control = Control::get();
+    if (env("WSTS_START_PAUSED", "") == "1") {
+        // Whoever asked (the launcher, for models that attach through the bridge) resumes
+        JsonObj action;
+        action.set("op", "pause");
+        run(action);
+    }
     (void)Bridge::get().start(env("WSTS_BRIDGE", config.bridge));
 
     const std::string record = env("WSTS_RECORD", "");

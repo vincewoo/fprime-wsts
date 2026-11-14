@@ -25,7 +25,21 @@ work/
     .gitignore
 ```
 
-Start with just the manifest:
+Let the toolkit start it:
+
+```bash
+fprime-wsts init my-mission
+```
+
+`init` surveys the flight project, prints what it found, and writes `../my-mission-sim`
+(or `--output DIR`): a starter `wsts.yaml` for one deployment, or a manifest per
+deployment and a `wsts-system.yaml` for several (`--deployment NAME` picks some), and a
+`.gitignore`. What it could work out is filled in: the ground link under `keep`, a register
+interface under `substitute`, the hub link of a system, the bus endpoints that will want a
+model. What only you know is marked `TODO`. It never writes over a file that exists, and
+never writes into the flight project.
+
+Or start by hand, with just the manifest:
 
 ```bash
 mkdir my-mission-sim

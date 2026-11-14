@@ -10,7 +10,7 @@ You have four ways to provide one:
 |---|---|---|
 | A **stock model** | In the process | Register-addressed I2C devices, periodic serial sensors, loopbacks, register blocks |
 | A **C++ model** of your own | In the process | Devices with behaviour: engineering units, state machines, timing |
-| A **Python model** over the bridge | In your test process | A device a test wants to control transaction by transaction |
+| A **Python model** over the bridge | In a process `run` starts, or in your test | Devices that are quicker to write in Python; a device a test wants to control transaction by transaction |
 | An **F´ simulator component** | In the process, in the topology | Simulators you already have, or that operators command from the GDS ([Simulators](simulators.md)) |
 
 All of them sit behind the same endpoint, so faults, recording, replay and the bridge
@@ -114,14 +114,42 @@ within two seconds, flight software gets an error status. When the client discon
 the device disappears from the bus (I2C then reports an address error). `serve_spi` works
 the same way, and `serve_register` serves a [register block](registers.md#a-register-block-in-python).
 
-Byte stream and GPIO devices need no `serve_*` call: subscribe, watch what flight
-software sends, and answer:
+A byte stream device answers what flight software sends, and a GPIO model follows an
+output pin. Their handlers may call the bridge:
 
 ```python
-sim.subscribe()
-msg = sim.wait_for(lambda m: m.get("rec") == "bs_tx" and m.get("endpoint") == "gpsUart")
-sim.inject_text("gpsUart", "$GPGGA,...\r\n")
+sim.serve_bytestream("gpsUart", lambda data: b"$GPGGA,...\r\n" if data.startswith(b"$PQ") else None)
+sim.serve_gpio("heaterPin", lambda level: sim.gpio_force("heaterOnSense", level))
 ```
+
+In a test you can also do it by hand: `subscribe()`, `wait_for(...)` a `bs_tx` record, then
+`inject_text(...)`.
+
+### Python models that start with the run
+
+A model that should always be there belongs to the simulation project, not to one test.
+Put it in a file that defines `serve(sim)`, and name the file in the manifest:
+
+```python title="my-mission-sim/models/thermo.py"
+def serve(sim):
+    raw = {"value": 42}
+    sim.serve_i2c("thermoBus", 0x48, lambda write, length: (0, bytes([raw["value"]] * length)))
+```
+
+```yaml
+run:
+  models: [models/thermo.py]      # relative to the manifest
+```
+
+`fprime-wsts run` (and the pytest plugin) then starts the deployment paused, starts one
+Python process that calls each file's `serve` with a connected `WstsBridge`, and resumes
+when all have returned: the models are on their endpoints before flight software's first
+tick. Their output is in `wsts-logs/models.log`, and a file that fails stops the run with
+its error. They need the manifest's `bridge`.
+
+A Python model costs a round trip per transaction and answers within two seconds or not
+at all, and it is not there for what flight software does before the first tick: a device
+that topology set-up code reads (an ID register checked in `configure`) needs a C++ model.
 
 ## Device models from a datasheet
 

@@ -16,6 +16,20 @@ topology: MyDeployment.MyDeployment   # only if Top/ has several
 With only this, `generate` replaces every instance whose component is in the
 [built-in catalog](../reference.md#surrogate-catalog) and keeps everything else.
 
+!!! tip "Completion and checking in your editor"
+
+    The repository has JSON Schemas for both manifest files. With the YAML language server
+    (the YAML extension of VS Code, and most other editors), a first line such as
+
+    ```yaml
+    # yaml-language-server: $schema=https://raw.githubusercontent.com/vincewoo/fprime-wsts/main/schemas/wsts.schema.json
+    ```
+
+    gives completion of keys, their descriptions, and a mark on a misspelt one while you
+    type (`wsts-system.schema.json` for a system manifest). Manifests written by
+    `fprime-wsts init` have the line. `generate` checks the same things and more: an unknown
+    key is an error that names the key that was probably meant.
+
 ## Keep the ground link real
 
 The GDS should connect to the simulated deployment exactly as it does to flight: through
