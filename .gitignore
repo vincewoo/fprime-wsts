@@ -15,3 +15,5 @@ build-wsts-loop/
 # Host check of the machine that generated (fprime-wsts generate, check-host)
 wsts-host.json
 wsts-host.md
+# Documentation site (mkdocs build)
+/site/

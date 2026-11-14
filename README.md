@@ -245,6 +245,10 @@ A recording is itself a scenario: load it again to replay the run.
 
 ## Documentation
 
+The **[user guide](https://vincewoo.github.io/fprime-wsts/)** walks through the toolkit and
+through simulating your own deployment, step by step. Its sources are in `docs/` (built
+with `mkdocs.yml`); the reference documents below are published there too.
+
 | | |
 |---|---|
 | [docs/design.md](docs/design.md) | Architecture, how the transform works, roadmap |

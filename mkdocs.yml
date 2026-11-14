@@ -1,0 +1,146 @@
+site_name: F´ WSTS
+site_description: Run F´ flight software on a workstation against simulated hardware
+site_url: https://vincewoo.github.io/fprime-wsts/
+repo_url: https://github.com/vincewoo/fprime-wsts
+repo_name: vincewoo/fprime-wsts
+edit_uri: edit/main/docs/
+docs_dir: docs
+site_dir: site
+
+# The guide pages are written for the site; the pages at the top of docs/ are the
+# repository's own reference documents, which are published as they are. Links from them
+# to files outside docs/ (the example, the tests) are pointed at GitHub by the hook below.
+hooks:
+  - docs-site/hooks.py
+
+theme:
+  name: material
+  language: en
+  custom_dir: docs-site/overrides
+  logo: assets/images/logo.svg
+  favicon: assets/images/favicon.svg
+  icon:
+    repo: fontawesome/brands/github
+    annotation: material/information-slab-circle
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+    - navigation.footer
+    - navigation.instant
+    - navigation.indexes
+    - navigation.tracking
+    - navigation.sections
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tooltips
+    - content.tabs.link
+    - content.action.edit
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/lightbulb-on
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/lightbulb-off
+        name: Switch to light mode
+
+extra:
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/vincewoo/fprime-wsts
+    - icon: material/rocket-launch
+      link: https://fprime.jpl.nasa.gov/
+      name: F´ documentation
+
+extra_css:
+  - assets/stylesheets/extra.css
+
+plugins:
+  - search
+
+markdown_extensions:
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - attr_list
+  - md_in_html
+  - tables
+  - admonition
+  - pymdownx.details
+  - def_list
+  - abbr
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - getting-started/index.md
+      - Installation: getting-started/installation.md
+      - Your First Simulation: getting-started/first-simulation.md
+      - Core Concepts: getting-started/concepts.md
+  - User Guide:
+      - user-guide/index.md
+      - Simulating Your Deployment:
+          - 1. Survey the Deployment: user-guide/survey.md
+          - 2. Create a Simulation Project: user-guide/simulation-project.md
+          - 3. Write the Manifest: user-guide/manifest.md
+          - 4. Generate and Read the Report: user-guide/generate.md
+          - 5. Check the Host and Build: user-guide/build.md
+          - 6. Run the Simulation: user-guide/run.md
+      - Simulating Hardware:
+          - Device Models: user-guide/device-models.md
+          - Register Blocks and Interrupts: user-guide/registers.md
+          - Simulators as F´ Components: user-guide/simulators.md
+          - Writing Surrogates: user-guide/surrogates.md
+      - Operating a Simulation:
+          - Control and Fault Injection: user-guide/control.md
+          - Scenarios, Recording and Replay: user-guide/scenarios.md
+          - Testing with pytest: user-guide/testing.md
+      - Larger Projects:
+          - Multi-Computer Systems: user-guide/systems.md
+          - VxWorks and Other Targets: user-guide/other-targets.md
+          - Configuring with an Agent: user-guide/agents.md
+      - Troubleshooting: user-guide/troubleshooting.md
+  - Reference:
+      - reference/index.md
+      - Manifest, CLI and Formats: reference.md
+      - Design: design.md
+      - Fidelity: fidelity.md
+      - Systems: systems.md
+      - Surrogates and Device Models: surrogate-guide.md
+      - Converting Other Targets: vxworks-conversion.md
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
