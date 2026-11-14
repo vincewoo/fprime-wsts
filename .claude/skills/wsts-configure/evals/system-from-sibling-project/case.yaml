@@ -1,0 +1,23 @@
+schema_version: "1.1"
+name: system-from-sibling-project
+expected_outcome: |
+  A simulation project beside the flight project (../orbiter-fsw-sim or similar, not inside
+  the flight project and not in the fprime-wsts checkout) with a manifest per computer and
+  a wsts-system.yaml: ground cdh, a hub link between cdh.hubDriver and payload.hubDriver,
+  ID windows that follow the command splitter's opcode base 0x20000000. Cdh gets a
+  generated main() calling cdhStart(hostname, port, 50050) and cdhStop(), with the hub port
+  read from the flight code. The ground link comDriver is kept. Payload's register
+  interface is substituted with Wsts.SimRegister. The build problems are settled with
+  manifest keys and simulation-project files only (stub variant for Components/Imager, a
+  stand-in board/revision.h through cmake.include_early, -include cstring for sensor-lib's
+  Units module), never by editing the flight project or setting BUILD_TESTING. Both
+  elements are built and the system is run; the report says what was run, what every
+  endpoint without a model gives flight software, and which decisions were defaults.
+context:
+  scaffold_script: place-files.sh
+---
+tags: [wsts-configure]
+max_turns: 150
+timeout_seconds: 5400
+allowed_tools: [Read, Glob, Grep, Skill, Write, Edit, Bash]
+---

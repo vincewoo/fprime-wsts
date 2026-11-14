@@ -1,0 +1,1 @@
+Our flight software is checked out next to fprime-wsts, in ../orbiter-fsw. It's two computers, Cdh and Payload, joined by a hub. Can you set up a WSTS simulation of the whole thing as one system and get it building and running on this machine? I'm in meetings all day so I can't answer questions — use your judgment, and tell me what you assumed.

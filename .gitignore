@@ -8,6 +8,8 @@ __pycache__/
 # WSTS run output
 wsts-logs/
 *.wsts-rec.jsonl
+# Logs of the wsts-configure skill's build loop
+build-wsts-loop/
 # GDS test API logs
 /logs/
 # Host check of the machine that generated (fprime-wsts generate, check-host)

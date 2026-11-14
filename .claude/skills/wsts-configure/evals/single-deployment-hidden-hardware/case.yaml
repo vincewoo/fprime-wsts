@@ -1,0 +1,22 @@
+schema_version: "1.1"
+name: single-deployment-hidden-hardware
+expected_outcome: |
+  One deployment manifest (wsts.yaml, no system manifest) for Payload alone, in a sibling
+  simulation project. The agent notices that Components/HeaterControl, which no catalog
+  replaces, names a serial device (/dev/ttyACM0) and includes <termios.h>; it reads the
+  code, finds that nothing opens the device, and keeps the component with that reason
+  recorded, instead of ignoring the finding or substituting a component it has not
+  examined. It explains that Payload alone has no ground link (the GDS cannot connect; use
+  the bridge), and substitutes the hub driver with Wsts.SimByteStream (a silent Cdh);
+  if it keeps the hub driver a real socket, the run asserts with the link down, and the
+  agent diagnoses that and reports it as flight behaviour. The build gaps
+  are settled with manifest keys, the deployment is built and run, and the outcome is
+  reported as it was observed.
+context:
+  scaffold_script: place-files.sh
+---
+tags: [wsts-configure]
+max_turns: 120
+timeout_seconds: 3600
+allowed_tools: [Read, Glob, Grep, Skill, Write, Edit, Bash]
+---

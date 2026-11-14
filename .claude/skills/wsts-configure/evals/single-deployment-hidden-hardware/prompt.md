@@ -1,0 +1,1 @@
+We only want the Payload computer for now — no Cdh, no system. Our flight project is in ../orbiter-fsw, next to fprime-wsts. Set up a WSTS simulation of Payload by itself and get it to build and run here. I won't be around to answer questions, so make sensible calls and tell me what they were.

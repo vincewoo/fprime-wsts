@@ -1,0 +1,19 @@
+schema_version: "1.1"
+name: stuck-on-generate-and-build
+expected_outcome: |
+  The agent works through the user's existing configuration in ../orbiter-fsw-sim one
+  failure at a time. The model's endpoint is fixed to i2cBus from the endpoint list the
+  generator prints. BUILD_TESTING for the whole build is replaced by
+  cmake.stub_variants: [Components/Imager], with the reason. The missing board header gets
+  a stand-in through cmake.include_early, and the memcpy error a -include cstring flag. The
+  user's other choices (the register interface substitution, the IMU model) are kept. The
+  flight project and the generated tree are never edited by hand, the deployment is built
+  and run, and the final message explains each change.
+context:
+  scaffold_script: place-files.sh
+---
+tags: [wsts-configure]
+max_turns: 120
+timeout_seconds: 3600
+allowed_tools: [Read, Glob, Grep, Skill, Write, Edit, Bash]
+---

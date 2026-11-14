@@ -255,6 +255,20 @@ A recording is itself a scenario: load it again to replay the run.
 | [docs/vxworks-conversion.md](docs/vxworks-conversion.md) | Converting a non-Linux deployment |
 | [AGENTS.md](AGENTS.md) | Working in this repository, and using the toolkit from an agent |
 
+## Configuring your own project with an agent
+
+The repository has [agent skills](.claude/skills) for Claude Code. With your flight
+project checked out beside this one (`../my-mission`), ask an agent working in this
+checkout to "set up a WSTS simulation of ../my-mission":
+
+- **`wsts-configure`** surveys the project's deployments and hardware drivers, asks what only
+  you know (entry points, which components reach hardware, which computers are linked),
+  writes a simulation project beside yours (`../my-mission-sim`) with a manifest per
+  deployment or a whole system, then generates, builds and runs it, and works through each
+  error until it runs.
+- **`wsts-device-model`** writes a device model from a datasheet and checks it against the
+  real device over its serial, I2C, SPI or GPIO interface.
+
 ## Running the tests
 
 ```bash

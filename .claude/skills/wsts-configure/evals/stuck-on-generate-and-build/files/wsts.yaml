@@ -1,0 +1,21 @@
+# Our first try at simulating Payload
+project: ../orbiter-fsw
+deployment: Payload
+
+substitute:
+  - instance: fpgaRegs
+    with: Wsts.SimRegister
+
+models:
+  - name: imu
+    class: Wsts::RegisterMapI2c
+    endpoint: i2cbus
+    kind: i2c
+    address: 0x68
+    params: {"0x75": "0x68"}
+
+cmake:
+  cache:
+    BUILD_TESTING: ON      # someone said this makes the camera SDK go away
+
+bridge: tcp:50100

@@ -1,0 +1,1 @@
+I'm trying to simulate our Payload computer with fprime-wsts. The flight code is in ../orbiter-fsw and my config is ../orbiter-fsw-sim/wsts.yaml, but `fprime-wsts generate ../orbiter-fsw-sim/wsts.yaml` fails and I don't understand the error. Can you get it generating, building and running? Please keep my other settings unless they're actually wrong, and explain what you changed.

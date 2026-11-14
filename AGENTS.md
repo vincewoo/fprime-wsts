@@ -15,6 +15,7 @@ Start with [README.md](README.md); the design is in [docs/design.md](docs/design
 | `examples/mission-sim/` | The example's simulation project: `wsts-system.yaml`, `cdh.yaml`, `payload.yaml`, simulators written as F´ components, a 125 Hz clock, a bus-less surrogate, mirror surrogates, a device model, a register block with an interrupt, a vendored library, configuration overrides. Its `wsts/Mission/` is **generated** and checked in. `examples/README.md` maps each feature to where it is |
 | `tests/e2e/` | End-to-end tests against the running Mission system and a GDS (`test_system.py`, `test_cdh.py`, `test_payload.py`) |
 | `lib/` | Pinned submodules: `fprime` (v4.4.2), `fprime-vxworks` |
+| `.claude/skills/` | Agent skills: `wsts-configure` (configure, build and run a simulation of a flight project checked out beside this one, one deployment or a system), `wsts-device-model` (a device model from a datasheet and the real device). Each has scripts, references and evals |
 
 ## Commands
 
