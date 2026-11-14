@@ -260,6 +260,8 @@ def scan_headers(sources: Sequence[Tuple[Path, str]], index: HeaderIndex, follow
 # ----------------------------------------------------------------------
 
 LINK_COMMANDS = ("target_link_libraries", "link_libraries", "target_link_options", "add_link_options")
+# Commands that register a module's unit tests, which the simulated build does not build
+UNIT_TEST_COMMANDS = ("register_fprime_ut", "register_fprime_ut_helper")
 
 
 def _where(command: flight_cmake.Command) -> str:
@@ -297,6 +299,8 @@ def scan_cmake(tree: flight_cmake.BuildTree, module_of: Callable[[Path], str], s
                             package["components"].append(component)
                 package["needed_by"].append(entry)
                 continue
+            if command.name in UNIT_TEST_COMMANDS:
+                continue  # what only a unit test links is not asked of the host
             if command.name.startswith("register_fprime_") or command.name in LINK_COMMANDS or (
                     command.name in ("set", "list") and command.args and command.args[0].endswith(("DEPS", "LIBS", "LIBRARIES"))):
                 for token in command.args:
@@ -321,8 +325,11 @@ def module_sources(tree: flight_cmake.BuildTree, module_of: Callable[[Path], str
     found: List[Tuple[Path, str]] = []
     for cmake_file, commands in tree.files.items():
         directory = cmake_file.parent
-        sources = [f for command in commands for f in flight_cmake.named_sources(command, directory)]
-        registers = any(c.name.startswith(("register_fprime_", "add_library", "add_executable")) for c in commands)
+        # Unit tests are never built: BUILD_TESTING is off for the simulated build, and a
+        # module read in its stub variant has its register_fprime_ut() switched off
+        built = [c for c in commands if c.name not in UNIT_TEST_COMMANDS]
+        sources = [f for command in built for f in flight_cmake.named_sources(command, directory)]
+        registers = any(c.name.startswith(("register_fprime_", "add_library", "add_executable")) for c in built)
         if not sources and registers and cmake_file.name == "CMakeLists.txt":
             sources = sorted(p for p in directory.iterdir() if p.suffix in flight_cmake.SOURCE_SUFFIXES and p.is_file())
         found += [(source, module_of(cmake_file)) for source in sources if source.is_file()]
