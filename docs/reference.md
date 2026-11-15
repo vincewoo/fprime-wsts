@@ -645,7 +645,8 @@ Newline-delimited JSON. A client sends `{"id": n, "op": …}` and receives
 
 | `op` | Purpose |
 |---|---|
-| `status` | Tick, run state, fault and scenario state, bus counters, endpoint names, and `links` / `links_up` (link ends of a system element, and how many are connected) |
+| `status` | Tick, run state, fault and scenario state, bus counters, endpoint names, and `links` / `links_up` (link ends of a system element, and how many are connected). Also what flight software has been given and not finished: `counting` (the deployment's queue counts it), `activity` (messages waiting for a task or being handled, and work of the simulation's own threads, now), `work` (the total since start-up) and `busy_ticks` (ticks taken while work of an earlier one was outstanding) |
+| `wait_quiescent` (`timeout_ms`=1000) | Wait until `activity` is zero: flight software has finished everything it was given. Answers `quiescent`, `activity` and, when it is not, `holding`: the queues with work outstanding, as `<queue>: <messages>, …`. Meaningful while paused |
 | `subscribe` | Start receiving `{"ev": "rec", …}`, `{"ev": "action", …}` and `{"ev": "sim_event", …}` |
 | `gpio_get` (`endpoint`) | Level flight software last wrote |
 | `attach` (`endpoint`, `kind`: `i2c`\|`spi`, `addr`) | Become the device model. The sim then sends `{"ev": "i2c_req", "rid", "endpoint", "addr", "write", "rlen"}` and waits up to 2 s for `{"op": "reply", "rid", "status", "data"}` |
@@ -659,7 +660,11 @@ starts them in one process (`python -m fprime_wsts.models --bridge <address> <fi
 in `wsts-logs/models.log`) against a deployment started paused, and resumes it when every
 `serve` has returned. The report lists them under `run.models`.
 
-`fprime_wsts.bridge.WstsBridge` wraps all of this (`step`, `serve_i2c`, `serve_spi`,
+`WstsBridge.step()` returns when the ticks have been taken and flight software is quiescent
+again; `wait_quiescent()` waits for that by itself and raises with the queues that hold
+work up.
+
+`fprime_wsts.bridge.WstsBridge` wraps all of this (`step`, `wait_quiescent`, `serve_i2c`, `serve_spi`,
 `serve_bytestream`, `serve_gpio`,
 `serve_register`, `raise_irq`, `reg_set`, `register_accesses`). `fprime_wsts.bridge.WstsSystem` holds one
 `WstsBridge` per element of a system and addresses faults by link name.

@@ -10,6 +10,7 @@
 #include <cstring>
 
 #include <Os/RawTime.hpp>
+#include <Wsts/Core/Activity.hpp>
 #include <Wsts/Core/Control.hpp>
 
 namespace Wsts {
@@ -76,6 +77,9 @@ void SimTick::loop(U64 microseconds) {
             control.onIdle();
             continue;
         }
+        // Outstanding until the rate groups have been cycled: between the core's part of
+        // the tick and theirs, nothing is on a queue yet
+        Activity::Scope tickWork;
         control.onTick();
         if (this->isConnected_CycleOut_OutputPort(0)) {
             Os::RawTime cycleStart;

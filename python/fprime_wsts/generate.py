@@ -2776,6 +2776,10 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         "    DEPENDS",
         "        ${FPRIME_CURRENT_MODULE}_Top",
         *[f"        {d}" for d in deployment_depends],
+        "    # The queue of the framework, counting the messages that are outstanding: how the",
+        "    # simulation knows that flight software has finished what a tick caused",
+        "    CHOOSES_IMPLEMENTATIONS",
+        "        Wsts_Os_Queue",
         ")",
         "",
     ]

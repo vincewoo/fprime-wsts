@@ -20,6 +20,7 @@ class FakeSim:
         self.replies = []
         self.connection = None
         self.answer_status = None
+        self.answers = {}
         threading.Thread(target=self._serve, daemon=True).start()
 
     def _serve(self):
@@ -35,6 +36,8 @@ class FakeSim:
                 response = self.answer_status(message)
             elif message["op"] == "status":
                 response.update(tick=len(self.requests), endpoints="a,b", paused=False)
+            elif message["op"] in self.answers:
+                response.update(self.answers[message["op"]])
             elif message["op"] == "bogus":
                 response = {"id": message["id"], "ok": False, "error": "unknown op 'bogus'"}
             elif message["op"] == "gpio_get":
@@ -168,6 +171,14 @@ def test_step_asks_for_ticks_and_waits_for_the_pause(sim, bridge):
     assert sim.requests[-1] == {"id": 2, "op": "step", "ticks": 5}
     assert bridge.step(2) >= 44, "the tick at which it had paused"
     assert [r["op"] for r in sim.requests].count("step") == 2
+
+
+def test_wait_quiescent_names_what_holds_work_up(sim, bridge):
+    bridge.wait_quiescent()  # the stand-in answers ok: nothing outstanding
+    assert sim.requests[-1]["op"] == "wait_quiescent" and sim.requests[-1]["timeout_ms"] >= 1
+    sim.answers["wait_quiescent"] = {"quiescent": False, "activity": 2, "holding": "CdhCore.cmdDisp: 2"}
+    with pytest.raises(BridgeError, match=r"2 piece\(s\) outstanding \(CdhCore.cmdDisp: 2\)"):
+        bridge.wait_quiescent(timeout=0.05)
 
 
 def generated(directory, sim):

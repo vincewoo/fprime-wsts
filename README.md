@@ -290,7 +290,7 @@ pytest python/tests
 ```
 
 ```bash
-fprime-util generate --ut && (cd Wsts/Core && fprime-util check)
+fprime-util generate --ut && (cd Wsts/Core && fprime-util check) && (cd Wsts/Os && fprime-util check)
 ```
 
 End-to-end, after building the simulated system (the merged dictionary is written when

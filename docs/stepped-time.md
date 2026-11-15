@@ -1,8 +1,9 @@
 # Stepped Time (design draft)
 
-**Status: a proposal, nothing of it is built.** It is item 1 of the
-[roadmap](design.md#roadmap). [What to decide](#what-to-decide) lists the choices that
-need an answer before work starts.
+**Status: phase 0 is built, the rest is a proposal.** It is item 1 of the
+[roadmap](design.md#roadmap). The choices under [What to decide](#what-to-decide) were
+settled as recommended. [Phase 0: what it showed](#phase-0-what-it-showed) has the results
+of the spike, and one correction to the design that came out of it.
 
 ## The problem
 
@@ -87,8 +88,16 @@ transaction is in progress, and nothing is waiting to be delivered.
 - the *next* blocking `receive` of the same task subtracts one for the message it has
   just finished, before it blocks.
 
-The count is zero exactly when every queued message has been received and its handler has
-returned. Synchronous and guarded port calls need nothing: they run inside the handler
+A queue that is *polled* is counted differently (a finding of phase 0). A queued
+component has a queue and no task: its messages wait until whoever dispatches it, usually
+a rate group on a later tick, takes them. Waiting there they are not unfinished work, and
+counting them would keep a deployment with `Svc.Health` from ever being quiescent. The
+queue tells the two apart by how it is read: a queue read with a blocking receive belongs
+to a task; one read with a non-blocking receive is polled, and its messages count only
+from the moment they are taken until their handler returns.
+
+The count is zero exactly when every message for a task has been received and its handler
+has returned, and no handler of a polled queue is running. Synchronous and guarded port calls need nothing: they run inside the handler
 that makes them. The stepper waits on a condition variable for the count to reach zero.
 
 This is the standard way to do it and its weak point is the standard one: **work that
@@ -235,14 +244,36 @@ Each phase ends with something usable and can be merged by itself. Phase 0 is th
 do first whatever else is decided: if a framework component cannot be made quiescent, the
 design changes.
 
+## Phase 0: what it showed
+
+Built: `Wsts::Activity` (the count, in `Wsts/Core`), `Wsts_Os_Queue` (`Wsts/Os`: F´'s
+generic priority queue with the count around it), the overlay choosing it for every
+simulated deployment, scopes around what the simulation's own threads do for flight
+software (a tick, a clock cycle, a bus delivery, a bridge action), `activity`, `work` and
+`busy_ticks` in `status`, and `wait_quiescent` on the bridge. Nothing is stepped yet:
+ticks are still paced by the wall clock.
+
+| Question | Answer |
+|---|---|
+| Can an overlay replace the framework's queue? | Yes. `CHOOSES_IMPLEMENTATIONS Wsts_Os_Queue` on the overlay's `register_fprime_deployment()` overrides the platform's choice; a unit test fails if it ever stops doing so |
+| Does it still behave as an `Os::Queue`? | The framework's own queue tests (`Os/test/ut/queue`) are built against it and pass |
+| Do the example's computers go quiet after a tick? | Yes, both, with the hub link and a GDS connected: after each of 40 single steps, within a millisecond. Running freely at 10 Hz and 20 Hz, no tick started while work of the one before was outstanding |
+| Do the hub and the ground link keep it from going quiet? | No. Their receive tasks block in the driver between messages and put nothing on a queue |
+| What did the design get wrong? | Polled queues, above: Cdh stood at five outstanding messages for ever, all of them ping replies waiting for `Svc.Health`'s next dispatch |
+
+What it did not test: a deployment with a component that sleeps or polls by itself, a
+flight project other than the example, and anything across elements (bytes in flight on a
+link belong to neither element's count: phase 4).
+
+The end-to-end tests now hold this: Payload and Cdh are stepped tick by tick and must be
+quiescent after each.
+
 ## Risks
 
-- **A framework component that never goes quiet.** `Svc.GenericHub` and the ground
-  link's receive task block in the driver, not on a queue; they are expected to be idle
-  between messages, but phase 0 has to show it.
-- **The implementation choice.** That a deployment's choice overrides the platform's for
-  `Os_Queue`, `Os_Task` and `Os_RawTime` is read from `cmake/implementation.cmake`, not
-  yet tried from an overlay.
+- **A framework component that never goes quiet.** Not the hub or the ground link (phase 0);
+  other framework components that loop by themselves have not been met yet.
+- **The implementation choice.** Shown for `Os_Queue` in phase 0. `Os_Task` and
+  `Os_RawTime` are chosen the same way and are expected to behave the same.
 - **VxWorks deployments with their own tasks.** Project code that starts threads outside
   `Os::Task` (the POSIX shim of roadmap item 2 would cover it) is invisible to the count.
 - **Queue overflow behaves differently.** With the stepper waiting for each tick to
@@ -253,6 +284,8 @@ design changes.
   framework's own OS conformance tests run against them.
 
 ## What to decide
+
+*All five were settled as recommended.*
 
 1. **Per run or per build?** Per run (`--stepped`, one binary serves both modes) costs a
    branch in each OS implementation and means the simulated build always uses the

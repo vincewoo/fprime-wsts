@@ -6,4 +6,8 @@ register_fprime_deployment(
         "${CMAKE_CURRENT_LIST_DIR}/../../../../../mission/Payload/Main.cpp"
     DEPENDS
         ${FPRIME_CURRENT_MODULE}_Top
+    # The queue of the framework, counting the messages that are outstanding: how the
+    # simulation knows that flight software has finished what a tick caused
+    CHOOSES_IMPLEMENTATIONS
+        Wsts_Os_Queue
 )

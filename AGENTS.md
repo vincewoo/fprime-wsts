@@ -8,6 +8,7 @@ Start with [README.md](README.md); the design is in [docs/design.md](docs/design
 | Path | Contents |
 |---|---|
 | `Wsts/Core/` | Plain C++: bus (byte stream, I2C, SPI, GPIO, registers), faults, control core, cycle clocks, scenario player, recorder, bridge, reference models, links between elements, `RegisterSurrogate` (the bus side of a register interface surrogate), `Dma` (address translation a project registers). No F´ dependencies |
+| `Wsts/Os/` | The `Os::Queue` of a simulated deployment (`Wsts_Os_Queue`, chosen by the overlay's `register_fprime_deployment()`): the framework's generic priority queue, telling `Wsts/Core/Activity` which messages are outstanding. The basis of stepped time (`docs/stepped-time.md`) |
 | `Wsts/Drv/`, `Wsts/Svc/` | F´ components: surrogates (`SimRegister` is the one for register interface components), `BusByteStreamDevice` (adapter that puts an F´ simulator on a bus endpoint), `SimCycle` (cycle source with its own rate), `SimControl` (commands/events/telemetry), `SimSetup` (anchor) |
 | `catalog/wsts-catalog.yaml` | Which flight components each surrogate replaces |
 | `schemas/` | JSON Schemas of `wsts.yaml` and `wsts-system.yaml`, for editors. Written by hand: a new manifest key goes there too (`python/tests/test_schema.py` compares them with the parser's key sets) |
@@ -30,7 +31,7 @@ pytest python/tests                                     # generator, manifest, s
 ```
 
 ```bash
-fprime-util generate --ut && (cd Wsts/Core && fprime-util check)   # C++ unit tests
+fprime-util generate --ut && (cd Wsts/Core && fprime-util check) && (cd Wsts/Os && fprime-util check)   # C++ unit tests
 ```
 
 ```bash
@@ -112,6 +113,11 @@ version, unset `JAVA_HOME` so the bundled JRE is used.
   cached: after changing `cmake.cache` in a manifest, pass the value with `cmake -D` to the
   build directory or regenerate it with `fprime-util generate -f`. `fprime-wsts build` does
   the second by itself.
+- Quiescence: `status` has `activity` (work flight software has been given and not finished)
+  and `wait_quiescent` waits for zero and names the queues that hold work up. A message on
+  a task's queue counts from send until its handler returns; one on a polled queue (a
+  queued component) only while it is handled. A thread of the simulation that runs flight
+  handlers itself holds an `Activity::Scope` meanwhile.
 - A new action goes in `Control::dispatch`, then `SimControl.fpp`/`.cpp`, `bridge.py`,
   `docs/reference.md`, and a test at each level.
 

@@ -4,6 +4,8 @@
 // ======================================================================
 #include <Wsts/Core/Bridge.hpp>
 
+#include <Wsts/Core/Activity.hpp>
+
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -11,6 +13,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -229,7 +232,18 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
                 ok = false;
                 error = "unknown endpoint '" + endpoint + "'";
             }
+        } else if (op == "wait_quiescent") {
+            // Block until flight software has finished what it was given, or the time is up
+            const std::int64_t timeout = std::max<std::int64_t>(0, std::min<std::int64_t>(request.num("timeout_ms", 1000), 60000));
+            const bool quiet = Activity::get().waitQuiescent(std::chrono::milliseconds(timeout));
+            response.setBool("quiescent", quiet).setBool("counting", Activity::get().counting());
+            response.setNum("activity", static_cast<std::int64_t>(Activity::get().pending()));
+            if (!quiet) {
+                response.set("holding", Activity::get().holders());  // the queues with work outstanding
+            }
         } else {
+            // An action may run flight handlers on this thread (injected bytes, an interrupt)
+            Activity::Scope actionWork;
             ok = Control::get().exec(request, error);
         }
         response.setBool("ok", ok);
