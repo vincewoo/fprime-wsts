@@ -281,7 +281,7 @@ the last one.
 | | |
 |---|---|
 | Tick sources | `Wsts.SimTick` and the built-in ticker bracket each tick with `Control::awaitTick()` and `finishTick()`. A project's own tick surrogate that only calls `onTick()` is not stepped until it does the same |
-| A run of a set duration | `--duration` counts simulated seconds: the deployment starts paused and is given one `step` of that many ticks, so it ends at exactly that time |
+| A run of a set duration | `--duration` counts simulated seconds: the deployment starts paused and is given one `step` of that many ticks, so it ends at exactly that time. The step is given once the tick source has said how long a tick is (it does when start-up code starts it), waited for up to 20 s |
 | Actions from a client | Held by `Control::ActionGate` in the bridge: applied between two ticks, and finished (the bytes an injection delivers are handled) before the next tick starts. A waiting action goes before the next tick, so a pause reaches a simulation that runs flat out |
 | A pace | `set_rate` in stepped time is a limit (1 is real time); 0, the default, is none |
 | A tick that does not finish | After `WSTS_STEP_LIMIT_MS` of wall time (10 s) the simulation pauses, `status` has `stuck` with the queues that hold work, the log says so, and `run` ends with exit status 1 |
@@ -309,11 +309,11 @@ computers three times and compares the files.
 | Simulated time | `Control::simTimeNs()`: an epoch (2000-01-01T00:00:00Z, or `time.epoch` in the manifest) plus ticks times the tick period |
 | The time component | `Wsts.SimTime` replaces `Svc.PosixTime` and `Svc.ChronoTime` from the catalog: the host's clock in real time, simulated time in stepped time. A project's own time component needs a surrogate that asks `Control::flightTime()` (the example's Cdh has one) |
 | `Os::RawTime` | `Wsts_Os_RawTime`: the POSIX one in real time, simulated time in stepped time. Time stands still within a tick, so a rate group that times its cycle measures zero in every run |
-| One at a time | In stepped time flight code runs on one thread at a time (`Activity::enter()`, `awaitTurn()`). When the turn is free it goes to the ready contender of lowest rank: threads of the simulation (a tick, a delivery) first, then tasks that are starting, in the order they were started, then tasks at their queues, in the order the queues were created. A task gives up its turn and queues for the next in one step, so who runs next does not depend on how fast a thread comes back |
+| One at a time | In stepped time flight code runs on one thread at a time (`Activity::enter()`, `awaitTurn()`). When the turn is free it goes to the ready contender of lowest rank: threads of the simulation (a tick, a delivery) first, then tasks that are starting, in the order they were started, then tasks at their queues, in the order the queues were created. A task is known from the moment it is started (`Activity::expectTask()`, on the thread that starts it), not from when its thread first runs: no one ranked after it is given the turn before it comes. A task gives up its turn and queues for the next in one step, so who runs next does not depend on how fast a thread comes back |
 | `Os::Task` | `Wsts_Os_Task`: the POSIX one; in stepped time a task takes the turn before its routine runs, so what it does before it first waits for a message is ordered too |
-| Start-up | From the start of the runtime to the first tick the tasks are held: the deployment's start-up code runs alone, and the tasks then begin together, in their order. If no tick is asked for within 5 s they are let go, and the log says so |
+| Start-up | From the start of the runtime to the first tick the tasks are held: the deployment's start-up code runs alone. When the tick source first asks for a tick, the tasks begin, in their order, and the first tick waits until they have settled (each at its queue, nothing outstanding) and `Wsts.SimControl` has been told. An action from outside that arrives meanwhile is applied after that. If no tick is asked for within 5 s the tasks are let go, and the log says so |
 | Clocks | No clock thread in stepped time: the stepper issues the cycles a tick grants itself, in the order of their instants, each when the one before is finished |
-| `Wsts.SimControl` | Told on every tick and after every action from outside; telemetry once a simulated second. An action's events (`SimPaused`, `FaultArmed`) are sent before the next tick |
+| `Wsts.SimControl` | Told at fixed points only: when start-up has settled, on every tick, after every action from outside, and when a tick leaves the simulation paused (the end of a step, a tick that did not finish). Not while paused by the wall clock, as in real time. Telemetry once a simulated second. An action's events (`SimPaused`, `FaultArmed`) are sent before the next tick, and whatever was done between two ticks is finished before the next one starts |
 | Actions from outside | Applied when nothing is under way, not only between ticks: an action meets the same state in every run |
 
 What the order of tasks is **not**: the flight scheduler's. Tasks run in the order of
@@ -367,6 +367,25 @@ or in a task of its own is not known either: the report gives the consequence fo
 
 Not built, of what the design listed: the slowest ticks in host time in the run summary
 ([decision 4](#what-to-decide)).
+
+**Found while building it: three races of phase 2**, where the host's timing still
+decided something. CI failed `test_two_runs_in_stepped_time_are_the_same_byte_for_byte`
+now and then, and `test_a_whole_run_in_stepped_time` saw a busy first tick:
+
+- A task joined the contest for the turn only when its thread first ran. When start-up
+  let the tasks go, one whose thread came early could begin before one started earlier
+  (two rate groups' first events swapped places). A task is now known when it is started.
+- The first tick was taken as soon as the tasks were let go, with what start-up had left
+  on the queues still unhandled (the busy first tick), and a `step` from the runner could
+  land before, during or after the tasks began. Start-up now settles before the first tick
+  and before any action.
+- While paused, the tick source told `Wsts.SimControl` whenever the wall clock let it look
+  again, so its first telemetry went out before or after a `step`, and a tick could start
+  while it was handled. In stepped time it is now told at fixed points only.
+
+The runner also gave up when, on a loaded host, the tick source had not yet said how long
+a tick is; it now waits. Under every processor kept busy, 60 runs gave one recording per
+element and no busy tick.
 
 ## Risks
 

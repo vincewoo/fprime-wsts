@@ -126,7 +126,10 @@ version, unset `JAVA_HOME` so the bundled JRE is used.
   In stepped time flight software is given simulated time (`Control::flightTime()`,
   `Wsts.SimTime`, `Wsts_Os_RawTime`) and runs on one thread at a time, in a fixed order
   (`Activity::enter()`/`awaitTurn()`; `Wsts_Os_Task` and the queue take the turn): two runs
-  record the same bytes, which `tests/e2e/test_stepped.py` holds. Anything new that runs
+  record the same bytes, which `tests/e2e/test_stepped.py` holds. Tasks are known to the
+  turn from `Os::Task::start` (`Activity::expectTask`), start-up settles before the first
+  tick and before any action (`Control::waitSettled`), and listeners are told at fixed
+  points only (not from `onIdle`). Anything new that runs
   flight handlers on a thread of the simulation needs an `Activity::Scope`; anything that
   reads the host's clock on flight software's behalf breaks the comparison. A system is not
   stepped as a whole. `generate` lists calls in the built components' sources that wait on

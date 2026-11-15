@@ -45,8 +45,13 @@ Os::TaskInterface::Status SimTask::start(const Arguments& arguments) {
     Started* started = new Started{wrapper->m_user_function, wrapper->m_user_argument, s_started.fetch_add(1)};
     wrapper->m_user_function = run;
     wrapper->m_user_argument = started;
+    // Known before its thread exists: the tasks begin in the order they were started,
+    // however soon the host runs each thread
+    const std::uint64_t rank = Activity::TASK_START_RANK + started->order;
+    Activity::get().expectTask(rank);
     const Status status = Os::Posix::Task::PosixTask::start(arguments);
     if (status != Status::OP_OK) {
+        Activity::get().unexpectTask(rank);
         wrapper->m_user_function = started->routine;
         wrapper->m_user_argument = started->argument;
         delete started;
