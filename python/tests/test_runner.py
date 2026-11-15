@@ -123,3 +123,20 @@ def test_scenarios_and_recordings_of_a_system_are_per_element():
     assert one_value("scenario", None) is None and one_value("record", ["a.jsonl"]) == "a.jsonl"
     with pytest.raises(WstsError, match="one file"):
         one_value("record", ["a", "b"])
+
+
+def test_elements_built_from_different_states_are_named_before_the_merge(tmp_path):
+    from fprime_wsts.runner import dictionary_mismatch
+
+    def dictionary(name, project, framework="f22ce8f"):
+        path = tmp_path / f"{name}.json"
+        path.write_text(json.dumps({"metadata": {"projectVersion": project, "frameworkVersion": framework}}))
+        return path
+
+    same = {"cdh": dictionary("cdh", "d366f51"), "payload": dictionary("payload", "d366f51")}
+    assert dictionary_mismatch(same) is None
+    message = dictionary_mismatch({**same, "payload": dictionary("payload", "d366f51-dirty")}, tmp_path / "Mission")
+    assert "project version d366f51 in cdh, d366f51-dirty in payload" in message
+    assert f"fprime-wsts build {tmp_path / 'Mission'} --fresh" in message
+    assert "framework version" in dictionary_mismatch({**same, "payload": dictionary("payload", "d366f51", "v4.4.2")})
+    assert dictionary_mismatch({"cdh": tmp_path / "missing.json", "payload": same["payload"]}) is None

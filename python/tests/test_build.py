@@ -152,6 +152,19 @@ def test_a_system_builds_every_element_and_stops_at_the_first_failure(tmp_path, 
         builder.build(out, only=["radio"], quiet=True)
 
 
+def test_a_system_whose_elements_carry_different_versions_gets_a_warning(tmp_path, calls, capsys):
+    out = system(tmp_path / "S")
+    assert "warnings" not in builder.build(out, quiet=True)
+    for name, version in (("cdh", "abc1234"), ("payload", "abc1234-dirty")):
+        dictionary = out / name / "build-artifacts" / "Linux" / "Dep" / "dict" / "DepTopologyDictionary.json"
+        dictionary.parent.mkdir(parents=True)
+        dictionary.write_text(json.dumps({"metadata": {"projectVersion": version, "frameworkVersion": "v4"}}))
+    (warning,) = builder.build(out, quiet=True)["warnings"]
+    assert "abc1234 in cdh, abc1234-dirty in payload" in warning and "--fresh" in warning
+    assert main(["build", str(out)]) == 0, "the elements are built: it is the GDS that will refuse them"
+    assert "warning: the elements were built from different states" in capsys.readouterr().out
+
+
 def test_what_is_not_a_generated_directory(tmp_path, calls, capsys):
     assert main(["build", str(tmp_path)]) == 2
     assert "is not a generated simulation deployment or system" in capsys.readouterr().err

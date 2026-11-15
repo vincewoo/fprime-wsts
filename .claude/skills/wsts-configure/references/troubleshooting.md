@@ -100,8 +100,10 @@ directions. The build has the last word. For each missing item it gives remedies
 
 ## build: configure
 
-`fprime-util generate` in each element's directory. `build_loop.py` runs it only when no
-build directory exists (`--fresh` regenerates it).
+`fprime-util generate` in each element's directory. `build_loop.py` builds with
+`fprime-wsts build`, which runs it when no build directory exists, when one was left
+unfinished, and when what a build directory caches has changed (`cmake.cache`, values
+carried over from flight); `--fresh` always regenerates.
 
 | Symptom | Fix |
 |---|---|

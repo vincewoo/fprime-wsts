@@ -212,8 +212,19 @@ def build(directory: Path, jobs: Optional[int] = None, fresh: bool = False, only
         summary[name] = build_element(name, element_directory, log, jobs, fresh, defines, quiet, executable)
         if summary[name]["exit_code"] != 0 and not keep_going:
             break
-    return {"output": str(directory), "ok": all(r["exit_code"] == 0 for r in summary.values()) and bool(summary),
-            "elements": summary}
+    result = {"output": str(directory), "ok": all(r["exit_code"] == 0 for r in summary.values()) and bool(summary),
+              "elements": summary}
+    if system and result["ok"]:
+        # Elements built at different times carry different versions, which only shows when
+        # the GDS is started on their merged dictionary: say so now, with the way out
+        from .runner import dictionary_mismatch
+
+        dictionaries = {name: found for name, element_directory in elements
+                        for found in sorted(element_directory.glob("build-artifacts/*/*/dict/*Dictionary.json"))[:1]}
+        mismatch = dictionary_mismatch(dictionaries, directory)
+        if mismatch:
+            result["warnings"] = [mismatch]
+    return result
 
 
 def build_cli(args) -> int:
@@ -243,6 +254,8 @@ def build_cli(args) -> int:
                and (not args.element or name in args.element)]
     if skipped:
         print(f"not built after that failure: {', '.join(skipped)} (--keep-going builds the others anyway)", file=stream)
+    for warning in result.get("warnings", []):
+        print(f"warning: {warning}", file=stream)
     if result["ok"] and not args.json:
         print(f"Run it with: fprime-wsts run {directory} --gds")
     return 0 if result["ok"] else 1
