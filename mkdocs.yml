@@ -131,7 +131,7 @@ nav:
           - Configuring with an Agent: user-guide/agents.md
       - Troubleshooting: user-guide/troubleshooting.md
   - Reference:
-      - reference/index.md
+      - reference-docs/index.md
       - Manifest, CLI and Formats: reference.md
       - Design: design.md
       - Fidelity: fidelity.md

@@ -8,6 +8,8 @@ site those files do not exist, so such links are pointed at the same file on Git
 import os
 import re
 
+from mkdocs.exceptions import PluginError
+
 REPOSITORY = "https://github.com/vincewoo/fprime-wsts"
 BRANCH = "main"
 
@@ -31,6 +33,18 @@ def _rewrite(target, page_dir, docs_dir, repo_root):
     kind = "tree" if os.path.isdir(resolved) else "blob"
     url = f"{REPOSITORY}/{kind}/{BRANCH}/{relative}"
     return url + (f"#{anchor.lower()}" if anchor else "")
+
+
+def on_files(files, config):
+    # foo.md and foo/index.md both become foo/index.html; MkDocs keeps one without a word.
+    seen = {}
+    for file in files:
+        previous = seen.setdefault(file.dest_uri, file.src_uri)
+        if previous != file.src_uri:
+            raise PluginError(
+                f"{previous} and {file.src_uri} are both published at {file.dest_uri}"
+            )
+    return files
 
 
 def on_page_markdown(markdown, page, config, files):
