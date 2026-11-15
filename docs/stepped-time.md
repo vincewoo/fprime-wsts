@@ -1,13 +1,12 @@
 # Stepped Time (design draft)
 
-**Status: phases 0 to 3 are built (stepped time is experimental); lockstep for systems is
-a proposal.** It is item 1 of the
+**Status: phases 0 to 4 are built (stepped time is experimental).** It is item 1 of the
 [roadmap](design.md#roadmap). The choices under [What to decide](#what-to-decide) were
 settled as recommended. [Phase 0: what it showed](#phase-0-what-it-showed) has the results
 of the spike, and one correction to the design that came out of it;
-[Phase 1](#phase-1-what-is-built), [Phase 2](#phase-2-what-is-built) and
-[Phase 3](#phase-3-what-is-built) say what stepped time does today and what it leaves to
-the later phases.
+[Phase 1](#phase-1-what-is-built), [Phase 2](#phase-2-what-is-built),
+[Phase 3](#phase-3-what-is-built) and [Phase 4](#phase-4-what-is-built) say what stepped
+time does today and what it leaves undone.
 
 ## The problem
 
@@ -176,7 +175,7 @@ defined place:
   `inject_bytes` and then `step(1)` knows the bytes are there before the tick. This is
   the part that makes tests exact.
 - **Link traffic between elements** is tagged with the sender's simulated time and
-  delivered at the start of the receiver's next instant at or after it (lockstep, below).
+  delivered at the start of the receiver's first tick after it (lockstep, below).
 - **The ground link** stays a real socket and stays asynchronous: a command from the GDS
   lands in whichever tick is current when it arrives. Its handling is counted like any
   other work, so the tick still finishes properly. A test that needs a command at an
@@ -191,7 +190,7 @@ next instant any of them has, waits for all to be quiescent and for the links to
 drained, and repeats. Pause, resume and step then act on the system as one thing, and a
 system scenario with one time base becomes possible.
 
-This is phase 4 and can wait: stepped time for one deployment is useful by itself.
+This is phase 4 ([built](#phase-4-what-is-built)).
 
 ## Alternatives considered
 
@@ -242,7 +241,7 @@ waiting on the host (built in phase 3).
 | 1. Stepped ticks | The stepper, `--stepped`, exact `step`, bridge actions between ticks, the stuck-task report | Medium | Faster than real time; tests without timeouts |
 | 2. Simulated time | `Wsts_Os_RawTime`, `Wsts.SimTime`, `Os::Task::delay`, clocks without threads, `delay` faults, serialised bus | Medium | Two runs of one scenario give identical recordings and time stamps: a test in CI that compares them |
 | 3. Reporting | The generator's report of code that waits on the host; fidelity and user guide pages | Small | A project learns before it builds whether stepped mode will work (built: [Phase 3](#phase-3-what-is-built)) |
-| 4. Lockstep | The conductor for systems, time-tagged links, system-wide pause, step and scenarios | Medium to large | The example system repeatable end to end |
+| 4. Lockstep | The conductor for systems, time-tagged links, system-wide pause, step and scenarios | Medium to large | The example system repeatable end to end (built: [Phase 4](#phase-4-what-is-built)) |
 
 Each phase ends with something usable and can be merged by itself. Phase 0 is the one to
 do first whatever else is decided: if a framework component cannot be made quiescent, the
@@ -328,8 +327,9 @@ Not built, of what phase 2 listed:
   blocking send lets go of the turn while it waits; anything else ends as a tick that
   does not finish, reported after `WSTS_STEP_LIMIT_MS`.
 - **What arrives from outside is not placed.** A ground command or bytes from another
-  element land in whichever tick is being taken (ground link: by design; links: phase 4).
-  `busy_ticks` counts the ticks that started while such a delivery was under way.
+  element land in whichever tick is being taken (ground link: by design; links: placed in
+  lockstep, phase 4). `busy_ticks` counts the ticks that started while such a delivery was
+  under way.
 - **Telemetry that reads the host** (`Svc.SystemResources`: processor and memory use)
   differs between runs as it does between machines.
 
@@ -386,6 +386,51 @@ now and then, and `test_a_whole_run_in_stepped_time` saw a busy first tick:
 The runner also gave up when, on a loaded host, the tick source had not yet said how long
 a tick is; it now waits. Under every processor kept busy, 60 runs gave one recording per
 element and no busy tick.
+
+## Phase 4: what is built
+
+Lockstep. The elements of a system are stepped together, on one time base, and two runs of
+the example system record the same on every element, byte for byte: every bus
+transaction, every packet each computer sends the other through the hub, and the tick each
+arrived in. An end-to-end test runs the system three times for a simulated minute and
+compares the files.
+
+```bash
+fprime-wsts run examples/mission-sim/wsts/Mission --stepped --duration 600 --record run.jsonl
+```
+
+| | |
+|---|---|
+| An element in lockstep | Stepped time, and a tick is taken only when it is granted (`Control::grant`, the bridge's `advance`), whatever the pause says. Its own `step` is refused. `WSTS_LOCKSTEP=1`, or `set_stepped` with `lockstep: true` on a running element |
+| The conductor | `fprime_wsts.lockstep.Conductor`, in Python, with bridge connections of its own. An *instant* is the next simulated time at which any element has a tick: Cdh at 10 Hz and Payload at 20 Hz give one every 50 ms, Payload's alone, then both. The conductor grants one tick to every element due, at once (they run in parallel, each in its own process), and waits until all have finished it. Time is ticks times the tick period from start-up, so elements of different rates meet exactly; one that is behind (switched from real time, its clock started later) is brought up first |
+| Links | Each message carries the simulated time it was sent at. In lockstep the receiving end holds it, and delivers it at the start of its first tick later than that time, before anything else of the tick. What two elements send each other in one instant therefore goes to their next ticks, whichever process got there first. Before granting a tick the conductor tells the receiving end how many messages the other end had sent by the end of the last instant (`expect.<link>`), and the tick waits for them: a slow host cannot make one arrive a tick late. If they do not come within `WSTS_STEP_LIMIT_MS`, the tick does not finish and `stuck` names the link. A message sent before the peer is connected waits for it instead of being lost |
+| `fprime-wsts run <system> --stepped` | Starts every element in lockstep, waits until each has settled after start-up and its tick source has said how long a tick is, then conducts: for `--duration` simulated seconds, or until interrupted. A pause of any element (`SIM_PAUSE` from the GDS, a client's `pause`) holds the whole system at the end of an instant until it is resumed. The summary has `lockstep`, `sim_seconds`, `speed` and, for a tick that did not finish, `stuck` by element. A manifest of an element with `time.mode: stepped` makes it the default |
+| A client | `WstsSystem.set_stepped()` switches a running system, `step(seconds=…)` or `step(instants=…)` advances it and returns when every tick is finished, `time()` is the system's time, `run_scenario()` plays a system scenario. The pytest plugin's `--wsts-stepped` starts a `--wsts-system` in lockstep, held until a test steps it |
+| System scenarios | Actions at simulated times (`time`, seconds), each for an `element`, or a `link` for faults ([reference](reference.md#system-scenarios)). Applied between two instants, once the system's time has reached theirs. A plain `--scenario` of a system run in lockstep |
+
+Measured on the example: a simulated minute of the system (600 ticks of Cdh, 1200 of
+Payload, 1200 instants) in about 3 s of wall time, about 20 times real time. Most of it is
+Cdh's own ticks, each about 3.5 ms: its 125 Hz clock issues twelve or thirteen cycles a
+tick, each finished before the next. A grant from the conductor costs about 0.15 ms, and
+the elements of one instant run at once, so the system goes about as fast as its slowest
+element by itself.
+
+What it is **not**:
+
+- **Not the wire.** What a link carries reaches the receiver at its next tick: a latency of
+  up to one of its tick periods (100 ms for Cdh) that a UART or Ethernet does not have, and
+  none of the wire's own. A `delay` fault still sleeps on the wall clock.
+- **The ground link is still outside input.** A command from the GDS reaches Cdh whenever
+  the GDS sends it. Through the hub it then goes on in simulated time, and only while the
+  system is stepped.
+- **One conductor at a time.** A client that steps a system that `run` conducts freely
+  races it: pause the system first, then step it.
+- **An element restarted in the middle** comes back with its link counts at zero: the
+  other end then waits for messages that will not come, and the tick is reported stuck.
+- **No merged recording.** Each element records its own, at its own ticks.
+- **Python device models** answer between instants, whenever their process gets to it,
+  except those attached as I2C, SPI or register devices, which answer within the
+  transaction.
 
 ## Risks
 

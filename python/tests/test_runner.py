@@ -173,15 +173,31 @@ def test_stepped_time_is_chosen_per_run(tmp_path, capsys):
     make_deployment(tmp_path)
     assert Simulation(tmp_path).stepped is None, "left to the manifest's time.mode"
     assert Simulation(tmp_path, stepped=True).stepped is True and not Simulation(tmp_path, stepped=True).hold
-    # A system is not stepped as a whole yet: its elements would drift apart
-    system = tmp_path / "S"
-    system.mkdir()
-    (system / "wsts-system.json").write_text(json.dumps({"system": "S", "ground": "a", "links": [], "elements": [
-        {"name": "a", "directory": "a", "bridge": "tcp:1"}]}))
-    assert main(["run", str(system), "--stepped"]) == 2
-    assert "single deployment so far" in capsys.readouterr().err
     with __import__("pytest").raises(SystemExit):
         main(["run", str(tmp_path), "--stepped", "--realtime"])
+
+
+def test_a_system_is_stepped_in_lockstep_when_asked_or_when_an_element_asks(tmp_path, capsys):
+    from fprime_wsts.cli import main
+    from fprime_wsts.runner import SystemSimulation
+
+    system = tmp_path / "S"
+    for name in ("a", "b"):
+        (system / name).mkdir(parents=True)
+        (system / name / "wsts-report.json").write_text(json.dumps({"time": {"mode": "realtime"}}))
+    (system / "wsts-system.json").write_text(json.dumps({"system": "S", "ground": "a", "links": [], "elements": [
+        {"name": "a", "directory": "a", "bridge": "tcp:1"}, {"name": "b", "directory": "b", "bridge": "none"}]}))
+    assert SystemSimulation(system).stepped is None, "real time, as the manifests say"
+    assert SystemSimulation(system, stepped=True).stepped is True
+    (system / "b" / "wsts-report.json").write_text(json.dumps({"time": {"mode": "stepped"}}))
+    assert SystemSimulation(system).stepped is True, "one stepped element alone would run away from the others"
+    assert SystemSimulation(system, stepped=False).stepped is False
+    # Lockstep goes through every element's bridge
+    assert main(["run", str(system), "--stepped"]) == 2
+    assert "b has none (bridge: none)" in capsys.readouterr().err
+    # A scenario for the whole system needs one time base
+    assert main(["run", str(system), "--realtime", "--scenario", "all.jsonl"]) == 2
+    assert "needs lockstep" in capsys.readouterr().err
 
 
 def test_a_stepped_run_waits_for_the_tick_source_to_say_how_long_a_tick_is(tmp_path, monkeypatch, capsys):

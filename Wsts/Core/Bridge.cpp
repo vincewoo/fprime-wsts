@@ -220,6 +220,7 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
             response.set("endpoints", names);
             response.setNum("links", LinkByteStream::started());
             response.setNum("links_up", LinkByteStream::connected());
+            LinkByteStream::traffic(response);
         } else if (op == "subscribe") {
             m_subscribed.store(true);
         } else if (op == "attach") {
@@ -241,6 +242,8 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
             if (!quiet) {
                 response.set("holding", Activity::get().holders());  // the queues with work outstanding
             }
+        } else if (op == "advance") {
+            ok = this->advance(request, response, error);
         } else {
             // In stepped time: between two ticks, and finished before the next one
             Control::ActionGate gate;
@@ -253,6 +256,47 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
             response.set("error", error);
         }
         this->send(response);
+    }
+
+    //! Lockstep: the conductor of a system grants this element ticks and waits until they
+    //! are taken and finished. `expect.<link>` says how many messages the link will have
+    //! received before then. Answers with the status, and what the links sent and received.
+    bool advance(const JsonObj& request, JsonObj& response, std::string& error) {
+        Control& control = Control::get();
+        if (!control.lockstep()) {
+            error = "not in lockstep (set_stepped with lockstep: true)";
+            return false;
+        }
+        const std::string prefix = "expect.";
+        for (const std::string& key : request.keys()) {
+            if (key.rfind(prefix, 0) != 0) {
+                continue;
+            }
+            LinkByteStream* link = LinkByteStream::find(key.substr(prefix.size()));
+            if (link == nullptr) {
+                error = "no link '" + key.substr(prefix.size()) + "' in this element";
+                return false;
+            }
+            link->expect(request.unum(key));
+        }
+        const std::int64_t ticks = request.num("ticks", 1);
+        if (ticks < 0 || ticks > 1000000000) {
+            error = "ticks must be between 0 and 1000000000";
+            return false;
+        }
+        if (ticks > 0 && !control.grant(static_cast<std::uint64_t>(ticks))) {
+            error = "lockstep ended";
+            return false;
+        }
+        const std::int64_t timeout = std::max<std::int64_t>(0, std::min<std::int64_t>(request.num("timeout_ms", 30000), 600000));
+        const bool done = control.awaitGranted(std::chrono::milliseconds(timeout));
+        response = control.status().toJson();
+        if (request.has("id")) {
+            response.setNum("id", request.num("id"));
+        }
+        response.setBool("done", done);
+        LinkByteStream::traffic(response);
+        return true;
     }
 
     bool attach(const JsonObj& request, std::string& error) {

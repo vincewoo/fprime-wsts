@@ -58,6 +58,17 @@ class Model {
     virtual void onTick(std::uint64_t tick) { (void)tick; }
 };
 
+//! What arrives from another element of a system (the far end of a link). In lockstep it is
+//! held until the tick it belongs to: Control delivers it at the start of each tick.
+class Inbound {
+  public:
+    virtual ~Inbound() = default;
+    //! Deliver to flight software, in the order it arrived, what was sent before `beforeNs`
+    //! of simulated time. First wait, until `limit` at most, for what the conductor said will
+    //! have arrived by now. Returns why that did not come, or an empty string.
+    virtual std::string deliverDue(std::uint64_t beforeNs, std::chrono::steady_clock::time_point limit) = 0;
+};
+
 enum class ScenarioState : std::uint8_t { IDLE = 0, LOADED = 1, RUNNING = 2, COMPLETED = 3, FAILED = 4 };
 enum class ReplayMode : std::uint8_t {
     STIMULUS = 0,   //!< Re-apply recorded actions against live models
@@ -102,6 +113,8 @@ struct SimStatus {
     std::uint64_t work = 0;      //!< pieces of work since start-up
     std::uint64_t busyTicks = 0; //!< ticks taken while work of an earlier one was outstanding
     bool stepped = false;        //!< stepped time: a tick is taken when the last one is finished
+    bool lockstep = false;       //!< lockstep: a tick is taken when the system's conductor grants one
+    bool settled = false;        //!< stepped time: start-up has settled, the first tick may be taken
     std::uint64_t tickPeriodNs = 0; //!< simulated time one tick covers; 0 while not known
     double simSeconds = 0.0;     //!< simulated time: ticks times the tick period
     std::string stuck;           //!< stepped time: where the work of a tick that did not finish is
@@ -153,6 +166,8 @@ class Control : public BusObserver {
     void finishTick();
     //! Simulated time: the epoch plus the ticks taken so far, in nanoseconds
     std::uint64_t simTimeNs() const;
+    //! Simulated time since start-up: the ticks taken so far times the tick period
+    std::uint64_t elapsedNs() const;
     //! Where simulated time starts, in seconds since 1970 (default: 2000-01-01T00:00:00Z)
     void setEpoch(std::uint64_t seconds) { m_epochSeconds.store(seconds); }
     std::uint64_t epoch() const { return m_epochSeconds.load(); }
@@ -177,6 +192,24 @@ class Control : public BusObserver {
       private:
         bool m_held;
     };
+
+    // ---- Lockstep (docs/stepped-time.md, phase 4) ----
+    //
+    // The elements of a system are stepped together by a conductor (fprime-wsts run, or a
+    // WstsSystem client) that advances simulated time instant by instant. An element in
+    // lockstep takes a tick only when the conductor grants one, and what its links bring
+    // in is held until the first tick later than the time it was sent at.
+
+    bool lockstep() const { return m_lockstep.load(); }
+    //! Lockstep needs stepped time: turning it on turns that on too. Turning it off delivers
+    //! whatever the links hold.
+    void setLockstep(bool lockstep);
+    //! Grant ticks (the conductor). False, and nothing granted, when not in lockstep.
+    bool grant(std::uint64_t ticks);
+    //! Wait until the ticks granted are taken and finished. False if the time came first.
+    bool awaitGranted(std::chrono::milliseconds timeout);
+    void addInbound(Inbound* inbound);
+    void removeInbound(Inbound* inbound);
 
     //! Mark that a surrogate tick source exists, so no internal ticker is needed
     void registerTickSource() { m_hasTickSource.store(true); }
@@ -265,6 +298,7 @@ class Control : public BusObserver {
     std::atomic<std::uint64_t> m_tick{0};
     std::atomic<bool> m_paused{false};
     std::atomic<bool> m_stepped{false};
+    std::atomic<bool> m_lockstep{false};
     std::atomic<double> m_steppedRate{0.0};  //!< pace of stepped time against the wall clock; 0: as fast as it goes
     std::atomic<std::uint32_t> m_stepLimitMs{10000};
     std::atomic<bool> m_startedUp{false};  //!< stepped time: the tasks were let go before the first tick
@@ -275,7 +309,11 @@ class Control : public BusObserver {
     bool m_tickOpen = false;       //!< a tick is being taken and has not finished
     bool m_actionOpen = false;     //!< an action from outside is being applied
     std::uint32_t m_actionsWaiting = 0;
+    std::uint64_t m_granted = 0;   //!< lockstep: ticks granted and not taken yet
     std::string m_stuck;
+    std::string m_late;            //!< lockstep: what a link did not bring in time for this tick (tick thread)
+    std::mutex m_inboundMutex;
+    std::vector<Inbound*> m_inbound;
     std::atomic<std::uint64_t> m_busyTicks{0};  //!< ticks taken before the work of the last one was finished
     std::atomic<std::uint64_t> m_stepUntil{0};  //!< tick at which a `step` pauses; 0: not stepping
     std::atomic<double> m_rate{1.0};

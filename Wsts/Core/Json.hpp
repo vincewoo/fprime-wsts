@@ -27,6 +27,8 @@ class JsonObj {
     std::string dump() const;
 
     bool has(const std::string& key) const;
+    //! The keys, in sorted order
+    std::vector<std::string> keys() const;
     std::string str(const std::string& key, const std::string& fallback = "") const;
     //! Numeric value; accepts decimal and 0x-prefixed hex, in quoted or unquoted form
     std::int64_t num(const std::string& key, std::int64_t fallback = 0) const;

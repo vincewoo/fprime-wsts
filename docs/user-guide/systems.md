@@ -103,9 +103,30 @@ events and channels of every element are then available under their usual names:
 `Payload.wstsControl.FAULT_SET`.
 
 `--env NAME=VALUE` goes to every element and `--env payload.NAME=VALUE` to one.
-`--scenario`, `--record` and `--bridge` apply to single deployments only. An element can
-still run alone with `fprime-wsts run <system>/<element>`; its links then stay down, as if
-the other computer were switched off.
+`--scenario` and `--record` are per element (`--scenario payload=overtemp.jsonl`; a plain
+`--record run.jsonl` records each element to `run.<element>.jsonl`), and `--bridge` applies
+to single deployments only. An element can still run alone with
+`fprime-wsts run <system>/<element>`; its links then stay down, as if the other computer
+were switched off.
+
+## Run a system in lockstep
+
+```bash
+fprime-wsts run my-mission-sim/wsts/Mission --stepped --duration 600 --record run.jsonl
+```
+
+steps every element together on one time base, as fast as the host computes (experimental;
+[stepped time](../stepped-time.md#phase-4-what-is-built)). Ticks of all elements are taken in
+the order of their simulated times, each when the ones before it have finished, and what a
+link carries arrives at the receiver's next tick. Two runs give the same recordings, byte
+for byte. `--duration` counts simulated seconds; without it the system runs until
+interrupted, and pausing any element holds all of them. A plain `--scenario system.jsonl`
+places actions on the system's time base:
+
+```json
+{"time": 1.0, "element": "payload", "op": "inject_bytes", "endpoint": "sensorUart", "text": "$TEMP,95.5\n"}
+{"time": 2.0, "link": "hub", "op": "fault_set", "kind": "drop", "direction": "b_to_a"}
+```
 
 ## Control a system
 
@@ -119,13 +140,18 @@ with WstsSystem("my-mission-sim/wsts/Mission") as system:
     system.fault_clear("hub")
     system.pause(); system.resume(); system.set_rate(2.0)        # every element
     print(system.links_up(), system.status())
+
+    system.set_stepped(True)            # lockstep
+    system.step(seconds=2.0)            # every element to the same simulated time, finished
+    system.set_stepped(False); system.resume()
 ```
 
 A link is faulted at its `a` end: `a_to_b` is what that element sends, `b_to_a` what it
 receives, `both` cuts the link.
 
 In pytest, `--wsts-system <dir> --wsts-gds` starts the system for the session, and the
-`wsts_system` fixture is a `WstsSystem`:
+`wsts_system` fixture is a `WstsSystem` (add `--wsts-stepped` to start the system in
+lockstep, held until a test steps it):
 
 ```bash
 D=my-mission-sim/wsts/Mission; pytest tests -p fprime_wsts.pytest_plugin --wsts-system $D --wsts-gds --dictionary $D/wsts-logs/MissionDictionary.json
@@ -133,18 +159,19 @@ D=my-mission-sim/wsts/Mission; pytest tests -p fprime_wsts.pytest_plugin --wsts-
 
 ## Things to know
 
-- **Time is per element.** Each has its own tick source, rate and tick count; `pause` and
-  `set_rate` on the system reach the elements one after another.
+- **Time is per element, unless in lockstep.** Each has its own tick source, rate and tick
+  count; in real time `pause` and `set_rate` on the system reach the elements one after
+  another.
 - **Pausing one element** stops its rate groups while the others run: a good test of how
   the rest of the system reacts to a computer that has gone quiet. What it sends from
   other threads (events through a hub, for instance) still arrives.
 - **Message boundaries are kept.** Each send is delivered whole to the other side, which a
   real UART or TCP stream does not guarantee; missing framing does not show up here.
 - **No link timing.** Add latency with a `delay` fault. Bytes sent while the peer is not
-  connected are lost.
+  connected are lost. In lockstep a link's bytes arrive at the receiver's next tick.
 - **Build both elements from the same checkout state.** The GDS refuses to merge
   dictionaries whose project versions differ (`-dirty` on one of them).
-- **Not built yet:** GPIO links between computers, socket connection semantics,
-  system-wide scenarios and lockstep time.
+- **Not built yet:** GPIO links between computers, socket connection semantics, one
+  recording for the whole system.
 
 The full description is in the reference's [Systems](../systems.md) page.

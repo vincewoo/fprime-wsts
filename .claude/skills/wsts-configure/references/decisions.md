@@ -147,6 +147,8 @@ project component that the catalog does not replace drives them.
   wants stepped runs (fast CI, recordings to compare), say what is listed: `may_stall`
   needs a surrogate before `--stepped` can be used; `not_repeatable` from a kept ground
   link is expected. Do not set `time.mode: stepped` while a `may_stall` entry is left.
+  For a system, `--stepped` runs every element in lockstep, so each element's list counts;
+  a stepped manifest on one element puts the whole system in lockstep by default.
 
 ## 7. Register interfaces
 

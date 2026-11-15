@@ -899,5 +899,6 @@ Replay is repeatable to tick granularity. It is not cycle-exact: see
 3. **File-system remapping.** An `Os_File` implementation that maps target paths
    (`/ram0`, `/tffs0`) into a sandbox directory.
 4. 32-bit and big-endian build options; adapters to external dynamics simulators.
-5. Systems: GPIO links, datagram and connection semantics for socket links, system-wide
-   scenarios and merged recordings, and lockstep time across elements (after item 1).
+5. Systems: GPIO links, datagram and connection semantics for socket links, and merged
+   recordings. (Lockstep time across elements and system scenarios are built: phase 4 of
+   item 1.)

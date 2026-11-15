@@ -53,6 +53,7 @@ JsonObj SimStatus::toJson() const {
     obj.setBool("counting", counting).setNum("activity", static_cast<std::int64_t>(activity));
     obj.setNum("work", static_cast<std::int64_t>(work)).setNum("busy_ticks", static_cast<std::int64_t>(busyTicks));
     obj.setBool("stepped", stepped).setReal("sim_seconds", simSeconds);
+    obj.setBool("lockstep", lockstep).setBool("settled", settled);
     obj.setNum("tick_period_ns", static_cast<std::int64_t>(tickPeriodNs));
     if (!stuck.empty()) {
         obj.set("stuck", stuck);
@@ -102,6 +103,7 @@ void Control::reset() {
     m_startedUp = false;
     m_settled = false;
     m_stepped.store(false);
+    m_lockstep.store(false);
     m_steppedRate.store(0.0);
     m_stepLimitMs.store(10000);
     m_epochSeconds.store(DEFAULT_EPOCH);
@@ -109,7 +111,13 @@ void Control::reset() {
         std::lock_guard<std::mutex> lock(m_gateMutex);
         m_tickOpen = false;
         m_actionOpen = false;
+        m_granted = 0;
         m_stuck.clear();
+    }
+    m_late.clear();
+    {
+        std::lock_guard<std::mutex> lock(m_inboundMutex);
+        m_inbound.clear();
     }
     Activity::get().reset();
     m_rate.store(1.0);
@@ -144,6 +152,24 @@ void Control::onTick() {
     Bus::get().expireFaults(tick, expired);
     for (const Fault& fault : expired) {
         this->post(SimEvent::FAULT_EXPIRED, fault.endpoint, faultKindName(fault.kind), fault.id, fault.hits);
+    }
+
+    if (m_lockstep.load()) {
+        // What the other elements sent before this tick's instant, and only that: what they
+        // send at the same instant, while this element ticks too, belongs to the next tick
+        std::vector<Inbound*> inbound;
+        {
+            std::lock_guard<std::mutex> lock(m_inboundMutex);
+            inbound = m_inbound;
+        }
+        const std::uint64_t now = this->elapsedNs();
+        const auto limit = Clock::now() + std::chrono::milliseconds(m_stepLimitMs.load());
+        for (Inbound* link : inbound) {
+            const std::string late = link->deliverDue(now, limit);
+            if (!late.empty()) {
+                m_late += (m_late.empty() ? "" : "; ") + late;
+            }
+        }
     }
 
     this->scenarioRun();
@@ -184,6 +210,9 @@ void Control::setStepped(bool stepped) {
         m_stuck.clear();
     }
     m_gate.notify_all();
+    if (!stepped) {
+        this->setLockstep(false);
+    }
     // In stepped time flight code runs on one thread at a time, in a fixed order
     Activity::get().setExclusive(stepped);
     this->post(SimEvent::LOG, "", stepped ? "stepped time: a tick is taken when the last one is finished"
@@ -192,6 +221,66 @@ void Control::setStepped(bool stepped) {
 
 std::uint64_t Control::simTimeNs() const {
     return m_epochSeconds.load() * 1000000000ull + m_tick.load() * this->tickPeriodNs();
+}
+
+std::uint64_t Control::elapsedNs() const {
+    return m_tick.load() * this->tickPeriodNs();
+}
+
+void Control::setLockstep(bool lockstep) {
+    if (lockstep) {
+        this->setStepped(true);
+    }
+    if (m_lockstep.exchange(lockstep) == lockstep) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_gateMutex);
+        m_granted = 0;
+    }
+    m_gate.notify_all();
+    if (!lockstep) {
+        // Nothing holds what the links brought in any more: it goes to flight software now
+        std::vector<Inbound*> inbound;
+        {
+            std::lock_guard<std::mutex> lock(m_inboundMutex);
+            inbound = m_inbound;
+        }
+        for (Inbound* link : inbound) {
+            (void)link->deliverDue(UINT64_MAX, Clock::now());
+        }
+    }
+    this->post(SimEvent::LOG, "", lockstep ? "lockstep: a tick is taken when the system's conductor grants one"
+                                           : "lockstep ended: this element takes its own ticks");
+}
+
+bool Control::grant(std::uint64_t ticks) {
+    {
+        std::lock_guard<std::mutex> lock(m_gateMutex);
+        if (!m_lockstep.load()) {
+            return false;
+        }
+        m_granted += ticks;
+    }
+    m_gate.notify_all();
+    return true;
+}
+
+bool Control::awaitGranted(std::chrono::milliseconds timeout) {
+    std::unique_lock<std::mutex> lock(m_gateMutex);
+    return m_gate.wait_for(lock, timeout, [this]() { return m_granted == 0 && !m_tickOpen; });
+}
+
+void Control::addInbound(Inbound* inbound) {
+    std::lock_guard<std::mutex> lock(m_inboundMutex);
+    if (std::find(m_inbound.begin(), m_inbound.end(), inbound) == m_inbound.end()) {
+        m_inbound.push_back(inbound);
+    }
+}
+
+void Control::removeInbound(Inbound* inbound) {
+    std::lock_guard<std::mutex> lock(m_inboundMutex);
+    m_inbound.erase(std::remove(m_inbound.begin(), m_inbound.end(), inbound), m_inbound.end());
 }
 
 void Control::flightTime(std::uint32_t& seconds, std::uint32_t& microseconds) const {
@@ -257,13 +346,25 @@ bool Control::awaitTick(std::uint64_t periodUs, Clock::time_point& next, const s
         }
         m_settled = true;
     }
-    if (m_paused.load()) {
+    if (m_lockstep.load()) {
+        // Lockstep: the conductor decides when, not the pause. A granted tick waits for
+        // actions from outside like any other.
+        std::unique_lock<std::mutex> lock(m_gateMutex);
+        const bool granted = m_gate.wait_for(lock, std::chrono::milliseconds(50), [this, &quit]() {
+            return quit.load() || !m_lockstep.load() || (m_granted > 0 && !m_actionOpen && m_actionsWaiting == 0);
+        });
+        if (!granted || quit.load() || !m_lockstep.load() || !m_stepped.load()) {
+            next = Clock::now();
+            return false;
+        }
+        m_granted--;
+        m_tickOpen = true;
+    } else if (m_paused.load()) {
         // Nothing to wait for but a step or a resume: look again shortly
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
         next = Clock::now();
         return false;
-    }
-    {
+    } else {
         // Actions from outside go first: a client that pauses a simulation running flat
         // out must not have to win a race against the next tick
         std::unique_lock<std::mutex> lock(m_gateMutex);
@@ -330,10 +431,19 @@ void Control::finishTick() {
         if (stuck.empty()) {
             stuck = std::to_string(activity.pendingElsewhere()) + " piece(s) of work outside the queues";
         }
+    }
+    if (!m_late.empty() && m_lockstep.load()) {
+        // A link did not bring what the other element had sent: this tick did not see it,
+        // and the run is no longer the same as another
+        stuck += (stuck.empty() ? "" : "; ") + m_late;
+    }
+    m_late.clear();
+    if (!stuck.empty()) {
         {
             // Before the pause shows: whoever sees it paused finds the reason
             std::lock_guard<std::mutex> lock(m_gateMutex);
             m_stuck = stuck;
+            m_granted = 0;  // the conductor stops here
         }
         m_stepUntil.store(0);
         m_paused.store(true);
@@ -343,9 +453,10 @@ void Control::finishTick() {
         this->post(SimEvent::LOG, "", "stepped time: a tick did not finish, paused: " + stuck);
         this->post(SimEvent::PAUSED, "", "", static_cast<std::uint32_t>(m_tick.load()));
     }
-    if (m_stepped.load() && m_paused.load()) {
+    if (m_stepped.load() && m_paused.load() && (!m_lockstep.load() || !stuck.empty())) {
         // The tick left the simulation paused (the last tick of a step, or one that did not
-        // finish): listeners hear of it now, and that is part of the tick
+        // finish): listeners hear of it now, and that is part of the tick. In lockstep a
+        // pause is the conductor's, between two instants: an action, which tells them itself.
         this->notifyListeners(true);
         (void)this->waitFinished(Clock::now() + std::chrono::milliseconds(m_stepLimitMs.load()));
     }
@@ -616,6 +727,12 @@ SimStatus Control::status() {
     status.work = Activity::get().total();
     status.busyTicks = m_busyTicks.load();
     status.stepped = m_stepped.load();
+    status.lockstep = m_lockstep.load();
+    status.settled = m_settled.load();
+    if (status.lockstep) {
+        std::lock_guard<std::mutex> lock(m_gateMutex);
+        status.stepping = m_granted;
+    }
     status.tickPeriodNs = this->tickPeriodNs();
     status.simSeconds = static_cast<double>(status.tick) * static_cast<double>(status.tickPeriodNs) / 1e9;
     status.stuck = this->stuck();
@@ -702,6 +819,11 @@ bool Control::dispatch(const JsonObj& action, std::string& error) {
     Bus& bus = Bus::get();
 
     if (op == "step") {
+        if (m_lockstep.load()) {
+            error = "in lockstep the system's conductor takes the ticks: step the system (WstsSystem.step, or "
+                    "fprime-wsts run --stepped)";
+            return false;
+        }
         const std::int64_t ticks = action.num("ticks", 1);
         if (ticks < 1 || ticks > 1000000000) {
             error = "ticks must be between 1 and 1000000000";
@@ -731,7 +853,11 @@ bool Control::dispatch(const JsonObj& action, std::string& error) {
         return true;
     }
     if (op == "set_stepped") {
-        this->setStepped(action.flag("stepped", true));
+        const bool stepped = action.flag("stepped", true);
+        this->setStepped(stepped);
+        if (action.has("lockstep")) {
+            this->setLockstep(stepped && action.flag("lockstep"));
+        }
         return true;
     }
     if (op == "set_rate") {

@@ -9,11 +9,13 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 namespace Wsts {
 
@@ -21,9 +23,14 @@ namespace {
 
 const int POLL_MS = 100;                           //!< How often blocked calls look at the stop flag
 const std::uint32_t MAX_MESSAGE = 16 * 1024 * 1024;  //!< Larger lengths mean a corrupted stream
+const std::size_t MAX_WAITING = 65536;               //!< Lockstep: messages kept for a peer not yet connected
+const std::size_t HEADER = 12;                       //!< Length (4 bytes), then the time it was sent at (8)
 
 std::atomic<std::uint32_t> s_started{0};
 std::atomic<std::uint32_t> s_connected{0};
+
+std::mutex s_registryMutex;
+std::vector<LinkByteStream*> s_links;  //!< started, in the order they were started
 
 bool unixAddress(const std::string& path, sockaddr_un& address) {
     std::memset(&address, 0, sizeof(address));
@@ -59,6 +66,55 @@ std::uint32_t LinkByteStream::started() {
 
 std::uint32_t LinkByteStream::connected() {
     return s_connected.load();
+}
+
+LinkByteStream* LinkByteStream::find(const std::string& name) {
+    std::lock_guard<std::mutex> lock(s_registryMutex);
+    for (LinkByteStream* link : s_links) {
+        if (link->m_name == name) {
+            return link;
+        }
+    }
+    return nullptr;
+}
+
+void LinkByteStream::traffic(JsonObj& out) {
+    std::lock_guard<std::mutex> lock(s_registryMutex);
+    for (LinkByteStream* link : s_links) {
+        out.setNum("link." + link->m_name + ".sent", static_cast<std::int64_t>(link->sent()));
+        out.setNum("link." + link->m_name + ".received", static_cast<std::int64_t>(link->received()));
+    }
+}
+
+std::uint64_t LinkByteStream::received() const {
+    std::lock_guard<std::mutex> lock(m_inboxMutex);
+    return m_received;
+}
+
+void LinkByteStream::expect(std::uint64_t received) {
+    std::lock_guard<std::mutex> lock(m_inboxMutex);
+    m_expected = received;
+}
+
+std::string LinkByteStream::deliverDue(std::uint64_t beforeNs, std::chrono::steady_clock::time_point limit) {
+    std::vector<Bytes> due;
+    std::string late;
+    {
+        std::unique_lock<std::mutex> lock(m_inboxMutex);
+        if (!m_arrived.wait_until(lock, limit, [this]() { return m_received >= m_expected; })) {
+            late = "link " + m_name + ": " + std::to_string(m_received) + " of the " + std::to_string(m_expected) +
+                   " messages the other element sent had arrived";
+        }
+        // In the order they arrived, which is the order they were sent in, and so of their times
+        while (!m_inbox.empty() && m_inbox.front().timeNs < beforeNs) {
+            due.push_back(std::move(m_inbox.front().data));
+            m_inbox.pop_front();
+        }
+    }
+    for (const Bytes& data : due) {
+        Bus::get().byteStreamInject(m_endpoint, data, "link");
+    }
+    return late;
 }
 
 bool LinkByteStream::set(const std::string& key, const std::string& value) {
@@ -101,6 +157,11 @@ void LinkByteStream::start() {
     }
     m_running.store(true);
     s_started++;
+    {
+        std::lock_guard<std::mutex> lock(s_registryMutex);
+        s_links.push_back(this);
+    }
+    Control::get().addInbound(this);
     m_thread = std::thread([this]() { this->run(); });
 }
 
@@ -111,26 +172,49 @@ void LinkByteStream::stop() {
     if (m_thread.joinable()) {
         m_thread.join();
     }
+    Control::get().removeInbound(this);
+    {
+        std::lock_guard<std::mutex> lock(s_registryMutex);
+        s_links.erase(std::remove(s_links.begin(), s_links.end(), this), s_links.end());
+    }
     s_started--;
     if (m_listen) {
         (void)::unlink(m_address.c_str());
     }
 }
 
+bool LinkByteStream::writeMessage(std::uint64_t timeNs, const Bytes& data) {
+    if (m_fd < 0) {
+        return false;
+    }
+    std::uint8_t header[HEADER];
+    const std::uint32_t size = static_cast<std::uint32_t>(data.size());
+    for (std::size_t i = 0; i < 4; i++) {
+        header[i] = static_cast<std::uint8_t>(size >> (8 * i));
+    }
+    for (std::size_t i = 0; i < 8; i++) {
+        header[4 + i] = static_cast<std::uint8_t>(timeNs >> (8 * i));
+    }
+    return writeFully(m_fd, header, sizeof(header)) && writeFully(m_fd, data.data(), data.size());
+}
+
 void LinkByteStream::onBytes(const Bytes& tx, ByteSink& reply) {
     (void)reply;
-    const std::uint32_t size = static_cast<std::uint32_t>(tx.size());
-    const std::uint8_t header[4] = {
-        static_cast<std::uint8_t>(size),
-        static_cast<std::uint8_t>(size >> 8),
-        static_cast<std::uint8_t>(size >> 16),
-        static_cast<std::uint8_t>(size >> 24),
-    };
+    const std::uint64_t now = Control::get().elapsedNs();
     std::lock_guard<std::mutex> lock(m_sendMutex);
-    // With no peer the bytes go nowhere, as on a cable with nothing at the far end
-    if (m_fd < 0 || !writeFully(m_fd, header, sizeof(header)) || !writeFully(m_fd, tx.data(), tx.size())) {
-        m_dropped++;
+    if (this->writeMessage(now, tx)) {
+        m_sent++;
+        return;
     }
+    if (Control::get().lockstep() && m_running.load() && m_outbox.size() < MAX_WAITING) {
+        // Lockstep: whether the peer is there yet must not decide what it gets. It is
+        // connected before the conductor takes the first instant.
+        m_outbox.push_back(Message{now, tx});
+        m_sent++;
+        return;
+    }
+    // With no peer the bytes go nowhere, as on a cable with nothing at the far end
+    m_dropped++;
 }
 
 int LinkByteStream::listenSocket() {
@@ -193,28 +277,50 @@ void LinkByteStream::serve(int fd) {
     {
         std::lock_guard<std::mutex> lock(m_sendMutex);
         m_fd = fd;
+        // What waited for the peer goes first, in order
+        while (!m_outbox.empty() && this->writeMessage(m_outbox.front().timeNs, m_outbox.front().data)) {
+            m_outbox.pop_front();
+        }
     }
     m_up.store(true);
     s_connected++;
     std::fprintf(stderr, "[WSTS] link %s: up\n", m_name.c_str());
 
-    Bytes message;
     while (m_running.load()) {
-        std::uint8_t header[4];
+        std::uint8_t header[HEADER];
         if (!this->readFully(fd, header, sizeof(header))) {
             break;
         }
-        const std::uint32_t size = static_cast<std::uint32_t>(header[0]) | (static_cast<std::uint32_t>(header[1]) << 8) |
-                                   (static_cast<std::uint32_t>(header[2]) << 16) |
-                                   (static_cast<std::uint32_t>(header[3]) << 24);
+        std::uint32_t size = 0;
+        for (std::size_t i = 0; i < 4; i++) {
+            size |= static_cast<std::uint32_t>(header[i]) << (8 * i);
+        }
+        std::uint64_t timeNs = 0;
+        for (std::size_t i = 0; i < 8; i++) {
+            timeNs |= static_cast<std::uint64_t>(header[4 + i]) << (8 * i);
+        }
         if (size > MAX_MESSAGE) {
             break;
         }
-        message.resize(size);
-        if (size > 0 && !this->readFully(fd, message.data(), size)) {
+        Message message{timeNs, Bytes(size)};
+        if (size > 0 && !this->readFully(fd, message.data.data(), size)) {
             break;
         }
-        Bus::get().byteStreamInject(m_endpoint, message, "link");
+        bool hold = false;
+        {
+            std::lock_guard<std::mutex> lock(m_inboxMutex);
+            m_received++;
+            // Lockstep: held for the tick it belongs to. Decided under the lock, so that
+            // the end of lockstep, which delivers what is held, misses nothing.
+            hold = Control::get().lockstep();
+            if (hold) {
+                m_inbox.push_back(message);
+            }
+        }
+        m_arrived.notify_all();
+        if (!hold) {
+            Bus::get().byteStreamInject(m_endpoint, message.data, "link");
+        }
     }
 
     s_connected--;

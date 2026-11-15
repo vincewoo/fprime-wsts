@@ -2,8 +2,8 @@
 finished the last one, not when the wall clock says so.
 
 The system of the session runs in real time. One element can be switched for a test that
-pauses and steps it; a whole run in stepped time is a single deployment so far, started
-here as a process of its own."""
+pauses and steps it; a whole run of one element in stepped time is started here as a process
+of its own. The whole system stepped together is test_lockstep.py."""
 
 import json
 import subprocess
@@ -114,10 +114,3 @@ def test_flight_software_is_given_simulated_time(request, tmp_path):
     stamped = [p for p in packets if "386d43" in p]
     assert len(stamped) > 50 and len(stamped) > 0.9 * len(packets)
     assert any("386d438a" in p for p in packets), "ten simulated seconds on"
-
-
-def test_stepping_a_whole_system_is_not_built_yet(request):
-    system = request.config.getoption("--wsts-system")
-    done = subprocess.run([sys.executable, "-m", "fprime_wsts", "run", system, "--stepped", "--duration", "1"],
-                          capture_output=True, text=True, timeout=60)
-    assert done.returncode == 2 and "single deployment so far" in done.stderr

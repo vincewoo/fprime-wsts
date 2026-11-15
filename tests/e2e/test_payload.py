@@ -463,7 +463,9 @@ def test_register_traffic_is_recorded_and_replayed(gds, payload, tmp_path):
     payload.advance(30)
     payload.record_stop()
     lines = [json.loads(line) for line in recording.read_text().splitlines()]
-    reads = [l for l in lines if l.get("rec") == "reg_rd" and l["endpoint"] == "fpgaRegs"]
+    # The temperature register; the interrupt's handler reads the status register too, and
+    # may come first, depending on where the recording starts among the interrupt's ticks
+    reads = [l for l in lines if l.get("rec") == "reg_rd" and l["endpoint"] == "fpgaRegs" and l["offset"] == "0xc"]
     assert {"offset": "0xc", "width": 4, "read": "d7000000", "status": 0} == {
         key: reads[0][key] for key in ("offset", "width", "read", "status")}
     assert any(l.get("rec") == "reg_wr" and l["offset"] == "0x10" for l in lines)

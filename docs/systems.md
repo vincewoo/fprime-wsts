@@ -220,6 +220,25 @@ rejected for a system.
 An element can still be run by itself with `fprime-wsts run <system>/<element>`: its links
 then stay down, as with the other computer switched off.
 
+### In lockstep
+
+```bash
+fprime-wsts run examples/mission-sim/wsts/Mission --stepped --duration 600 --record run.jsonl
+```
+
+runs the system in [lockstep](stepped-time.md#phase-4-what-is-built) (experimental): every
+element in stepped time, stepped together on one time base by a conductor in `run`. Cdh's
+ticks at 10 Hz and Payload's at 20 Hz are taken in the order of their simulated times, each
+when the ones before it have finished, as fast as the host computes. What the hub carries
+is delivered at the receiving element's first tick after the time it was sent at. Two runs
+record the same, byte for byte, on every element. `--duration` counts simulated seconds;
+without it the system runs until interrupted, and a pause of any element (from the GDS,
+`Cdh.wstsControl.SIM_PAUSE`, or a client) holds the whole system at the end of an instant,
+until it is resumed. A plain `--scenario <file>` is then a
+[system scenario](reference.md#system-scenarios): actions at simulated times, each for an
+element or a link. A manifest of an element with `time: {mode: stepped}` runs its system in
+lockstep by default; `--realtime` overrides it.
+
 ## Controlling a system
 
 ```python
@@ -232,7 +251,16 @@ with WstsSystem("examples/mission-sim/wsts/Mission") as system:
     system.fault_clear("hub")
     system.pause(); system.resume(); system.set_rate(2.0)        # every element
     print(system.links_up(), system.status())
+
+    system.set_stepped(True)                    # lockstep, from here
+    system.step(seconds=2.0)                    # both elements, to the same simulated time
+    system.run_scenario("system.jsonl")         # actions on that time base
+    system.set_stepped(False); system.resume()  # and back to real time
 ```
+
+In lockstep `step` returns when every tick it took is finished on every element. A running
+system switched to lockstep first brings the element that is behind (its clock started
+later) to the other's time.
 
 A link is faulted at its `a` end: `a_to_b` is what that element sends, `b_to_a` what it
 receives, `both` cuts the link.
@@ -244,11 +272,11 @@ for the session; the `wsts_system` fixture is a `WstsSystem`, and fprime-gds's
 
 ## Things to know
 
-- **Time is per element.** Each element has its own tick source and tick count (in the
-  example `Cdh` ticks at 10 Hz and `Payload` at 20 Hz). `pause`, `resume` and `set_rate` on
-  the system reach the elements one after another, not at the same instant. Runs are not
-  repeatable across elements to tick granularity. Lockstep waits on stepped time
-  ([roadmap](design.md#roadmap)).
+- **Time is per element, unless in lockstep.** Each element has its own tick source and
+  tick count (in the example `Cdh` ticks at 10 Hz and `Payload` at 20 Hz). In real time
+  `pause`, `resume` and `set_rate` on the system reach the elements one after another, not
+  at the same instant, and runs are not repeatable across elements to tick granularity. In
+  lockstep the system has one time base and is repeatable end to end.
 - **Pausing one element** stops its rate groups while the others keep running, so
   whatever it sends periodically (telemetry, heartbeats) stops arriving. That is a useful
   test of how the rest of the system reacts to a computer that has gone quiet. What it
@@ -258,7 +286,9 @@ for the session; the `wsts_system` fixture is a `WstsSystem`, and fprime-gds's
   other side (in pieces of at most the surrogate's `chunk`, 1024 bytes by default). A real
   UART or TCP stream gives no such guarantee, so missing framing does not show up here.
 - **No link timing.** Bytes arrive as fast as the host delivers them; add latency with a
-  `delay` fault. Bytes sent while the peer is not connected are lost.
+  `delay` fault. Bytes sent while the peer is not connected are lost (in lockstep they wait
+  for it). In lockstep what a link brings arrives at the receiver's next tick, a latency of
+  up to one of its tick periods that the wire does not have.
 - **Not built yet:** GPIO links (discretes between computers), datagram semantics and
-  connection state for socket links, one scenario or recording for the whole system (they
-  are per element).
+  connection state for socket links, one recording for the whole system (recordings are
+  per element; a scenario for the whole system needs lockstep).

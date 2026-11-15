@@ -10,6 +10,7 @@
 //   WSTS_SCENARIO_MODE  "stimulus" (default) or "responses"
 //   WSTS_RECORD    file to record bus traffic and actions to, from start-up
 //   WSTS_DIR       directory that relative scenario and recording paths are resolved against
+//   WSTS_LOCKSTEP  "1": an element of a system stepped as a whole (implies stepped time)
 // ======================================================================
 #ifndef WSTS_CORE_RUNTIME_HPP
 #define WSTS_CORE_RUNTIME_HPP
