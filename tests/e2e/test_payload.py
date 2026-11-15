@@ -192,6 +192,28 @@ def test_step_runs_flight_software_for_exact_ticks(gds, payload):
     payload.advance(5)
 
 
+def test_flight_software_is_quiescent_after_each_tick(payload):
+    # The basis of stepped time: after a tick, every message it caused has been handled.
+    # Payload has a hub, a register interrupt, three rate groups and an I2C bus at work.
+    assert payload.status()["counting"], "the deployment's queue is the counting one"
+    payload.pause()
+    payload.wait_quiescent()
+    work = payload.status()["work"]
+    for _ in range(20):
+        # Returns when the tick has been taken and its work is finished, and raises with the
+        # queues that hold work if that does not happen. (Cdh keeps running and may send
+        # through the hub at any moment, so the count is waited for, not sampled.)
+        payload.step(1)
+    assert payload.status()["work"] > work, "the ticks did give flight software work"
+    time.sleep(0.3)
+    payload.wait_quiescent(timeout=1)  # nothing keeps running by itself while paused
+    payload.resume()
+    # In real time too: over a second of ticks, none starts before the last one's work is done
+    busy = payload.status()["busy_ticks"]
+    payload.advance(20)
+    assert payload.status()["busy_ticks"] - busy <= 1
+
+
 def test_pause_and_resume_by_command(gds, payload):
     # Pausing Payload stops its rate groups, but not the hub: its events still reach the
     # ground through Cdh, which keeps running, and commands still reach it

@@ -83,6 +83,7 @@ Each fix belongs in one of three places:
 | `assert: {file, line, instances}` with a `kept: true` instance | A kept component reached hardware. Substitute it: standard error prints the entry to add |
 | An assert in a flight device manager | It checks something the model does not provide (an ID register, a reply): add it to the model |
 | An assert in `Os/MutexInterface.hpp` under `BufferManager` or `GenericHub` | A deployment behind a hub, run alone with its hub driver kept as a real socket: the link is down and buffers run out. Substitute the hub driver or simulate the system. Flight software would do the same with the other computer off |
+| The machine stays busy after a run (`fprime_gds…comm` at 100 %) | A GDS child left by a run of an earlier version of the toolkit, which ended only the GDS itself: `pkill -f fprime_gds.executables`. `fprime-wsts run` now ends the GDS's whole process group |
 | `Address already in use` before the bridge opens | Another run holds the port: stop it, change `bridge:`, or run with `--auto-ports` |
 | `tick` stays at 0 | The tick source is not simulated (`generate` warned), or the run is paused |
 | `errors` > 0 in the final status | An endpoint without a model, or a model that rejects what flight sends. `--record run.jsonl` shows each transaction |

@@ -140,3 +140,28 @@ def test_elements_built_from_different_states_are_named_before_the_merge(tmp_pat
     assert f"fprime-wsts build {tmp_path / 'Mission'} --fresh" in message
     assert "framework version" in dictionary_mismatch({**same, "payload": dictionary("payload", "d366f51", "v4.4.2")})
     assert dictionary_mismatch({"cdh": tmp_path / "missing.json", "payload": same["payload"]}) is None
+
+
+def test_nothing_of_a_process_group_outlives_a_run(tmp_path):
+    """The GDS starts children of its own. When it goes without taking them along (killed,
+    or gone before the run stops), they must not be left running."""
+    import subprocess
+    import sys
+    import time
+
+    from fprime_wsts.runner import end_group
+
+    # A leader with a child that ignores the interrupt and the request to end, as a busy GDS child does
+    child = "import signal, time; signal.signal(signal.SIGINT, signal.SIG_IGN); signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(120)"
+    leader = subprocess.Popen(
+        [sys.executable, "-c", f"import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', {child!r}]); time.sleep(120)"],
+        start_new_session=True)
+    time.sleep(0.5)
+    leader.kill()  # what stop() does to a leader that does not answer the interrupt
+    leader.wait()
+    from fprime_wsts.runner import group_members
+
+    assert len(group_members(leader.pid)) == 1, "the child is still there: this is the leak"
+    assert end_group(leader.pid, grace=0.3)
+    assert group_members(leader.pid) == [], "only force ended it: it ignored the request"
+    assert not end_group(leader.pid), "nothing left: nothing to do"

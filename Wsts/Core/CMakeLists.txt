@@ -8,6 +8,7 @@ find_package(Threads REQUIRED)
 
 register_fprime_module(
     SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/Activity.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/Json.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/Bus.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/Control.cpp"
@@ -19,6 +20,7 @@ register_fprime_module(
         "${CMAKE_CURRENT_LIST_DIR}/Link.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/Runtime.cpp"
     HEADERS
+        "${CMAKE_CURRENT_LIST_DIR}/Activity.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/Json.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/Bus.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/Control.hpp"

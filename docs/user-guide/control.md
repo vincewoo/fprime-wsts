@@ -56,7 +56,9 @@ sim.step(5)                                      # five ticks of the flight rate
 assert sim.gpio_get("heaterPin") is False
 ```
 
-`step()` returns when the simulation has paused again, with the tick it stopped at. The
+`step()` returns when the simulation has paused again and flight software has finished
+what those ticks caused (every message handled, no handler running), with the tick it
+stopped at. An assertion right after it needs no timeout. The
 ticks are still paced by the wall clock and the time scale (`set_rate(100)` makes a step
 quick), and within a tick the flight threads run as the host schedules them: this is
 control over how far time goes, not yet the deterministic stepped time of the

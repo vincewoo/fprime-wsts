@@ -18,6 +18,7 @@
 
 #include <Wsts/Core/Bus.hpp>
 #include <Wsts/Core/Clock.hpp>
+#include <Wsts/Core/Activity.hpp>
 #include <Wsts/Core/Control.hpp>
 #include <Wsts/Core/Dma.hpp>
 #include <Wsts/Core/Link.hpp>
@@ -276,6 +277,52 @@ TEST_F(CoreTest, RejectsBadActions) {
     EXPECT_FALSE(run(R"({"op": "inject_bytes", "endpoint": "uart", "data": "xyz"})", &error));
     EXPECT_FALSE(run(R"({"op": "model_set", "model": "ghost", "key": "a", "value": "b"})", &error));
     EXPECT_FALSE(run("{broken", &error));
+}
+
+TEST_F(CoreTest, ActivityCountsOutstandingWork) {
+    Wsts::Activity& activity = Wsts::Activity::get();
+    EXPECT_FALSE(activity.counting()) << "no counting queue in this executable";
+    EXPECT_TRUE(activity.waitQuiescent(std::chrono::milliseconds(0)));
+    activity.begin();
+    {
+        Wsts::Activity::Scope scope;
+        EXPECT_EQ(activity.pending(), 2u);
+        EXPECT_EQ(activity.pendingElsewhere(), 1u) << "this thread's own scope is not work it waits for";
+    }
+    EXPECT_FALSE(activity.waitQuiescent(std::chrono::milliseconds(10)));
+    std::thread worker([&activity]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        activity.end();
+    });
+    EXPECT_TRUE(activity.waitQuiescent(std::chrono::milliseconds(2000)));
+    worker.join();
+    activity.end();  // one too many: stays at zero
+    EXPECT_EQ(activity.pending(), 0u);
+    EXPECT_EQ(activity.total(), 2u);
+    EXPECT_EQ(activity.holders(), "");
+}
+
+TEST_F(CoreTest, ATickTakenWhileWorkIsOutstandingIsCounted) {
+    Control& control = Control::get();
+    control.onTick();
+    EXPECT_EQ(control.status().busyTicks, 0u);
+    EXPECT_EQ(control.status().activity, 0u) << "a tick is work only while it is being taken";
+    Wsts::Activity::get().begin();  // a handler still running when the next tick comes
+    control.onTick();
+    control.onTick();
+    Wsts::Activity::get().end();
+    control.onTick();
+    const Wsts::SimStatus status = control.status();
+    EXPECT_EQ(status.busyTicks, 2u);
+    EXPECT_EQ(status.toJson().num("busy_ticks", -1), 2);
+    EXPECT_EQ(status.toJson().num("activity", -1), 0);
+    EXPECT_FALSE(status.counting);
+    {
+        // Injected bytes are delivered on the caller's thread: work for as long as that takes
+        Wsts::Activity::Scope scope;
+        control.onTick();
+    }
+    EXPECT_EQ(control.status().busyTicks, 2u) << "the tick source's own scope does not make a tick busy";
 }
 
 TEST_F(CoreTest, StepRunsForSomeTicksAndPauses) {

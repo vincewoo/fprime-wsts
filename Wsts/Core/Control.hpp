@@ -96,6 +96,10 @@ struct SimStatus {
     std::uint64_t tick = 0;
     bool paused = false;
     std::uint64_t stepping = 0;  //!< ticks left of a `step`, after which the simulation pauses
+    bool counting = false;       //!< the deployment's queues count outstanding work (Wsts_Os_Queue)
+    std::uint64_t activity = 0;  //!< work flight software has been given and not finished
+    std::uint64_t work = 0;      //!< pieces of work since start-up
+    std::uint64_t busyTicks = 0; //!< ticks taken while work of an earlier one was outstanding
     double rate = 1.0;
     std::uint32_t activeFaults = 0;
     ScenarioState scenarioState = ScenarioState::IDLE;
@@ -200,6 +204,7 @@ class Control : public BusObserver {
 
     std::atomic<std::uint64_t> m_tick{0};
     std::atomic<bool> m_paused{false};
+    std::atomic<std::uint64_t> m_busyTicks{0};  //!< ticks taken before the work of the last one was finished
     std::atomic<std::uint64_t> m_stepUntil{0};  //!< tick at which a `step` pauses; 0: not stepping
     std::atomic<double> m_rate{1.0};
     std::atomic<bool> m_hasTickSource{false};

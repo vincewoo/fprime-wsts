@@ -4,6 +4,8 @@
 // ======================================================================
 #include <Wsts/Core/Clock.hpp>
 
+#include <Wsts/Core/Activity.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -148,6 +150,7 @@ void CycleClock::loop() {
         }
         if (fire && !m_quit.load()) {
             if (m_callback) {
+                Activity::Scope cycleWork;  // the simulation's rate group runs on this thread
                 m_callback();
             }
             m_cycles.fetch_add(1);

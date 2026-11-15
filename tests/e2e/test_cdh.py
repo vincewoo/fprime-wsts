@@ -105,6 +105,17 @@ def test_bridge_injection_still_reaches_flight_software(gds, cdh):
     gds.assert_event("SensorLink.sensor.UnrecognizedLine", timeout=T)
 
 
+def test_messages_waiting_for_a_queued_component_do_not_hold_a_tick_up(cdh):
+    # Cdh's health component is queued: ping replies wait on its queue until its rate group
+    # dispatches it on a later tick. A paused Cdh is quiescent all the same.
+    assert cdh.status()["counting"]
+    cdh.pause()
+    cdh.wait_quiescent()
+    for _ in range(10):
+        cdh.step(1)  # raises, naming the queues, if the tick's work is not finished
+    cdh.resume()
+
+
 def test_pause_stops_the_simulator_with_the_flight_rate_groups(cdh):
     # The bus counters include the hub link, whose far end keeps running: count the
     # simulator's replies on the UART instead

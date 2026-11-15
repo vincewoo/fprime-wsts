@@ -4,6 +4,8 @@
 // ======================================================================
 #include <Wsts/Core/Bus.hpp>
 
+#include <Wsts/Core/Activity.hpp>
+
 #include <cctype>
 #include <chrono>
 #include <thread>
@@ -409,6 +411,7 @@ void Bus::deliverToFlight(const std::string& endpoint, Bytes data, const char* s
 }
 
 void Bus::byteStreamInject(const std::string& endpoint, const Bytes& data, const char* src) {
+    Activity::Scope delivery;  // flight handlers may run on the calling thread
     // Recorded model output is replaced by the recording while replaying responses. What a
     // linked element sent is part of that recording too.
     if (m_replay.load() && (std::string(src) == "model" || std::string(src) == "link")) {
@@ -673,6 +676,7 @@ int Bus::registerWrite(const std::string& endpoint, std::uint64_t offset, unsign
 }
 
 void Bus::registerInterrupt(const std::string& endpoint, std::uint32_t number, const char* src) {
+    Activity::Scope delivery;  // flight handlers may run on the calling thread
     // While responses are replayed the interrupts come from the recording
     if (m_replay.load() && std::string(src) == "model") {
         return;
@@ -772,6 +776,7 @@ int Bus::gpioRead(const std::string& endpoint, bool& level) {
 }
 
 void Bus::gpioSetInput(const std::string& endpoint, bool level, const char* src) {
+    Activity::Scope delivery;  // flight handlers may run on the calling thread
     if (m_replay.load() && std::string(src) == "model") {
         return;
     }

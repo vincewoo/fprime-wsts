@@ -131,6 +131,12 @@ accept the calls flight topology code makes on the drivers they replace (`open`,
 `ByteStreamDevice` or `GpioDevice`. They are not F´ components, so they add nothing to the
 flight dictionary or connection graph.
 
+**Activity** (`Wsts/Core/Activity`, `Wsts/Os`). A simulated deployment is linked with the
+toolkit's `Os::Queue`, which is the framework's generic priority queue with a count of
+the messages that are outstanding. The count is zero when flight software has finished
+what it was given: this is how a client knows a tick is done, and what stepped time will
+be built on ([stepped-time.md](stepped-time.md)).
+
 **Time.** `Wsts.SimTick` replaces the deployment's tick source. Each tick it advances the
 control core (fault expiry, scenario steps, model ticks) and then cycles the flight rate
 groups. Ticks are paced by the wall clock divided by the time scale. Pausing stops the

@@ -3,6 +3,8 @@
 // \brief  WSTS simulation control core implementation
 // ======================================================================
 #include <Wsts/Core/Control.hpp>
+
+#include <Wsts/Core/Activity.hpp>
 #include <Wsts/Core/Clock.hpp>
 
 #include <algorithm>
@@ -48,6 +50,8 @@ JsonObj SimStatus::toJson() const {
     JsonObj obj;
     obj.setNum("tick", static_cast<std::int64_t>(tick)).setBool("paused", paused).setReal("rate", rate);
     obj.setNum("stepping", static_cast<std::int64_t>(stepping));
+    obj.setBool("counting", counting).setNum("activity", static_cast<std::int64_t>(activity));
+    obj.setNum("work", static_cast<std::int64_t>(work)).setNum("busy_ticks", static_cast<std::int64_t>(busyTicks));
     obj.setNum("active_faults", activeFaults);
     obj.set("scenario_state", SCENARIO_STATE_NAMES[static_cast<std::uint8_t>(scenarioState)]);
     obj.setNum("scenario_step", scenarioStep).setNum("scenario_steps", scenarioSteps);
@@ -89,6 +93,8 @@ void Control::reset() {
     m_tick.store(0);
     m_paused.store(false);
     m_stepUntil.store(0);
+    m_busyTicks.store(0);
+    Activity::get().reset();
     m_rate.store(1.0);
     m_hasTickSource.store(false);
     {
@@ -107,6 +113,13 @@ void Control::reset() {
 // ----------------------------------------------------------------------
 
 void Control::onTick() {
+    // Whatever the last tick caused should be finished by now. In real time nothing waits
+    // for that: counted here, it says how far a deployment is from being steppable.
+    if (Activity::get().pendingElsewhere() > 0) {
+        m_busyTicks++;
+    }
+    // The tick is work itself, from here until its source has cycled the rate groups
+    Activity::Scope tickWork;
     const std::uint64_t tick = ++m_tick;
     Bus::get().setTick(tick);
 
@@ -304,6 +317,10 @@ SimStatus Control::status() {
     status.paused = m_paused.load();
     const std::uint64_t until = m_stepUntil.load();
     status.stepping = until > status.tick ? until - status.tick : 0;
+    status.counting = Activity::get().counting();
+    status.activity = Activity::get().pending();
+    status.work = Activity::get().total();
+    status.busyTicks = m_busyTicks.load();
     status.rate = m_rate.load();
     status.activeFaults = Bus::get().activeFaults();
     status.scenarioState = m_scenarioState.load();
