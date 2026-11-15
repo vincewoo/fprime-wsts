@@ -150,7 +150,7 @@ fprime-wsts run . --gds-gui                            # run it, with the GDS in
     Every manifest key, CLI option, action, fault kind and file format, and the design
     behind them.
 
-    [:octicons-arrow-right-24: Reference](reference/index.md)
+    [:octicons-arrow-right-24: Reference](reference-docs/index.md)
 
 </div>
 
