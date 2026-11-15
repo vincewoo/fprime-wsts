@@ -165,3 +165,20 @@ def test_nothing_of_a_process_group_outlives_a_run(tmp_path):
     assert end_group(leader.pid, grace=0.3)
     assert group_members(leader.pid) == [], "only force ended it: it ignored the request"
     assert not end_group(leader.pid), "nothing left: nothing to do"
+
+
+def test_stepped_time_is_chosen_per_run(tmp_path, capsys):
+    from fprime_wsts.cli import main
+
+    make_deployment(tmp_path)
+    assert Simulation(tmp_path).stepped is None, "left to the manifest's time.mode"
+    assert Simulation(tmp_path, stepped=True).stepped is True and not Simulation(tmp_path, stepped=True).hold
+    # A system is not stepped as a whole yet: its elements would drift apart
+    system = tmp_path / "S"
+    system.mkdir()
+    (system / "wsts-system.json").write_text(json.dumps({"system": "S", "ground": "a", "links": [], "elements": [
+        {"name": "a", "directory": "a", "bridge": "tcp:1"}]}))
+    assert main(["run", str(system), "--stepped"]) == 2
+    assert "single deployment so far" in capsys.readouterr().err
+    with __import__("pytest").raises(SystemExit):
+        main(["run", str(tmp_path), "--stepped", "--realtime"])

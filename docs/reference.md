@@ -9,7 +9,7 @@
 | `fprime-wsts generate <wsts.yaml> [--project DIR] [--output DIR] [--check] [--json]` | Create or refresh a simulated deployment. `--project` defaults to the manifest's `project`, else the nearest `settings.ini` above the manifest. `--check` writes nothing and exits 1 if the output is out of date |
 | `fprime-wsts generate <wsts-system.yaml> [--output DIR] [--check] [--json]` | The same for every element of a [system](systems.md), plus `wsts-system.json` |
 | `fprime-wsts build [DIR or manifest] [-j N] [--element NAME]... [--fresh] [-D NAME=VALUE]... [--keep-going] [--project DIR] [--json]` | Configure and build a generated deployment, or every element of a generated system; given a manifest, `generate` first. The configure step (`fprime-util generate`, with the report's `configure_options` and the `-D` options) runs when there is no build directory, when one was left unfinished, with `--fresh`, and when what a build directory caches has changed since this command configured it (the overlay's cache entries, its `settings.ini`, the options; recorded in `wsts-build.json` in the build directory). A build directory configured by hand is used as it is. Output goes to `DIR/wsts-logs/build.log` (`wsts-logs/<element>/build.log` for a system). Exit status 1 when a build fails; it stops at the first element that fails unless `--keep-going` |
-| `fprime-wsts run [DIR] [--gds] [--gds-gui] [--gds-port P] [--gds-gui-port P] [--gds-gui-addr A] [--scenario F] [--scenario-mode stimulus\|responses] [--record F] [--duration S] [--bridge ADDR] [--auto-ports] [--files-dir DIR] [--env NAME=VALUE]... [--json]` | Run a built simulated deployment, optionally with the GDS. `--auto-ports` takes free ports for the bridge, the GDS link and the GDS GUI in place of the fixed ones, and gives the GDS sockets of its own, so several runs fit on one machine. `--gds` is headless; `--gds-gui` starts the browser GUI (implies `--gds`) and prints its URL. Logs go to `DIR/wsts-logs`. `--env` sets an environment variable of the deployment, over the manifest's `run.env` |
+| `fprime-wsts run [DIR] [--gds] [--gds-gui] [--gds-port P] [--gds-gui-port P] [--gds-gui-addr A] [--scenario F] [--scenario-mode stimulus\|responses] [--record F] [--duration S] [--bridge ADDR] [--auto-ports] [--stepped \| --realtime] [--files-dir DIR] [--env NAME=VALUE]... [--json]` | Run a built simulated deployment, optionally with the GDS. `--stepped` runs in [stepped time](stepped-time.md) (experimental; single deployments): ticks are taken as fast as flight software finishes them, and `--duration` counts simulated seconds. `--realtime` overrides a manifest that says `time: {mode: stepped}`. `--auto-ports` takes free ports for the bridge, the GDS link and the GDS GUI in place of the fixed ones, and gives the GDS sockets of its own, so several runs fit on one machine. `--gds` is headless; `--gds-gui` starts the browser GUI (implies `--gds`) and prints its URL. Logs go to `DIR/wsts-logs`. `--env` sets an environment variable of the deployment, over the manifest's `run.env` |
 | `fprime-wsts run [SYSTEM DIR] [--gds] [--gds-gui] [--auto-ports] [--duration S] [--scenario ELEMENT=F]... [--scenario-mode M] [--record [ELEMENT=]F]... [--env [ELEMENT.]NAME=VALUE]... [--json]` | Run every element of a generated system, with their links, and optionally one GDS on the ground element with the merged dictionary. `--scenario payload=F` plays a scenario on one element; `--record payload=F` records one element, and a plain `--record F` every element, each to `<stem>.<element>.<suffix>`. `--env NAME=VALUE` goes to every element, `--env payload.NAME=VALUE` to one |
 | `fprime-wsts status [DIR] [--element NAME] [--json]` | The state of the simulation running from a generated directory, read through its bridge: tick, run state, rate, links, bus counters, faults, scenario, endpoints. For a system, every element or the one named. Exit status 2 when nothing answers |
 | `fprime-wsts ctl DIR [--element NAME] OP [FIELD=VALUE]...` | Send one [action](#actions) (or a bridge query such as `gpio_get`) to a running simulation and print the answer as JSON: `fprime-wsts ctl DIR fault_set endpoint=i2cBus kind=error arg=3 count=5`. A value is a JSON value where it reads as one (`3`, `true`), else text, in which `\n`, `\t` and `\xNN` are those characters (`'text=$TEMP,48.0\n'`). In a system, `pause`, `resume`, `set_rate`, `fault_clear` and `status` go to every element unless `--element` names one; any other action needs `--element` |
@@ -31,7 +31,10 @@ the compiler, linker and CMake error lines of its log, at most 20.
 directory holds the addresses it uses (`bridge` or `elements: {<name>: <bridge>}`,
 `gds_port`, `gds_gui`, `zmq_transport`, `pid`); `fprime-wsts status`, `fprime-wsts ctl`,
 `WstsSystem(<directory>)` and `fprime_wsts.bridge.bridge_address(<directory>)` read it, so
-they find a run started with `--auto-ports`. It is removed when the run stops. When the
+they find a run started with `--auto-ports`. It is removed when the run stops. A run in
+stepped time adds `stepped`, `sim_seconds` (simulated time reached), `speed` (simulated
+over wall time) and, when a tick did not finish, `stuck` (the queues that held work; the
+exit status is then 1). When the
 deployment exits on its own and its log ends with an F´ assert, the summary has
 `assert: {file, line, instances}` (and `id` when the log printed a file ID, `0x…:line`,
 which is resolved with `hashes.txt` of the build cache). `instances` are the instances of
@@ -109,6 +112,9 @@ control:                         # or `control: none`
   base_id: 0x10030000            # default: first 0x1000 block above all flight IDs
 bridge: tcp:50100                # tcp:<port> | tcp:<host>:<port> | unix:<path> | none
 tick_hz: 10                      # only used when no tick source was substituted
+time:
+  mode: realtime                 # or stepped: ticks are taken when flight software has finished the last one
+                                 # (experimental; `fprime-wsts run --stepped` / `--realtime` choose per run)
 
 catalogs: [wsts-catalog.yaml]    # project surrogate catalogs, searched before the built-in one
 sources:
@@ -564,7 +570,8 @@ Used identically by the bridge, scenario files and (through its commands) `Wsts.
 |---|---|---|
 | `pause`, `resume` | | Stop / restart the simulation tick |
 | `step` | `ticks`=1 | Run until the tick count is `ticks` higher, then pause (`SimPaused`). Exact from a paused simulation and from a scenario; `pause` or `resume` ends a step under way. `status` has `stepping`, the ticks still to go |
-| `set_rate` | `rate` (0.01–1000) | Simulated time per wall-clock time |
+| `set_stepped` | `stepped`=true | Stepped time: a tick is taken when flight software has finished the last one, not when the wall clock says so; what a bridge client sends is applied between two ticks. `false` returns to real time. `status` has `stepped`, `sim_seconds`, `tick_period_ns` and, after a tick that did not finish, `stuck` |
+| `set_rate` | `rate` (0.01–1000) | Simulated time per wall-clock time. In stepped time a limit, and 0 (the default there) is none |
 | `fault_set` | `endpoint`, `kind`, `dir`=`both`, `arg`=0, `count`=0, `ticks`=0 | Arm a fault; `count`/`ticks` of 0 mean unbounded |
 | `fault_clear` | `endpoint`=`*` | Remove faults |
 | `inject_bytes` | `endpoint`, `data` (hex) or `text` | Bytes to flight software as if from the device |
@@ -677,13 +684,15 @@ work up.
 | `WSTS_SCENARIO`, `WSTS_SCENARIO_MODE` | Scenario to load and start at start-up |
 | `WSTS_RECORD` | File to record to from start-up |
 | `WSTS_DIR` | Base directory for relative scenario and recording paths |
+| `WSTS_STEPPED` | `1`: stepped time; `0`: real time, whatever the manifest's `time.mode`. Set by `fprime-wsts run --stepped` / `--realtime` |
+| `WSTS_STEP_LIMIT_MS` | Stepped time: wall-clock milliseconds a tick may take to finish before it is reported and the simulation pauses (default 10000) |
 | `WSTS_START_PAUSED` | `1`: start paused. `fprime-wsts run` sets it for a deployment with `run.models`, and resumes once they are attached |
 | any in `run.env` or `--env` | Set by `fprime-wsts run` and the pytest plugin for the simulator components' phase code |
 | `WSTS_LINK_DIR` | Directory of the link sockets of a system (`<link>.sock`). Set by `fprime-wsts run`; without it links stay down |
 
 ## `Wsts.SimControl`
 
-Commands mirror the actions (see the README); `SIM_STEP` (`ticks`) is `step`; `REG_SET` (`endpoint`, `offset`, `value`,
+Commands mirror the actions (see the README); `SIM_STEP` (`ticks`) is `step` and `SIM_SET_STEPPED` (`stepped`) is `set_stepped`; `REG_SET` (`endpoint`, `offset`, `value`,
 both 64 bits) and `IRQ_RAISE` (`endpoint`, `number`) are those of the register kind. Events: `SimPaused`, `SimResumed`,
 `SimRateSet`, `FaultArmed`, `FaultTriggered` (first application of a fault only),
 `FaultExpired`, `FaultsCleared`, `Injected`, `ScenarioLoaded`, `ScenarioStarted`,

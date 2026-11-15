@@ -337,12 +337,18 @@ class Simulation:
                  scenario: Optional[str] = None, scenario_mode: str = "stimulus", record: Optional[str] = None,
                  log_dir: Optional[Path] = None, files_dir: Optional[Path] = None,
                  dictionary: Optional[Path] = None, env: Optional[Dict[str, str]] = None,
-                 auto_ports: bool = False, zmq_transport: Optional[List[str]] = None):
+                 auto_ports: bool = False, zmq_transport: Optional[List[str]] = None,
+                 stepped: Optional[bool] = None):
         self.directory = Path(directory).resolve()
         self.binary, self.dictionary, self.report = find_artifacts(self.directory)
         if dictionary is not None:
             self.dictionary = Path(dictionary)  # for example the merged dictionary of a system
         self.extra_env = dict(env or {})
+        # Stepped time for this run; None leaves it to the manifest (time.mode)
+        self.stepped = stepped
+        # Start paused and stay so: the caller decides how far time goes (a stepped run of
+        # a set duration is one step)
+        self.hold = False
         self.bridge = bridge or self.report.get("bridge", "none")
         self.gds = gds
         self.gds_port = gds_port
@@ -399,12 +405,16 @@ class Simulation:
             env[name] = value
         env.update(self.extra_env)
         env["WSTS_BRIDGE"] = self.bridge
+        if self.stepped is not None:
+            env["WSTS_STEPPED"] = "1" if self.stepped else "0"
         # Python device models of the manifest (`run.models`): the deployment starts paused,
         # and is resumed once they are on their endpoints
         models = [str((self.directory / file).resolve()) for file in defaults.get("models", [])]
         if models:
             if not self.bridge.startswith(("tcp:", "unix:")):
                 raise WstsError(f"run.models needs the bridge, and this run has none (bridge {self.bridge})")
+            env["WSTS_START_PAUSED"] = "1"
+        if self.hold:
             env["WSTS_START_PAUSED"] = "1"
         env.setdefault("WSTS_DIR", str(self.files_dir))
         if self.scenario:
@@ -480,6 +490,8 @@ class Simulation:
                 raise WstsError(f"the Python device models {why}" + (f": {said[-1]}" if said else "")
                                 + f"; see {log_path}")
             time.sleep(0.05)
+        if self.hold:
+            return
         try:
             with WstsBridge(self.bridge) as bridge:
                 bridge.resume()
@@ -797,6 +809,11 @@ class SystemSimulation:
 def run_system_cli(args) -> int:
     from .system import load_description
 
+    if getattr(args, "stepped", None):
+        raise WstsError("--stepped is for a single deployment so far: the elements of a system would each run as fast "
+                        "as they can and drift apart. Stepping a system in lockstep is not built yet "
+                        "(docs/stepped-time.md, phase 4). One element can be stepped through its bridge "
+                        "(set_stepped), for a test that pauses and steps it")
     for option in ("bridge", "files_dir"):
         if getattr(args, option):
             raise WstsError(f"--{option.replace('_', '-')} applies to a single deployment and is not supported when "
@@ -897,7 +914,15 @@ def run_cli(args) -> int:
                             log_dir=Path(args.log_dir) if args.log_dir else None,
                             files_dir=Path(args.files_dir) if args.files_dir else None,
                             env=parse_env(getattr(args, "env", None)).get(None, {}),
-                            auto_ports=getattr(args, "auto_ports", False))
+                            auto_ports=getattr(args, "auto_ports", False), stepped=getattr(args, "stepped", None))
+    is_stepped = simulation.stepped if simulation.stepped is not None else \
+        simulation.report.get("time", {}).get("mode") == "stepped"
+    if is_stepped and args.duration and simulation.bridge == "none":
+        raise WstsError("--duration counts simulated seconds in stepped time, which are read through the bridge: "
+                        "this deployment has none (bridge: none)")
+    # A stepped run of a set duration is one step from a paused start: it ends at exactly
+    # that simulated time, whatever the host's speed
+    simulation.hold = bool(is_stepped and args.duration)
     try:
         simulation.start()
     except StartError as error:
@@ -925,12 +950,44 @@ def run_cli(args) -> int:
     status = {}
     crashed = False
     interrupted = False
+    stuck = None
     try:
         deadline = time.monotonic() + args.duration if args.duration else None
+        watch = simulation.connect() if is_stepped and simulation.bridge != "none" else None
+        if watch is not None and simulation.hold:
+            now = watch.status()
+            period = now.get("tick_period_ns") or 0
+            if not period:
+                raise WstsError("the deployment's tick source does not say how long a tick is, so a duration in "
+                                "simulated seconds cannot be turned into ticks: run without --duration and stop it "
+                                "through the bridge, or in real time")
+            ticks = max(1, -(-int(args.duration * 1e9) // period) - now["tick"])
+            watch.request("step", ticks=ticks)
         while simulation.sim.poll() is None:
+            if watch is not None:
+                # Stepped time: the duration is simulated seconds, and a tick that cannot
+                # finish ends the run
+                try:
+                    now = watch.status()
+                except Exception:
+                    break  # the deployment is going
+                if now.get("stuck"):
+                    stuck = now["stuck"]
+                    break
+                if simulation.hold and now["paused"] and not now.get("stepping"):
+                    break  # the step is taken; its work is finished when wait_quiescent returns
+                time.sleep(0.02)
+                continue
             if deadline and time.monotonic() >= deadline:
                 break
             time.sleep(0.1)
+        if watch is not None:
+            if simulation.hold and not stuck and simulation.sim.poll() is None:
+                try:
+                    watch.wait_quiescent(timeout=15)
+                except Exception:
+                    pass
+            watch.close()
         crashed = simulation.sim.poll() is not None
     except KeyboardInterrupt:
         interrupted = True
@@ -942,6 +999,12 @@ def run_cli(args) -> int:
             status = {}
     code = simulation.stop()
     assertion = simulation.assertion() if crashed else None
+    wall = round(time.monotonic() - simulation.started, 2)
+    timing = {}
+    if is_stepped:
+        simulated = round(float(status.get("sim_seconds", 0.0)), 3)
+        timing = {"stepped": True, "sim_seconds": simulated, "speed": round(simulated / wall, 1) if wall > 0 else None,
+                  **({"stuck": stuck} if stuck else {})}
     summary = {
         "deployment": simulation.binary.name,
         "exit_code": code,
@@ -953,12 +1016,19 @@ def run_cli(args) -> int:
         "gds_port": simulation.gds_port if gds else None,
         "gds_gui": simulation.gds_gui_url,
         "final_status": status,
+        **timing,
         **({"assert": _assert_summary(assertion)} if assertion else {}),
     }
     if args.json:
         print(json.dumps(summary, indent=2))
     else:
-        print(f"simulation stopped after {summary['seconds']} s, exit code {code}")
+        print(f"simulation stopped after {summary['seconds']} s, exit code {code}"
+              + (f"; {timing['sim_seconds']} s simulated, {timing['speed']} times real time" if timing else ""))
+    if stuck:
+        print(f"stepped time: a tick did not finish, and the simulation paused. Work outstanding: {stuck}. A component "
+              "that waits on the host (sleeps, polls, blocks in a handler) cannot be stepped: give it a surrogate, or "
+              f"run in real time; see {simulation.log_dir / 'sim.log'}", file=sys.stderr)
+        return 1
     if crashed:
         print("the simulation exited on its own" + (f": {assertion['message']}" if assertion else "")
               + f"; see {simulation.log_dir / 'sim.log'}", file=sys.stderr)

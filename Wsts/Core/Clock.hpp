@@ -86,6 +86,8 @@ class CycleClock {
     std::mutex m_mutex;
     std::condition_variable m_wake;
     std::deque<Time> m_due;  //!< wall times of the cycles granted and not yet issued
+    //! For each of them, whether it counts as work of its tick (granted in stepped time)
+    std::deque<bool> m_counted;
     std::thread m_thread;
     std::atomic<bool> m_quit{false};
     std::atomic<bool> m_running{false};

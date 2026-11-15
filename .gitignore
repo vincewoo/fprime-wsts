@@ -17,3 +17,5 @@ wsts-host.json
 wsts-host.md
 # Documentation site (mkdocs build)
 /site/
+# Seeds the framework's test library writes where unit tests run
+seed-history

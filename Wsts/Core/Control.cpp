@@ -52,6 +52,11 @@ JsonObj SimStatus::toJson() const {
     obj.setNum("stepping", static_cast<std::int64_t>(stepping));
     obj.setBool("counting", counting).setNum("activity", static_cast<std::int64_t>(activity));
     obj.setNum("work", static_cast<std::int64_t>(work)).setNum("busy_ticks", static_cast<std::int64_t>(busyTicks));
+    obj.setBool("stepped", stepped).setReal("sim_seconds", simSeconds);
+    obj.setNum("tick_period_ns", static_cast<std::int64_t>(tickPeriodNs));
+    if (!stuck.empty()) {
+        obj.set("stuck", stuck);
+    }
     obj.setNum("active_faults", activeFaults);
     obj.set("scenario_state", SCENARIO_STATE_NAMES[static_cast<std::uint8_t>(scenarioState)]);
     obj.setNum("scenario_step", scenarioStep).setNum("scenario_steps", scenarioSteps);
@@ -94,6 +99,15 @@ void Control::reset() {
     m_paused.store(false);
     m_stepUntil.store(0);
     m_busyTicks.store(0);
+    m_stepped.store(false);
+    m_steppedRate.store(0.0);
+    m_stepLimitMs.store(10000);
+    {
+        std::lock_guard<std::mutex> lock(m_gateMutex);
+        m_tickOpen = false;
+        m_actionOpen = false;
+        m_stuck.clear();
+    }
     Activity::get().reset();
     m_rate.store(1.0);
     m_hasTickSource.store(false);
@@ -151,6 +165,152 @@ void Control::onTick() {
         m_paused.store(true);
         this->post(SimEvent::PAUSED, "", "", static_cast<std::uint32_t>(tick));
     }
+}
+
+// ----------------------------------------------------------------------
+// Stepped time
+// ----------------------------------------------------------------------
+
+void Control::setStepped(bool stepped) {
+    if (m_stepped.exchange(stepped) == stepped) {
+        return;
+    }
+    m_steppedRate.store(0.0);
+    {
+        std::lock_guard<std::mutex> lock(m_gateMutex);
+        m_stuck.clear();
+    }
+    m_gate.notify_all();
+    this->post(SimEvent::LOG, "", stepped ? "stepped time: a tick is taken when the last one is finished"
+                                          : "real time: ticks are paced by the wall clock");
+}
+
+std::string Control::stuck() {
+    std::lock_guard<std::mutex> lock(m_gateMutex);
+    return m_stuck;
+}
+
+bool Control::awaitTick(std::uint64_t periodUs, Clock::time_point& next, const std::atomic<bool>& quit) {
+    if (!m_stepped.load()) {
+        // Real time: simulated time advances `rate` times faster than the wall clock
+        const double rate = std::max(0.001, m_rate.load());
+        next += std::chrono::microseconds(static_cast<std::int64_t>(static_cast<double>(periodUs) / rate));
+        const auto now = Clock::now();
+        if (next < now) {
+            next = now;  // fell behind (host load, long pause): do not burst to catch up
+        }
+        std::this_thread::sleep_until(next);
+        return !quit.load() && !m_paused.load();
+    }
+    if (m_paused.load()) {
+        // Nothing to wait for but a step or a resume: look again shortly
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        next = Clock::now();
+        return false;
+    }
+    {
+        // Actions from outside go first: a client that pauses a simulation running flat
+        // out must not have to win a race against the next tick
+        std::unique_lock<std::mutex> lock(m_gateMutex);
+        const bool free = m_gate.wait_for(lock, std::chrono::milliseconds(50),
+                                          [this]() { return !m_actionOpen && m_actionsWaiting == 0; });
+        if (!free || quit.load() || m_paused.load() || !m_stepped.load()) {
+            return false;
+        }
+        m_tickOpen = true;
+    }
+    const double rate = m_steppedRate.load();
+    if (rate > 0.0) {
+        // An operator's pace: no faster than this, however quickly ticks finish
+        next += std::chrono::microseconds(static_cast<std::int64_t>(static_cast<double>(periodUs) / rate));
+        const auto now = Clock::now();
+        if (next < now) {
+            next = now;
+        }
+        std::this_thread::sleep_until(next);
+    } else {
+        next = Clock::now();
+    }
+    return true;
+}
+
+void Control::finishTick() {
+    {
+        std::lock_guard<std::mutex> lock(m_gateMutex);
+        if (!m_tickOpen) {
+            return;  // real time, or the mode changed while this tick was being taken
+        }
+    }
+    // The tick is finished when nothing it caused is outstanding. This thread's own scopes
+    // are not waited for.
+    const auto limit = Clock::now() + std::chrono::milliseconds(m_stepLimitMs.load());
+    Activity& activity = Activity::get();
+    bool finished = activity.pendingElsewhere() == 0;
+    while (!finished && Clock::now() < limit && m_stepped.load()) {
+        (void)activity.waitQuiescent(std::chrono::milliseconds(1));
+        finished = activity.pendingElsewhere() == 0;
+    }
+    std::string stuck;
+    if (!finished && m_stepped.load()) {
+        // Something never comes back for its next message: a handler that blocks, or a
+        // task that waits on the host. Stop here rather than run on with work piling up.
+        stuck = activity.holders();
+        if (stuck.empty()) {
+            stuck = std::to_string(activity.pendingElsewhere()) + " piece(s) of work outside the queues";
+        }
+        {
+            // Before the pause shows: whoever sees it paused finds the reason
+            std::lock_guard<std::mutex> lock(m_gateMutex);
+            m_stuck = stuck;
+        }
+        m_stepUntil.store(0);
+        m_paused.store(true);
+        std::fprintf(stderr, "[WSTS] stepped time: tick %llu did not finish within %u ms (work outstanding: %s). "
+                             "The simulation is paused.\n",
+                     static_cast<unsigned long long>(m_tick.load()), m_stepLimitMs.load(), stuck.c_str());
+        this->post(SimEvent::LOG, "", "stepped time: a tick did not finish, paused: " + stuck);
+        this->post(SimEvent::PAUSED, "", "", static_cast<std::uint32_t>(m_tick.load()));
+    }
+    {
+        std::lock_guard<std::mutex> lock(m_gateMutex);
+        m_tickOpen = false;
+    }
+    m_gate.notify_all();
+}
+
+Control::ActionGate::ActionGate() : m_held(false) {
+    Control& control = Control::get();
+    if (!control.m_stepped.load()) {
+        return;
+    }
+    std::unique_lock<std::mutex> lock(control.m_gateMutex);
+    control.m_actionsWaiting++;
+    // Bounded: a tick that cannot finish is reported by its own limit; an action is not
+    // held up for ever behind it
+    (void)control.m_gate.wait_for(lock, std::chrono::milliseconds(control.m_stepLimitMs.load() + 1000),
+                                  [&control]() { return !control.m_tickOpen && !control.m_actionOpen; });
+    control.m_actionsWaiting--;
+    if (!control.m_tickOpen && !control.m_actionOpen) {
+        control.m_actionOpen = true;
+        m_held = true;
+    }
+}
+
+Control::ActionGate::~ActionGate() {
+    if (!m_held) {
+        return;
+    }
+    Control& control = Control::get();
+    // What the action caused (injected bytes being handled, an interrupt) is part of it
+    const auto limit = Clock::now() + std::chrono::milliseconds(control.m_stepLimitMs.load());
+    while (Activity::get().pendingElsewhere() > 0 && Clock::now() < limit) {
+        (void)Activity::get().waitQuiescent(std::chrono::milliseconds(1));
+    }
+    {
+        std::lock_guard<std::mutex> lock(control.m_gateMutex);
+        control.m_actionOpen = false;
+    }
+    control.m_gate.notify_all();
 }
 
 void Control::onIdle() {
@@ -232,15 +392,16 @@ void Control::startInternalTicker(std::uint32_t hz) {
     m_tickerQuit.store(false);
     this->setTickPeriod(1000000000ull / hz);
     m_ticker = std::thread([this, hz]() {
+        Clock::time_point next = Clock::now();
         while (!m_tickerQuit.load()) {
-            const double rate = std::max(0.001, m_rate.load());
-            const auto period = std::chrono::microseconds(static_cast<std::int64_t>(1000000.0 / (hz * rate)));
-            std::this_thread::sleep_for(period);
-            if (m_paused.load()) {
-                this->onIdle();
-            } else {
-                this->onTick();
+            if (!this->awaitTick(1000000ull / hz, next, m_tickerQuit)) {
+                if (!m_tickerQuit.load()) {
+                    this->onIdle();
+                }
+                continue;
             }
+            this->onTick();
+            this->finishTick();
         }
     });
 }
@@ -321,7 +482,14 @@ SimStatus Control::status() {
     status.activity = Activity::get().pending();
     status.work = Activity::get().total();
     status.busyTicks = m_busyTicks.load();
+    status.stepped = m_stepped.load();
+    status.tickPeriodNs = this->tickPeriodNs();
+    status.simSeconds = static_cast<double>(status.tick) * static_cast<double>(status.tickPeriodNs) / 1e9;
+    status.stuck = this->stuck();
     status.rate = m_rate.load();
+    if (m_stepped.load()) {
+        status.rate = m_steppedRate.load();  // a limit in stepped time; 0: none
+    }
     status.activeFaults = Bus::get().activeFaults();
     status.scenarioState = m_scenarioState.load();
     status.scenarioStep = m_scenarioNext.load();
@@ -420,13 +588,31 @@ bool Control::dispatch(const JsonObj& action, std::string& error) {
         return true;
     }
     if (op == "resume") {
+        {
+            std::lock_guard<std::mutex> lock(m_gateMutex);
+            m_stuck.clear();
+        }
         m_stepUntil.store(0);
         m_paused.store(false);
         this->post(SimEvent::RESUMED, "", "", static_cast<std::uint32_t>(m_tick.load()));
         return true;
     }
+    if (op == "set_stepped") {
+        this->setStepped(action.flag("stepped", true));
+        return true;
+    }
     if (op == "set_rate") {
         const double rate = action.real("rate", 0.0);
+        if (m_stepped.load()) {
+            // In stepped time the rate is a limit for someone who is watching: 0 takes it away
+            if (rate != 0.0 && (rate < 0.01 || rate > 1000.0)) {
+                error = "rate must be 0 (as fast as it goes) or between 0.01 and 1000";
+                return false;
+            }
+            m_steppedRate.store(rate);
+            this->post(SimEvent::RATE_SET, "", action.str("rate"));
+            return true;
+        }
         if (rate < 0.01 || rate > 1000.0) {
             error = "rate must be between 0.01 and 1000";
             return false;

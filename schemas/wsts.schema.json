@@ -516,6 +516,20 @@
         }
       },
       "additionalProperties": false
+    },
+    "time": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How simulated time advances unless a run says otherwise (fprime-wsts run --stepped / --realtime)",
+      "properties": {
+        "mode": {
+          "enum": [
+            "realtime",
+            "stepped"
+          ],
+          "description": "realtime (default): ticks follow the wall clock. stepped: a tick is taken when flight software has finished the last one, as fast as the host computes"
+        }
+      }
     }
   },
   "additionalProperties": false,

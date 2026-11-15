@@ -299,6 +299,7 @@
         "Payload.wstsControl.SIM_PAUSE",
         "Payload.wstsControl.SIM_RESUME",
         "Payload.wstsControl.SIM_SET_RATE",
+        "Payload.wstsControl.SIM_SET_STEPPED",
         "Payload.wstsControl.SIM_STEP"
       ],
       "events": [

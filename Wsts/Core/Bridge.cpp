@@ -242,6 +242,8 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
                 response.set("holding", Activity::get().holders());  // the queues with work outstanding
             }
         } else {
+            // In stepped time: between two ticks, and finished before the next one
+            Control::ActionGate gate;
             // An action may run flight handlers on this thread (injected bytes, an interrupt)
             Activity::Scope actionWork;
             ok = Control::get().exec(request, error);

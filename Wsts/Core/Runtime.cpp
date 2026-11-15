@@ -36,6 +36,12 @@ void Runtime::start(const RuntimeConfig& config) {
         return;
     }
     Control& control = Control::get();
+    const std::string stepped = env("WSTS_STEPPED", "");
+    control.setStepped(stepped.empty() ? config.stepped : stepped == "1");
+    const std::string limit = env("WSTS_STEP_LIMIT_MS", "");
+    if (!limit.empty() && std::atol(limit.c_str()) > 0) {
+        control.setStepLimit(static_cast<std::uint32_t>(std::atol(limit.c_str())));
+    }
     if (env("WSTS_START_PAUSED", "") == "1") {
         // Whoever asked (the launcher, for models that attach through the bridge) resumes
         JsonObj action;

@@ -1450,6 +1450,8 @@ def render_setup(plan: Plan, manifest: Manifest, topology_header: str) -> str:
         "    Wsts::RuntimeConfig config;",
         f"    config.bridge = {_cpp_string(manifest.bridge)};",
         f"    config.internalTickHz = {manifest.tick_hz};",
+        *(["    config.stepped = true;  // time.mode in the manifest; WSTS_STEPPED=0 runs it in real time"]
+          if manifest.time_mode == "stepped" else []),
         "    Wsts::Runtime::start(config);",
         *[f"    link_{_identifier(link.end.link)}.start();" for link in plan.links],
         "}",
@@ -1647,7 +1649,7 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
         "topology": plan.topology.name,
         "flight_toolchain": settings.default_toolchain,
         "sim_toolchain": "native (Linux)",
-        "time": {"mode": "real-time", "tick_source": next(
+        "time": {"mode": manifest.time_mode, "tick_source": next(
             (s.instance.name for s in plan.substitutions if s.surrogate.name == "Wsts.SimTick"), "internal ticker")},
         "substitutions": substitutions,
         "kept_hardware_instances": plan.kept_hardware,

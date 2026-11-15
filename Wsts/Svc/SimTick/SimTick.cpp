@@ -62,30 +62,26 @@ void SimTick::loop(U64 microseconds) {
     Control& control = Control::get();
     auto next = std::chrono::steady_clock::now();
     while (!m_quit.load()) {
-        // Simulated time advances `rate` times faster than the wall clock
-        const double rate = std::max(0.001, control.rate());
-        next += std::chrono::microseconds(static_cast<std::int64_t>(static_cast<double>(microseconds) / rate));
-        const auto now = std::chrono::steady_clock::now();
-        if (next < now) {
-            next = now;  // fell behind (host load, long pause): do not burst to catch up
-        }
-        std::this_thread::sleep_until(next);
-        if (m_quit.load()) {
-            break;
-        }
-        if (control.paused()) {
-            control.onIdle();
+        // Real time: sleeps until the tick is due. Stepped time: returns as soon as the
+        // last tick is finished and nothing from outside is waiting to be applied.
+        if (!control.awaitTick(microseconds, next, m_quit)) {
+            if (!m_quit.load()) {
+                control.onIdle();
+            }
             continue;
         }
-        // Outstanding until the rate groups have been cycled: between the core's part of
-        // the tick and theirs, nothing is on a queue yet
-        Activity::Scope tickWork;
-        control.onTick();
-        if (this->isConnected_CycleOut_OutputPort(0)) {
-            Os::RawTime cycleStart;
-            (void)cycleStart.now();
-            this->CycleOut_out(0, cycleStart);
+        {
+            // Outstanding until the rate groups have been cycled: between the core's part
+            // of the tick and theirs, nothing is on a queue yet
+            Activity::Scope tickWork;
+            control.onTick();
+            if (this->isConnected_CycleOut_OutputPort(0)) {
+                Os::RawTime cycleStart;
+                (void)cycleStart.now();
+                this->CycleOut_out(0, cycleStart);
+            }
         }
+        control.finishTick();
     }
 }
 

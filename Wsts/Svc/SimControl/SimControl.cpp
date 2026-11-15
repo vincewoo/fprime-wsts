@@ -154,6 +154,11 @@ void SimControl::SIM_STEP_cmdHandler(FwOpcodeType opCode, U32 cmdSeq, U32 ticks)
     this->run(opCode, cmdSeq, action.set("op", "step").setNum("ticks", ticks));
 }
 
+void SimControl::SIM_SET_STEPPED_cmdHandler(FwOpcodeType opCode, U32 cmdSeq, bool stepped) {
+    JsonObj action;
+    this->run(opCode, cmdSeq, action.set("op", "set_stepped").setBool("stepped", stepped));
+}
+
 void SimControl::FAULT_SET_cmdHandler(FwOpcodeType opCode,
                                       U32 cmdSeq,
                                       const Fw::CmdStringArg& endpoint,

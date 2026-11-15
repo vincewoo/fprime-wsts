@@ -26,6 +26,7 @@ flowchart LR
 |---|---|---|---|
 | `pause`, `resume` | `SIM_PAUSE`, `SIM_RESUME` | `pause()`, `resume()` | Stop / restart the simulation tick, and with it the flight rate groups |
 | `step` | `SIM_STEP` | `step(5)` | Run for that many ticks, then pause again |
+| `set_stepped` | `SIM_SET_STEPPED` | `set_stepped(True)` | Stepped time: ticks are taken when the last one is finished |
 | `set_rate` | `SIM_SET_RATE` | `set_rate(2.0)` | Simulated time per wall-clock time (0.01–1000) |
 | `fault_set` | `FAULT_SET` | `fault_set(endpoint, kind, …)` | Arm a fault on an endpoint |
 | `fault_clear` | `FAULT_CLEAR` | `fault_clear("*")` | Remove faults |
@@ -63,6 +64,44 @@ ticks are still paced by the wall clock and the time scale (`set_rate(100)` make
 quick), and within a tick the flight threads run as the host schedules them: this is
 control over how far time goes, not yet the deterministic stepped time of the
 [roadmap](../design.md#roadmap).
+
+## Stepped time (experimental)
+
+By default ticks follow the wall clock. In **stepped time** a tick is taken as soon as
+flight software has finished the last one, so a run goes as fast as the host computes and
+no tick overlaps the next:
+
+```bash
+fprime-wsts run my-mission-sim/wsts/MyDeployment --stepped --duration 600 --json
+```
+
+runs ten minutes of flight time, to the tick, usually in seconds; the summary has
+`sim_seconds` and `speed`. `time: {mode: stepped}` in the manifest makes it the default,
+and `sim.set_stepped(True)` switches a running simulation. Paused and stepped, a test
+gets exact control:
+
+```python
+sim.pause(); sim.set_stepped(True)
+sim.inject_text("sensorUart", "$TEMP,95.5\n")   # applied between two ticks
+sim.step(1)                                      # the tick that reads it, finished
+sim.step(1200)                                   # a minute at 20 Hz, in a moment
+```
+
+What to know:
+
+- If a component never finishes its work (a handler that blocks, a task that sleeps or
+  polls by itself), the tick cannot finish. After ten seconds the simulation pauses, and
+  `status()["stuck"]` and the log name the queues that hold work. Such a component needs
+  a surrogate, or the run real time.
+- `set_rate(1)` paces stepped time for someone watching a GDS; `set_rate(0)` removes the
+  limit.
+- Time stamps of events and telemetry are still the host's, and telemetry of
+  `wstsControl` is still published once a wall-clock second. Two runs are the same tick
+  for tick, not yet byte for byte.
+- A whole system is not stepped yet (`run --stepped` refuses one): step one element
+  through its bridge.
+
+The design, and what is still to come, is in [Stepped time](../stepped-time.md).
 
 ## Faults
 

@@ -75,6 +75,11 @@ module Wsts {
       rate: F32 @< 1.0 is real time; 2.0 runs twice as fast
     ) opcode 0x02
 
+    @ Choose how simulation time advances
+    async command SIM_SET_STEPPED(
+      stepped: bool @< True: a tick is taken when the last one is finished. False: ticks follow the wall clock
+    ) opcode 0x04
+
     @ Advance simulation time by a number of ticks, then pause
     async command SIM_STEP(
       ticks: U32 @< Ticks to run for, counted from the current tick

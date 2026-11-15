@@ -26,6 +26,7 @@
 #define WSTS_CORE_CONTROL_HPP
 
 #include <atomic>
+#include <condition_variable>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -100,6 +101,10 @@ struct SimStatus {
     std::uint64_t activity = 0;  //!< work flight software has been given and not finished
     std::uint64_t work = 0;      //!< pieces of work since start-up
     std::uint64_t busyTicks = 0; //!< ticks taken while work of an earlier one was outstanding
+    bool stepped = false;        //!< stepped time: a tick is taken when the last one is finished
+    std::uint64_t tickPeriodNs = 0; //!< simulated time one tick covers; 0 while not known
+    double simSeconds = 0.0;     //!< simulated time: ticks times the tick period
+    std::string stuck;           //!< stepped time: where the work of a tick that did not finish is
     double rate = 1.0;
     std::uint32_t activeFaults = 0;
     ScenarioState scenarioState = ScenarioState::IDLE;
@@ -128,6 +133,43 @@ class Control : public BusObserver {
     std::uint64_t tick() const { return m_tick.load(); }
     bool paused() const { return m_paused.load(); }
     double rate() const { return m_rate.load(); }
+    // ---- Stepped time (docs/stepped-time.md) ----
+    //
+    // In stepped time the wall clock does not decide when a tick is taken: the next one is
+    // taken when flight software has finished what the last one caused. A tick source
+    // brackets each tick with awaitTick() and finishTick(); Wsts.SimTick and the internal
+    // ticker do. Actions from outside (the bridge) run between two ticks, never inside one.
+
+    using Clock = std::chrono::steady_clock;
+    bool stepped() const { return m_stepped.load(); }
+    void setStepped(bool stepped);
+    //! For a tick source: wait until the next tick is due. `next` is the source's own
+    //! schedule, which this advances. Returns false when no tick is to be taken now (the
+    //! simulation is paused, or `quit` became true): call onIdle() and ask again.
+    bool awaitTick(std::uint64_t periodUs, Clock::time_point& next, const std::atomic<bool>& quit);
+    //! For a tick source, after onTick() and after it has cycled flight software: in
+    //! stepped time, wait until the work of the tick is finished.
+    void finishTick();
+    //! Longest a tick may take to finish in stepped time before it is reported and the
+    //! simulation pauses (wall-clock milliseconds)
+    void setStepLimit(std::uint32_t milliseconds) { m_stepLimitMs.store(milliseconds); }
+    //! Where the work of a tick that did not finish is; empty when none has been stuck
+    std::string stuck();
+
+    //! Held around an action that comes from outside the simulation (a bridge client). In
+    //! stepped time it waits for the tick being taken to finish, keeps the next one from
+    //! starting, and lets go when what the action caused is finished. Nothing in real time.
+    class ActionGate {
+      public:
+        ActionGate();
+        ~ActionGate();
+        ActionGate(const ActionGate&) = delete;
+        ActionGate& operator=(const ActionGate&) = delete;
+
+      private:
+        bool m_held;
+    };
+
     //! Mark that a surrogate tick source exists, so no internal ticker is needed
     void registerTickSource() { m_hasTickSource.store(true); }
     bool hasTickSource() const { return m_hasTickSource.load(); }
@@ -204,6 +246,15 @@ class Control : public BusObserver {
 
     std::atomic<std::uint64_t> m_tick{0};
     std::atomic<bool> m_paused{false};
+    std::atomic<bool> m_stepped{false};
+    std::atomic<double> m_steppedRate{0.0};  //!< pace of stepped time against the wall clock; 0: as fast as it goes
+    std::atomic<std::uint32_t> m_stepLimitMs{10000};
+    std::mutex m_gateMutex;  //!< the three below, and m_stuck
+    std::condition_variable m_gate;
+    bool m_tickOpen = false;       //!< a tick is being taken and has not finished
+    bool m_actionOpen = false;     //!< an action from outside is being applied
+    std::uint32_t m_actionsWaiting = 0;
+    std::string m_stuck;
     std::atomic<std::uint64_t> m_busyTicks{0};  //!< ticks taken before the work of the last one was finished
     std::atomic<std::uint64_t> m_stepUntil{0};  //!< tick at which a `step` pauses; 0: not stepping
     std::atomic<double> m_rate{1.0};

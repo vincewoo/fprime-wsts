@@ -36,10 +36,17 @@ struct Entry {
     std::int64_t handling = 0;  // received, handler not yet returned
     bool polled = false;
 };
-std::mutex s_mutex;
+// Neither is ever destroyed: the queues are members of components with static storage,
+// which are destroyed after anything created here on first use, and tasks may still be
+// at their queues while the process exits
+std::mutex& registryMutex() {
+    static std::mutex* mutex = new std::mutex;
+    return *mutex;
+}
+#define s_mutex registryMutex()
 std::map<const CountedQueue*, Entry>& entries() {
-    static std::map<const CountedQueue*, Entry> all;
-    return all;
+    static std::map<const CountedQueue*, Entry>* all = new std::map<const CountedQueue*, Entry>;
+    return *all;
 }
 
 std::string report() {
