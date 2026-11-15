@@ -65,7 +65,7 @@ Read from F´ v4.4.2 and from the toolkit as it is:
 | `Wsts.SimCycle` clocks | Their own thread spaces the granted cycles by the wall clock | Cycles issued in order of their instants, each waited for |
 | `delay` faults | `sleep_for(ms)` on the calling thread | Held for simulated time |
 | `Wsts.SimControl` | Telemetry once a wall-clock second | Once a simulated second |
-| Ground link (`Drv.TcpClient`), bridge, link sockets | Their own threads, blocked in `recv` | Outside inputs: see [Inputs from outside](#inputs-from-outside) |
+| Ground link (`Drv.TcpClient`), bridge, link sockets | Their own threads, blocked in `recv` | Outside inputs: see [Inputs from outside](#4-inputs-from-outside) |
 
 Implementations of the `Os` interfaces are chosen at link time
 (`CHOOSES_IMPLEMENTATIONS`), by the platform and, last, by the deployment. The overlay
