@@ -65,6 +65,42 @@ def bridge_address(directory) -> str:
         return json.load(file).get("bridge", "none")
 
 
+def link_traffic(response: dict) -> dict:
+    """Gather the flat `link.<name>.sent` and `link.<name>.received` of a status into
+    response["link_traffic"] = {name: {"sent": n, "received": n}}"""
+    traffic: Dict[str, Dict[str, int]] = {}
+    for key in [key for key in response if key.startswith("link.")]:
+        name, _, count = key[len("link."):].rpartition(".")
+        if name and count in ("sent", "received"):
+            traffic.setdefault(name, {"sent": 0, "received": 0})[count] = int(response.pop(key))
+    response["link_traffic"] = traffic
+    return response
+
+
+class PendingRequest:
+    """A request sent to a simulation whose answer has not been waited for yet"""
+
+    def __init__(self, bridge: "WstsBridge", op: str, request_id: int, waiter: "queue.Queue[dict]"):
+        self.bridge = bridge
+        self.op = op
+        self._id = request_id
+        self._waiter = waiter
+
+    def result(self, timeout: Optional[float] = None) -> dict:
+        """The answer. Raises BridgeError if the request was refused or not answered in time."""
+        timeout = self.bridge.request_timeout if timeout is None else timeout
+        try:
+            response = self._waiter.get(timeout=timeout)
+        except queue.Empty:
+            raise BridgeError(f"no response to '{self.op}' within {timeout} s") from None
+        finally:
+            with self.bridge._responses_lock:
+                self.bridge._responses.pop(self._id, None)
+        if not response.get("ok", False):
+            raise BridgeError(response.get("error", f"'{self.op}' failed"))
+        return response
+
+
 class WstsBridge:
     """Connection to a running simulated deployment"""
 
@@ -212,8 +248,14 @@ class WstsBridge:
 
     # ---- Requests ----
 
-    def request(self, op: str, **fields) -> dict:
-        """Send one action and return the simulation's response. Raises BridgeError if refused."""
+    def request(self, op: str, timeout: Optional[float] = None, **fields) -> dict:
+        """Send one action and return the simulation's response. Raises BridgeError if refused.
+        `timeout` overrides `request_timeout` for this request."""
+        return self.submit(op, **fields).result(timeout)
+
+    def submit(self, op: str, **fields) -> "PendingRequest":
+        """Send one request without waiting for its answer: `.result()` waits for it. Lets a
+        client wait on several simulations at once (the conductor of a system)."""
         with self._responses_lock:
             request_id = self._next_id
             self._next_id += 1
@@ -221,22 +263,18 @@ class WstsBridge:
             self._responses[request_id] = waiter
         try:
             self._send({"id": request_id, "op": op, **fields})
-            try:
-                response = waiter.get(timeout=self.request_timeout)
-            except queue.Empty:
-                raise BridgeError(f"no response to '{op}' within {self.request_timeout} s") from None
-        finally:
+        except OSError as error:
             with self._responses_lock:
                 self._responses.pop(request_id, None)
-        if not response.get("ok", False):
-            raise BridgeError(response.get("error", f"'{op}' failed"))
-        return response
+            raise BridgeError(f"cannot send '{op}' to the WSTS bridge at {self.address}: {error}") from None
+        return PendingRequest(self, op, request_id, waiter)
 
     def status(self) -> dict:
-        """Tick, run state, fault and scenario state, bus counters and endpoint names"""
+        """Tick, run state, fault and scenario state, bus counters and endpoint names. What
+        each link sent and received is under "link_traffic": {link: {"sent", "received"}}."""
         response = self.request("status")
         response["endpoints"] = [e for e in response.get("endpoints", "").split(",") if e]
-        return response
+        return link_traffic(response)
 
     # ---- Run control ----
 
@@ -251,11 +289,16 @@ class WstsBridge:
         the limit away: as fast as the host computes."""
         self.request("set_rate", rate=rate)
 
-    def set_stepped(self, stepped: bool = True) -> None:
+    def set_stepped(self, stepped: bool = True, lockstep: Optional[bool] = None) -> None:
         """Stepped time: a tick is taken when flight software has finished the last one,
         not when the wall clock says so, and what this client sends is applied between two
-        ticks. False returns to real time."""
-        self.request("set_stepped", stepped=bool(stepped))
+        ticks. False returns to real time. `lockstep` (an element of a system stepped as a
+        whole, by `WstsSystem.set_stepped`): a tick is taken only when the system's conductor
+        grants one."""
+        fields = {"stepped": bool(stepped)}
+        if lockstep is not None:
+            fields["lockstep"] = bool(lockstep)
+        self.request("set_stepped", **fields)
 
     def step(self, ticks: int = 1, wait: bool = True, timeout: float = 30.0) -> int:
         """Run the simulation for `ticks` ticks, then pause it. From a paused simulation the
@@ -486,6 +529,9 @@ class WstsSystem:
 
     `system` is the generated system directory, its wsts-system.json, or that file's content.
     Elements whose bridge is off are left out.
+
+    In lockstep (`set_stepped`, or `fprime-wsts run <system> --stepped`) the system is
+    stepped as a whole, in simulated time: `step(seconds=0.5)`, `time()`, `run_scenario()`.
     """
 
     def __init__(self, system, connect_timeout: float = 10.0, request_timeout: float = 5.0):
@@ -505,6 +551,9 @@ class WstsSystem:
         self.ground: str = system["ground"]
         self.links: Dict[str, dict] = {link["name"]: link for link in system.get("links", [])}
         self.elements: Dict[str, WstsBridge] = {}
+        self._connect_timeout = connect_timeout
+        self._request_timeout = request_timeout
+        self._conductor = None
         try:
             for element in system["elements"]:
                 if element["bridge"] != "none":
@@ -514,6 +563,9 @@ class WstsSystem:
             raise
 
     def close(self) -> None:
+        if self._conductor is not None:
+            self._conductor.close()
+            self._conductor = None
         for bridge in self.elements.values():
             bridge.close()
 
@@ -547,17 +599,73 @@ class WstsSystem:
             bridge.subscribe()
 
     def pause(self) -> None:
-        """Pause every element. The elements stop one after another, not at the same instant."""
+        """Pause every element. In real time the elements stop one after another, not at the
+        same instant. In lockstep a conductor that runs freely (`fprime-wsts run --stepped`)
+        stops at the end of the instant it is in."""
         for bridge in self.elements.values():
             bridge.pause()
 
     def resume(self) -> None:
+        """Resume every element. In lockstep time runs only while a conductor runs it: one that
+        runs freely goes on; otherwise `step` it."""
         for bridge in self.elements.values():
             bridge.resume()
 
     def set_rate(self, rate: float) -> None:
         for bridge in self.elements.values():
             bridge.set_rate(rate)
+
+    # ---- Lockstep: the system stepped as a whole ----
+
+    def set_stepped(self, stepped: bool = True) -> None:
+        """Lockstep: every element in stepped time, taking a tick only when this system's
+        conductor grants one, and what links bring held until the tick after it was sent.
+        Time then runs with `step`. False returns every element to real time; `pause()`
+        before and `resume()` after, as for one element."""
+        for bridge in self.elements.values():
+            bridge.set_stepped(stepped, lockstep=bool(stepped))
+
+    def conductor(self):
+        """The conductor of this client (lockstep.Conductor), with connections of its own"""
+        from .lockstep import Conductor
+
+        if self._conductor is None:
+            self._conductor = Conductor(self.description, self._connect_timeout, self._request_timeout)
+        return self._conductor
+
+    def time(self) -> float:
+        """The system's simulated time in seconds: that of the last instant taken"""
+        conductor = self.conductor()
+        conductor.refresh()
+        conductor.check()
+        return conductor.time_ns / 1e9
+
+    def step(self, seconds: Optional[float] = None, instants: Optional[int] = None) -> float:
+        """Lockstep: advance the system's simulated time by `seconds`, or by a number of
+        `instants` (the times at which any element has a tick; one by default). Each tick is
+        finished, on every element, when this returns. Returns the system's time in seconds.
+        Raises lockstep.Stuck if an element's tick did not finish."""
+        conductor = self.conductor()
+        if seconds is None:
+            conductor.run(instants=1 if instants is None else int(instants))
+        else:
+            conductor.refresh()
+            conductor.check()
+            conductor.run(until_ns=conductor.time_ns + int(round(float(seconds) * 1e9)), instants=instants)
+        return conductor.time_ns / 1e9
+
+    def run_scenario(self, path) -> float:
+        """Lockstep: play a system scenario (lockstep.SystemScenario: actions with `time` in
+        simulated seconds and the `element` or `link` they are for) from now to its last
+        action. Returns the system's time in seconds."""
+        from .lockstep import SystemScenario
+
+        conductor = self.conductor()
+        scenario = SystemScenario.load(path, list(self.elements), list(self.links))
+        conductor.refresh()
+        conductor.check()
+        conductor.run(until_ns=conductor.time_ns + scenario.end_ns, scenario=scenario)
+        return conductor.time_ns / 1e9
 
     # ---- Faults, addressed by link or by element ----
 

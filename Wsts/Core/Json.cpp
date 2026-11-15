@@ -191,6 +191,14 @@ bool JsonObj::has(const std::string& key) const {
     return m_values.find(key) != m_values.end();
 }
 
+std::vector<std::string> JsonObj::keys() const {
+    std::vector<std::string> found;
+    for (const auto& entry : m_values) {
+        found.push_back(entry.first);
+    }
+    return found;
+}
+
 std::string JsonObj::str(const std::string& key, const std::string& fallback) const {
     const auto it = m_values.find(key);
     return (it == m_values.end()) ? fallback : it->second.text;

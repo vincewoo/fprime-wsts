@@ -301,7 +301,11 @@ def cmd_status(args: argparse.Namespace) -> int:
     for name, status in answers.items():
         state = "paused" if status.get("paused") else "running"
         links = f", links {status['links_up']}/{status['links']} up" if status.get("links") else ""
-        print(f"{name}: {state} at tick {status.get('tick')}, rate {status.get('rate')}{links}")
+        mode = ", lockstep" if status.get("lockstep") else ", stepped" if status.get("stepped") else ""
+        print(f"{name}: {state} at tick {status.get('tick')} ({status.get('sim_seconds', 0):g} s){mode}, "
+              f"rate {status.get('rate')}{links}")
+        if status.get("stuck"):
+            print(f"  stuck: {status['stuck']}")
         print(f"  bus: {status.get('transactions')} transaction(s), {status.get('bytes')} byte(s), "
               f"{status.get('errors')} error(s); faults: {status.get('active_faults')} active, "
               f"{status.get('fault_hits')} hit(s)")
@@ -401,13 +405,16 @@ def main(argv=None) -> int:
     mode = run.add_mutually_exclusive_group()
     mode.add_argument("--stepped", dest="stepped", action="store_true", default=None,
                       help="stepped time (experimental): a tick is taken when flight software has finished the last "
-                           "one, as fast as the host computes; --duration then counts simulated seconds. Single "
-                           "deployments only. Default: time.mode of the manifest")
+                           "one, as fast as the host computes; --duration then counts simulated seconds. A system "
+                           "runs in lockstep: its elements are stepped together on one time base. Default: time.mode "
+                           "of the manifest (of any element's, for a system)")
     mode.add_argument("--realtime", dest="stepped", action="store_false",
                       help="real time, whatever the manifest says: ticks follow the wall clock")
     run.add_argument("--bridge", help="bridge address override, e.g. tcp:50100")
     run.add_argument("--scenario", action="append", metavar="[ELEMENT=]FILE",
-                     help="scenario file to play from start-up; for a system, <element>=<file>, once per element")
+                     help="scenario file to play from start-up; for a system, <element>=<file>, once per element, "
+                          "and in lockstep a plain <file> is a system scenario (actions with 'time' in simulated "
+                          "seconds and the 'element' or 'link' they are for)")
     run.add_argument("--scenario-mode", choices=["stimulus", "responses"], default="stimulus")
     run.add_argument("--record", action="append", metavar="[ELEMENT=]FILE",
                      help="record bus traffic and actions to this file; for a system, <element>=<file> for one "

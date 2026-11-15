@@ -1613,6 +1613,160 @@ TEST_F(CoreTest, LinkWithoutAnAddressStaysDown) {
 }
 
 // ----------------------------------------------------------------------
+// Lockstep: the elements of a system stepped together (docs/stepped-time.md, phase 4)
+// ----------------------------------------------------------------------
+
+TEST_F(CoreTest, InLockstepATickIsTakenOnlyWhenTheConductorGrantsOne) {
+    Control& control = Control::get();
+    EXPECT_FALSE(control.grant(1)) << "not in lockstep";
+    ASSERT_TRUE(run(R"({"op": "set_stepped", "stepped": true, "lockstep": true})"));
+    EXPECT_TRUE(control.stepped()) << "lockstep is a kind of stepped time";
+    EXPECT_TRUE(control.status().toJson().flag("lockstep"));
+    Ticker ticker(10);
+    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+    EXPECT_EQ(control.tick(), 0u) << "not paused, and still no tick: none was granted";
+    ASSERT_TRUE(control.grant(3));
+    ASSERT_TRUE(control.awaitGranted(std::chrono::milliseconds(2000)));
+    EXPECT_EQ(control.tick(), 3u) << "exactly the ticks granted, and finished";
+    EXPECT_EQ(control.status().stepping, 0u);
+    EXPECT_TRUE(control.status().settled);
+    // Pausing does not stop a grant: a pause is for the conductor to see
+    ASSERT_TRUE(run(R"({"op": "pause"})"));
+    ASSERT_TRUE(control.grant(2));
+    ASSERT_TRUE(control.awaitGranted(std::chrono::milliseconds(2000)));
+    EXPECT_EQ(control.tick(), 5u);
+    // Its own step would take the element out of step with the others
+    std::string error;
+    EXPECT_FALSE(run(R"({"op": "step", "ticks": 1})", &error));
+    EXPECT_NE(error.find("conductor"), std::string::npos) << error;
+    // Back to real time ends lockstep too
+    ASSERT_TRUE(run(R"({"op": "set_stepped", "stepped": false})"));
+    EXPECT_FALSE(control.lockstep());
+    EXPECT_FALSE(control.grant(1));
+}
+
+namespace {
+//! Two ends of a link in this one process, on the endpoints linkA and linkB
+struct LinkedPair {
+    LinkedPair() {
+        Bus::get().bindByteStream("linkA", [this](const Bytes& data) {
+            std::lock_guard<std::mutex> lock(mutex);
+            atA.push_back(data);
+        });
+        Bus::get().bindByteStream("linkB", [this](const Bytes& data) {
+            std::lock_guard<std::mutex> lock(mutex);
+            atB.push_back(data);
+            atBTick.push_back(Control::get().tick());
+        });
+        const std::string path = tempFile("lockstep.sock");
+        (void)a.set("endpoint", "linkA");
+        (void)a.set("link", "x");
+        (void)a.set("role", "listen");
+        (void)a.set("address", path);
+        (void)b.set("endpoint", "linkB");
+        (void)b.set("link", "x");
+        (void)b.set("role", "connect");
+        (void)b.set("address", path);
+        Bus::get().attachByteStream("linkA", &a);
+        Bus::get().attachByteStream("linkB", &b);
+    }
+    ~LinkedPair() {
+        a.stop();
+        b.stop();
+        Bus::get().detach("linkA");
+        Bus::get().detach("linkB");
+    }
+    std::size_t sizeAtB() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return atB.size();
+    }
+    std::mutex mutex;
+    std::vector<Bytes> atA;
+    std::vector<Bytes> atB;
+    std::vector<std::uint64_t> atBTick;
+    Wsts::LinkByteStream a;
+    Wsts::LinkByteStream b;
+};
+}  // namespace
+
+TEST_F(CoreTest, InLockstepWhatALinkBringsWaitsForTheTickAfterItWasSent) {
+    Control& control = Control::get();
+    control.setLockstep(true);
+    Ticker ticker(10);  // 100 ms ticks
+    LinkedPair pair;
+    pair.a.start();
+    // Sent before the peer is there: in lockstep it waits for it instead of being lost
+    EXPECT_EQ(Bus::get().byteStreamSend("linkA", text("early")), 0);
+    EXPECT_EQ(pair.a.dropped(), 0u);
+    EXPECT_EQ(pair.a.sent(), 1u);
+    pair.b.start();
+    ASSERT_TRUE(eventually([&]() { return pair.b.received() == 1; })) << "it went when the peer came";
+    EXPECT_EQ(pair.sizeAtB(), 0u) << "held until a tick";
+
+    ASSERT_TRUE(control.grant(2));
+    ASSERT_TRUE(control.awaitGranted(std::chrono::milliseconds(2000)));
+    ASSERT_EQ(pair.sizeAtB(), 1u) << "sent at 0 ms, delivered at the first tick after";
+    EXPECT_EQ(pair.atBTick[0], 1u);
+
+    // Sent at 200 ms (between ticks 2 and 3): the next tick, at 300 ms, takes it
+    EXPECT_EQ(Bus::get().byteStreamSend("linkA", text("at 200 ms")), 0);
+    ASSERT_TRUE(eventually([&]() { return pair.b.received() == 2; }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    EXPECT_EQ(pair.sizeAtB(), 1u) << "no tick, no delivery";
+    pair.b.expect(2);  // what the conductor says will have arrived
+    ASSERT_TRUE(control.grant(1));
+    ASSERT_TRUE(control.awaitGranted(std::chrono::milliseconds(2000)));
+    ASSERT_EQ(pair.sizeAtB(), 2u);
+    EXPECT_EQ(pair.atB[1], text("at 200 ms"));
+    EXPECT_EQ(pair.atBTick[1], 3u);
+
+    EXPECT_EQ(pair.a.sent(), 2u);
+    JsonObj traffic;
+    Wsts::LinkByteStream::traffic(traffic);
+    // Both ends are in this process and share the name: the one started last is reported
+    EXPECT_EQ(traffic.num("link.x.sent", -1), 0) << traffic.dump();
+    EXPECT_EQ(traffic.num("link.x.received", -1), 2) << traffic.dump();
+    EXPECT_EQ(Wsts::LinkByteStream::find("x"), &pair.a);
+    EXPECT_EQ(Wsts::LinkByteStream::find("y"), nullptr);
+}
+
+TEST_F(CoreTest, InLockstepATickDoesNotStartWithoutWhatTheConductorSaidHadBeenSent) {
+    Control& control = Control::get();
+    control.setLockstep(true);
+    control.setStepLimit(60);
+    Ticker ticker(10);
+    LinkedPair pair;
+    pair.a.start();
+    pair.b.start();
+    ASSERT_TRUE(eventually([&]() { return pair.a.up() && pair.b.up(); }));
+    pair.b.expect(1);  // and nothing comes
+    ASSERT_TRUE(control.grant(1));
+    ASSERT_TRUE(control.awaitGranted(std::chrono::milliseconds(2000)));
+    EXPECT_TRUE(control.paused());
+    EXPECT_NE(control.stuck().find("link x: 0 of the 1 messages"), std::string::npos) << control.stuck();
+    EXPECT_EQ(control.status().stepping, 0u) << "nothing left granted: the conductor stops";
+}
+
+TEST_F(CoreTest, TheEndOfLockstepDeliversWhatALinkHolds) {
+    Control& control = Control::get();
+    control.setLockstep(true);
+    LinkedPair pair;
+    pair.a.start();
+    pair.b.start();
+    ASSERT_TRUE(eventually([&]() { return pair.a.up() && pair.b.up(); }));
+    EXPECT_EQ(Bus::get().byteStreamSend("linkA", text("held")), 0);
+    ASSERT_TRUE(eventually([&]() { return pair.b.received() == 1; }));
+    EXPECT_EQ(pair.sizeAtB(), 0u);
+    control.setLockstep(false);
+    EXPECT_EQ(pair.sizeAtB(), 1u);
+    EXPECT_TRUE(control.stepped()) << "still stepped: only lockstep ended";
+    // Outside lockstep a link delivers at once, as before
+    EXPECT_EQ(Bus::get().byteStreamSend("linkA", text("at once")), 0);
+    ASSERT_TRUE(eventually([&]() { return pair.sizeAtB() == 2; }));
+    control.setStepped(false);
+}
+
+// ----------------------------------------------------------------------
 // Cycle clocks
 // ----------------------------------------------------------------------
 

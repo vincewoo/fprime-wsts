@@ -305,9 +305,10 @@ D=examples/mission-sim/wsts/Mission; pytest tests/e2e -p fprime_wsts.pytest_plug
 Built against F´ v4.4.2. Working today: the surrogates and transform above, real-time and
 scaled simulation time, faults, scenarios, record/replay, the bridge, multi-element systems
 with byte stream links, substituting instances defined inside subtopologies, the example.
-Experimental: stepped time for a single deployment (`run --stepped`: ticks are taken as fast
-as flight software finishes them, and two runs give the same recording byte for byte; the
-generated report lists the code that waits on the host and would get in the way).
-Designed but not built yet: lockstep across the elements of a system, GPIO links between elements, a POSIX-backed VxWorks API shim,
+Experimental: stepped time (`run --stepped`: ticks are taken as fast as flight software
+finishes them, and two runs give the same recording byte for byte; the generated report
+lists the code that waits on the host and would get in the way), for a single deployment
+and for a system in lockstep, its elements stepped together on one time base.
+Designed but not built yet: GPIO links between elements, a POSIX-backed VxWorks API shim,
 file-system path remapping. See
 [docs/design.md](docs/design.md#roadmap).

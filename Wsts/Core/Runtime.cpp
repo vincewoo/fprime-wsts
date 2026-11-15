@@ -41,6 +41,10 @@ void Runtime::start(const RuntimeConfig& config) {
     Control& control = Control::get();
     const std::string stepped = env("WSTS_STEPPED", "");
     control.setStepped(stepped.empty() ? config.stepped : stepped == "1");
+    if (env("WSTS_LOCKSTEP", "") == "1") {
+        // An element of a system that is stepped as a whole: its ticks are the conductor's
+        control.setLockstep(true);
+    }
     const std::string epoch = env("WSTS_EPOCH", "");
     if (!epoch.empty() && std::atoll(epoch.c_str()) > 0) {
         control.setEpoch(static_cast<std::uint64_t>(std::atoll(epoch.c_str())));

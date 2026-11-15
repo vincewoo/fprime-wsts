@@ -650,7 +650,7 @@ class SystemSimulation:
                  env: Optional[List[str]] = None, gds_gui: Optional[int] = None, gds_gui_addr: str = "127.0.0.1",
                  auto_ports: bool = False, zmq_transport: Optional[List[str]] = None,
                  scenarios: Optional[Dict[str, str]] = None, scenario_mode: str = "stimulus",
-                 records: Optional[Dict[str, str]] = None):
+                 records: Optional[Dict[str, str]] = None, stepped: Optional[bool] = None):
         from .system import load_description
 
         self.directory = Path(directory).resolve()
@@ -673,10 +673,27 @@ class SystemSimulation:
         self.scenarios = dict(scenarios or {})  # element -> scenario file played from start-up
         self.scenario_mode = scenario_mode
         self.records = dict(records or {})  # element -> file its bus traffic and actions are recorded to
+        # Lockstep: every element in stepped time, its ticks granted by a conductor. None
+        # leaves it to the manifests: lockstep if any element's asks for stepped time.
+        if stepped is None:
+            stepped = bool(self.stepped_by_manifest()) or None
+        self.stepped = stepped
         if auto_ports:
             # The description is what clients connect by: it gets the addresses of this run
             for element in self.description["elements"]:
                 element["bridge"] = auto_bridge(element["bridge"])
+
+    def stepped_by_manifest(self) -> List[str]:
+        """The elements whose manifest asks for stepped time (time.mode: stepped)"""
+        found = []
+        for element in self.description["elements"]:
+            try:
+                report = json.loads((self.directory / element["directory"] / "wsts-report.json").read_text())
+            except (OSError, ValueError):
+                continue
+            if report.get("time", {}).get("mode") == "stepped":
+                found.append(element["name"])
+        return found
 
     def merge_dictionaries(self) -> Path:
         """One dictionary for the whole system, as the ground system uses for deployments
@@ -728,9 +745,11 @@ class SystemSimulation:
                     scenario=self.scenarios.get(name), scenario_mode=self.scenario_mode,
                     record=self.records.get(name),
                     dictionary=self.dictionary if is_ground else None,
-                    env={**self.env.get(None, {}), **self.env.get(name, {}), "WSTS_LINK_DIR": self._link_dir},
+                    env={**self.env.get(None, {}), **self.env.get(name, {}), "WSTS_LINK_DIR": self._link_dir,
+                         **({"WSTS_LOCKSTEP": "1"} if self.stepped else {})},
                     auto_ports=self.auto_ports,  # the GDS's ports; the bridge is chosen already
                     zmq_transport=self.zmq_transport if is_ground else None,
+                    stepped=self.stepped,
                 )
                 simulation.owns_run_file = False
                 self.elements[name] = simulation
@@ -809,29 +828,47 @@ class SystemSimulation:
 def run_system_cli(args) -> int:
     from .system import load_description
 
-    if getattr(args, "stepped", None):
-        raise WstsError("--stepped is for a single deployment so far: the elements of a system would each run as fast "
-                        "as they can and drift apart. Stepping a system in lockstep is not built yet "
-                        "(docs/stepped-time.md, phase 4). One element can be stepped through its bridge "
-                        "(set_stepped), for a test that pauses and steps it")
     for option in ("bridge", "files_dir"):
         if getattr(args, option):
             raise WstsError(f"--{option.replace('_', '-')} applies to a single deployment and is not supported when "
                             "running a system; drive the elements through their bridges instead")
     names = [element["name"] for element in load_description(Path(args.directory).resolve())["elements"]]
-    scenarios = per_element("scenario", args.scenario, names)
-    records = per_element("record", args.record, names, spread=True)
+    stepped = getattr(args, "stepped", None)
     gds = args.gds or args.gds_gui
     system = SystemSimulation(Path(args.directory), gds=gds, gds_port=args.gds_port,
                               gds_gui=args.gds_gui_port if args.gds_gui else None,
                               gds_gui_addr=args.gds_gui_addr,
                               log_dir=Path(args.log_dir) if args.log_dir else None, env=getattr(args, "env", None),
-                              auto_ports=getattr(args, "auto_ports", False),
-                              scenarios=scenarios, scenario_mode=args.scenario_mode, records=records)
+                              auto_ports=getattr(args, "auto_ports", False), stepped=stepped)
+    lockstep = bool(system.stepped)
+    # In lockstep a scenario without an element is the system's: actions at simulated times
+    system_scenario = None
+    plain = [value for value in (args.scenario or []) if "=" not in value]
+    if lockstep and len(plain) == 1:
+        system_scenario = plain[0]
+        args.scenario = [value for value in args.scenario if "=" in value]
+    elif plain and not lockstep:
+        raise WstsError(f"--scenario {plain[0]}: for a system, say which element it is for: <element>=<file>. "
+                        "A scenario for the whole system, on one time base, needs lockstep (--stepped)")
+    system.scenarios = per_element("scenario", args.scenario, names)
+    system.scenario_mode = args.scenario_mode
+    system.records = records = per_element("record", args.record, names, spread=True)
+    scenario = None
+    if system_scenario:
+        from .lockstep import SystemScenario
+
+        description = system.description
+        scenario = SystemScenario.load(system_scenario, names, [link["name"] for link in description.get("links", [])])
+    if lockstep:
+        unbridged = [element["name"] for element in system.description["elements"] if element["bridge"] == "none"]
+        if unbridged:
+            raise WstsError(f"a system is stepped through the bridges of its elements, and {', '.join(unbridged)} "
+                            "has none (bridge: none)")
     system.start()
     if not args.json:
         bridges = ", ".join(f"{name} {simulation.bridge}" for name, simulation in system.elements.items())
-        print(f"system {system.name} running: bridges {bridges}; logs {system.log_dir}")
+        print(f"system {system.name} running{' in lockstep' if lockstep else ''}: bridges {bridges}; "
+              f"logs {system.log_dir}")
         if gds:
             print(f"GDS listening for element '{system.ground}' on port {system.elements[system.ground].gds_port}, "
                   f"dictionary {system.dictionary}")
@@ -839,12 +876,37 @@ def run_system_cli(args) -> int:
             print(f"GDS browser GUI for element '{system.ground}' at {system.gds_gui_url}")
     statuses: Dict[str, dict] = {}
     interrupted = False
+    stuck: Dict[str, str] = {}
+    lockstep_error = None
+    sim_ns = 0
+    conducted = 0.0
     try:
-        deadline = time.monotonic() + args.duration if args.duration else None
-        while not system.exited():
-            if deadline and time.monotonic() >= deadline:
-                break
-            time.sleep(0.1)
+        if lockstep:
+            from .lockstep import Conductor, LockstepError, Stuck
+
+            conductor = Conductor(system.description)
+            try:
+                conductor.wait_ready(TICK_SOURCE_WAIT, alive=lambda: not system.exited())
+                began = time.monotonic()
+                # Simulated seconds; without a duration, until interrupted. A pause of any
+                # element (the GDS, a client) holds the whole system.
+                conductor.run(until_ns=int(round(args.duration * 1e9)) if args.duration else None,
+                              scenario=scenario, hold_while_paused=True, keep_going=lambda: not system.exited())
+                conducted = time.monotonic() - began
+            except Stuck as error:
+                stuck = error.stuck
+            except LockstepError as error:
+                if not system.exited():
+                    lockstep_error = str(error)
+            finally:
+                sim_ns = conductor.time_ns if conductor.state else 0
+                conductor.close()
+        else:
+            deadline = time.monotonic() + args.duration if args.duration else None
+            while not system.exited():
+                if deadline and time.monotonic() >= deadline:
+                    break
+                time.sleep(0.1)
     except KeyboardInterrupt:
         interrupted = True
     crashed = system.exited()
@@ -858,15 +920,23 @@ def run_system_cli(args) -> int:
         except Exception:
             pass
     codes = system.stop()
+    wall = round(time.monotonic() - system.started, 2)
+    timing = {}
+    if lockstep:
+        simulated = round(sim_ns / 1e9, 3)
+        timing = {"stepped": True, "lockstep": True, "sim_seconds": simulated,
+                  "speed": round(simulated / conducted, 1) if conducted > 0 else None,
+                  **({"stuck": stuck} if stuck else {}), **({"error": lockstep_error} if lockstep_error else {})}
     summary = {
         "system": system.name,
         "exited_early": crashed,
         "interrupted": interrupted,
-        "seconds": round(time.monotonic() - system.started, 2),
+        "seconds": wall,
         "logs": str(system.log_dir),
         "dictionary": str(system.dictionary) if system.dictionary else None,
         "gds_gui": system.gds_gui_url,
         "gds_port": system.elements[system.ground].gds_port if gds else None,
+        **timing,
         "elements": {
             name: {
                 "deployment": simulation.binary.name,
@@ -885,7 +955,18 @@ def run_system_cli(args) -> int:
         print(json.dumps(summary, indent=2))
     else:
         print(f"system stopped after {summary['seconds']} s, exit codes "
-              + ", ".join(f"{name} {code}" for name, code in codes.items()))
+              + ", ".join(f"{name} {code}" for name, code in codes.items())
+              + (f"; {timing['sim_seconds']} s simulated in lockstep, {timing['speed']} times real time"
+                 if timing and timing.get("speed") else ""))
+    if stuck:
+        for name, why in stuck.items():
+            print(f"lockstep: a tick of element '{name}' did not finish, and the system stopped at "
+                  f"{timing['sim_seconds']} s. Work outstanding: {why}; see {system.elements[name].log_dir / 'sim.log'}",
+                  file=sys.stderr)
+        return 1
+    if lockstep_error:
+        print(f"lockstep: {lockstep_error}", file=sys.stderr)
+        return 1
     if crashed:
         for name in crashed:
             print(f"element '{name}' exited on its own"

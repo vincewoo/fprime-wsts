@@ -12,11 +12,11 @@ Start with [README.md](README.md); the design is in [docs/design.md](docs/design
 | `Wsts/Drv/`, `Wsts/Svc/` | F´ components: surrogates (`SimRegister` is the one for register interface components), `BusByteStreamDevice` (adapter that puts an F´ simulator on a bus endpoint), `SimCycle` (cycle source with its own rate), `SimTime` (the time source: host clock, or simulated time in stepped time), `SimControl` (commands/events/telemetry), `SimSetup` (anchor) |
 | `catalog/wsts-catalog.yaml` | Which flight components each surrogate replaces |
 | `schemas/` | JSON Schemas of `wsts.yaml` and `wsts-system.yaml`, for editors. Written by hand: a new manifest key goes there too (`python/tests/test_schema.py` compares them with the parser's key sets) |
-| `python/fprime_wsts/` | `generate.py` (transform), `fpp.py` (model loading), `flight_cmake.py` (flight CMake read as text: root `CMakeLists.txt`, nested modules, SDK links, `BUILD_TESTING` branches, the build tree), `hostcheck.py` (what the build takes from the host, and `check-host`), `hostwait.py` (code in the built components that waits on the host: the report's Time section, what may keep stepped time from working), `build.py` (`fprime-wsts build`: configures and builds overlays), `survey.py` (`fprime-wsts survey` and `init`: what a flight project needs, and starter manifests; the `wsts-configure` skill's `scripts/survey.py` calls it), `manifest.py`, `simulators.py` (added F´ instances, bus devices), `registers.py` (`Wsts.SimRegister` written for a flight register interface component), `system.py` (multi-element systems), `bridge.py`, `models.py` (serves the Python device models of `run.models` for a run), `runner.py`, `scaffold.py`, `cli.py` |
+| `python/fprime_wsts/` | `generate.py` (transform), `fpp.py` (model loading), `flight_cmake.py` (flight CMake read as text: root `CMakeLists.txt`, nested modules, SDK links, `BUILD_TESTING` branches, the build tree), `hostcheck.py` (what the build takes from the host, and `check-host`), `hostwait.py` (code in the built components that waits on the host: the report's Time section, what may keep stepped time from working), `build.py` (`fprime-wsts build`: configures and builds overlays), `survey.py` (`fprime-wsts survey` and `init`: what a flight project needs, and starter manifests; the `wsts-configure` skill's `scripts/survey.py` calls it), `manifest.py`, `simulators.py` (added F´ instances, bus devices), `registers.py` (`Wsts.SimRegister` written for a flight register interface component), `system.py` (multi-element systems), `bridge.py`, `models.py` (serves the Python device models of `run.models` for a run), `runner.py`, `lockstep.py` (the conductor of a system in lockstep, system scenarios), `scaffold.py`, `cli.py` |
 | `examples/mission/` | The example's flight project: `Cdh` (VxWorks, no `main()`, UART inside the `SensorLink` subtopology of `lib/sensor-lib`, `CONFIGURATION_OVERRIDES`, `system.fpp`) and `Payload` (Linux: I2C, SPI, UART, GPIO, an FPGA driver on the register interface component of `lib/sensor-lib`, and `Components/Imager`, which links a camera SDK and has a stub under `if (BUILD_TESTING)`), joined by a `GenericHub`. Only read by the toolkit |
 | `examples/mission-sim/` | The example's simulation project: `wsts-system.yaml`, `cdh.yaml`, `payload.yaml`, simulators written as F´ components, a 125 Hz clock, a bus-less surrogate, mirror surrogates, a device model, a register block with an interrupt, a vendored library, configuration overrides. Its `wsts/Mission/` is **generated** and checked in. `examples/README.md` maps each feature to where it is |
 | `mkdocs.yml`, `docs/`, `docs-site/` | The documentation site (GitHub Pages, `.github/workflows/docs.yml`): the user guide in `docs/getting-started/` and `docs/user-guide/`, the reference documents at the top of `docs/`. `docs-site/hooks.py` points links to files outside `docs/` at GitHub. Build with `pip install -r docs-site/requirements.txt && mkdocs build --strict` |
-| `tests/e2e/` | End-to-end tests against the running Mission system and a GDS (`test_system.py`, `test_cdh.py`, `test_payload.py`, `test_stepped.py`) |
+| `tests/e2e/` | End-to-end tests against the running Mission system and a GDS (`test_system.py`, `test_cdh.py`, `test_payload.py`, `test_stepped.py`, `test_lockstep.py`) |
 | `lib/` | Pinned submodules: `fprime` (v4.4.2), `fprime-vxworks` |
 | `.claude/skills/` | Agent skills: `wsts-configure` (configure, build and run a simulation of a flight project checked out beside this one, one deployment or a system), `wsts-device-model` (a device model from a datasheet and the real device). Each has scripts, references and evals |
 
@@ -131,11 +131,19 @@ version, unset `JAVA_HOME` so the bundled JRE is used.
   tick and before any action (`Control::waitSettled`), and listeners are told at fixed
   points only (not from `onIdle`). Anything new that runs
   flight handlers on a thread of the simulation needs an `Activity::Scope`; anything that
-  reads the host's clock on flight software's behalf breaks the comparison. A system is not
-  stepped as a whole. `generate` lists calls in the built components' sources that wait on
+  reads the host's clock on flight software's behalf breaks the comparison. `generate` lists calls in the built components' sources that wait on
   the host (`hostwait.py`, the Time section of the report; warnings only with
   `time.mode: stepped`). Framework components are not read: a new one that waits on the
   host goes in `hostwait.FRAMEWORK`.
+- Lockstep (`run <system> --stepped`, `WstsSystem.set_stepped/step`; phase 4 of
+  `docs/stepped-time.md`): an element with `Control::lockstep()` takes a tick only when
+  granted (`Control::grant`, the bridge's `advance`, which is handled outside the
+  `ActionGate` and blocks its connection). The conductor (`lockstep.py`) grants each instant
+  to the elements due at it, in parallel, with `expect.<link>`: what the other end had sent.
+  Link messages carry the sender's `Control::elapsedNs()` (tick times period, not the
+  epoch); in lockstep `LinkByteStream` holds them and `Control::onTick` delivers those sent
+  before the tick's time (`Inbound::deliverDue`). Anything new that carries bytes between
+  elements must do the same, or two runs differ. `tests/e2e/test_lockstep.py` holds it.
 - A new action goes in `Control::dispatch`, then `SimControl.fpp`/`.cpp`, `bridge.py`,
   `docs/reference.md`, and a test at each level.
 
