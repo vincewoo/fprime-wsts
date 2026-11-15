@@ -103,6 +103,27 @@ class Activity {
     void poke();
     //! Whether this thread has the turn
     bool hasTurn() const;
+    //! The rank this thread last took the turn with (SIMULATION_RANK if it never has): the
+    //! rank to wait with when it blocks somewhere other than at its queue
+    std::uint64_t rank() const;
+
+    // ---- Work handed to a thread ----
+    //
+    // Whoever wakes a waiting thread (a VxWorks semaphore given, a delay that is over) counts
+    // a piece of work for it with begin(); the woken thread takes it over with hold(). The
+    // thread holds it until it waits again (releaseHeld(): the shim's blocking calls and
+    // the counting queue do that) or until it ends.
+
+    //! This thread takes over one piece of work begun on its behalf. Only a task holds it
+    //! (it comes back to wait, and gives it up there); for any other thread (start-up code
+    //! on the main thread, a thread of the host) the piece ends at once.
+    void hold();
+    //! This thread is a task of flight software (Wsts_Os_Task, the shim's tasks)
+    void setTaskThread();
+    //! End every piece this thread holds
+    void releaseHeld();
+    //! Pieces this thread holds
+    std::uint64_t held() const;
 
     //! Back to the initial state (unit tests)
     void reset();

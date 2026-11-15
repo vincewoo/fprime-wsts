@@ -24,6 +24,8 @@ enum TopologyConstants {
     COMM_PRIORITY = 34,
     HUB_PRIORITY = 33,
     TIMER_TICKS = 6,  // 60 Hz system clock / 6 = 10 Hz
+    HEARTBEAT_PRIORITY = 50,
+    HEARTBEAT_TICKS = 6,  // ten beats a second
     //! Commands with opcodes from here up belong to the payload computer
     PAYLOAD_BASE_OPCODE = 0x20000000,
 };
@@ -56,6 +58,7 @@ void setupTopology(const TopologyState& state) {
 
     Os::TaskString hubName("HubReceiveTask");
     hubDriver.start(hubName, HUB_PRIORITY, Default::STACK_SIZE);
+    heartbeat.start(HEARTBEAT_PRIORITY, HEARTBEAT_TICKS);
     if (state.hostname != nullptr && state.port != 0) {
         Os::TaskString name("ReceiveTask");
         comDriver.start(name, COMM_PRIORITY, Default::STACK_SIZE);
@@ -71,6 +74,7 @@ void stopRateGroups() {
 }
 
 void teardownTopology(const TopologyState& state) {
+    heartbeat.stop();
     stopTasks(state);
     freeThreads(state);
 

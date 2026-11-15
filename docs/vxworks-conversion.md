@@ -32,6 +32,7 @@ No VxWorks toolchain is involved at any point.
 | A configuration module that adds another module of the project | The child is added once, by its parent |
 | A root `CMakeLists.txt` that sets variables a library requires, or adds compile definitions | Plain values are carried over; the rest is reported with the manifest key to use |
 | Toolchain build options (`FPRIME_PLATFORM=VxWorks`, `VX_TARGET_TYPE=…`) | Not carried over (reported) |
+| Flight code that calls the VxWorks kernel (`taskSpawn`, `semTake`, `msgQSend`, `wdStart`, …), without guards | `shims: [vxworks]`: the [VxWorks API shim](vxworks-shim.md) compiles it unchanged and runs it in simulated time. Without the key, `generate` warns and names it |
 | No `main()`: entry points are called from a start-up script | The manifest's `main` section generates a Linux `main()` that calls them |
 | Timer that fires from interrupt context | `Wsts.SimTick` in `mode=thread`: `startTimer…()` returns at once and ticks from its own thread |
 | Topology code naming driver classes and enumerators | Compiled unchanged through the generated type aliases |
@@ -137,10 +138,15 @@ C++ expression, so other arguments of the entry point are written into it.
 - **Third-party build systems inside libraries** behave on the host as they do there, not
   as on the target's build machine (an autocoder script that depends on the shell, for
   example). The toolkit builds them as they are.
-- **Code that includes the target OS's headers.** Guard it, as `Cdh/Entry.cpp` does with
-  `#ifdef TGT_OS_TYPE_VXWORKS`, or with `#ifndef WSTS_SIM` (defined for every simulated
-  build). A component that is built around OS calls should be replaced by a surrogate. A
-  POSIX-backed VxWorks API shim is planned, not built.
+- **Code that includes the target OS's headers.** Code that calls the VxWorks kernel
+  (tasks, semaphores, message queues, watchdogs, the system clock) compiles and runs
+  unchanged with `shims: [vxworks]` in the manifest: the toolkit's
+  [VxWorks API shim](vxworks-shim.md) implements that subset on the host, in simulated
+  time, as `Cdh/Heartbeat` shows. `generate` names the key when a module includes one of
+  its headers without a guard. What the shim does not provide is guarded, as
+  `Cdh/Entry.cpp` does with `#ifdef TGT_OS_TYPE_VXWORKS`, or with `#ifndef WSTS_SIM`
+  (defined for every simulated build); a component built around other OS calls is
+  replaced by a surrogate.
 - **A project component that drives the rate groups or supplies time from hardware.** If
   it is not platform-restricted it builds on Linux and is kept, but its interrupt never
   arrives. The generator warns; the remedy is a project surrogate

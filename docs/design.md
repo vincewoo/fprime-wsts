@@ -894,8 +894,11 @@ Replay is repeatable to tick granularity. It is not cycle-exact: see
    `CHOOSES_IMPLEMENTATIONS`. The bridge then steps the simulation tick by tick,
    deterministically and faster than real time. The design is drafted in
    [stepped-time.md](stepped-time.md).
-2. **VxWorks API shim.** A POSIX-backed subset of `taskLib`, `semLib`, `msgQLib`, `wdLib`
-   and `ioLib` so project components that include VxWorks headers compile unchanged.
+2. **VxWorks API shim.** *Built* ([vxworks-shim.md](vxworks-shim.md)): a POSIX-backed
+   subset of `taskLib`, `semLib`, `msgQLib`, `wdLib`, `sysLib`, `tickLib`, `intLib`,
+   `logLib` and `ioLib`, turned on with `shims: [vxworks]`, so that project code that
+   calls the VxWorks kernel compiles and runs unchanged, in simulated time and in stepped
+   time.
 3. **File-system remapping.** An `Os_File` implementation that maps target paths
    (`/ram0`, `/tffs0`) into a sandbox directory.
 4. 32-bit and big-endian build options; adapters to external dynamics simulators.

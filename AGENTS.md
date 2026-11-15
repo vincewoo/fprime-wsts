@@ -9,11 +9,12 @@ Start with [README.md](README.md); the design is in [docs/design.md](docs/design
 |---|---|
 | `Wsts/Core/` | Plain C++: bus (byte stream, I2C, SPI, GPIO, registers), faults, control core, cycle clocks, scenario player, recorder, bridge, reference models, links between elements, `RegisterSurrogate` (the bus side of a register interface surrogate), `Dma` (address translation a project registers). No F´ dependencies |
 | `Wsts/Os/` | The `Os::Queue`, `Os::Task` and `Os::RawTime` of a simulated deployment (`Wsts_Os_Queue`, `Wsts_Os_Task`, `Wsts_Os_RawTime`, chosen by the overlay's `register_fprime_deployment()`): the framework's generic priority queue and POSIX task and raw time, with what stepped time needs around them (the count of outstanding messages, the turn, simulated time). `docs/stepped-time.md` |
+| `Wsts/VxWorks/` | The VxWorks API shim (`shims: [vxworks]`, `docs/vxworks-shim.md`): `include/` has `vxWorks.h`, `taskLib.h`, `semLib.h`, `msgQLib.h`, `wdLib.h`, … for project code; `Kernel.cpp` tasks (as `Os::Task`s), waiting and the system clock (a `CycleClock` at `sysClkRate`); `Objects.cpp` the semaphores, queues, watchdogs and the small libraries |
 | `Wsts/Drv/`, `Wsts/Svc/` | F´ components: surrogates (`SimRegister` is the one for register interface components), `BusByteStreamDevice` (adapter that puts an F´ simulator on a bus endpoint), `SimCycle` (cycle source with its own rate), `SimTime` (the time source: host clock, or simulated time in stepped time), `SimControl` (commands/events/telemetry), `SimSetup` (anchor) |
 | `catalog/wsts-catalog.yaml` | Which flight components each surrogate replaces |
 | `schemas/` | JSON Schemas of `wsts.yaml` and `wsts-system.yaml`, for editors. Written by hand: a new manifest key goes there too (`python/tests/test_schema.py` compares them with the parser's key sets) |
 | `python/fprime_wsts/` | `generate.py` (transform), `fpp.py` (model loading), `flight_cmake.py` (flight CMake read as text: root `CMakeLists.txt`, nested modules, SDK links, `BUILD_TESTING` branches, the build tree), `hostcheck.py` (what the build takes from the host, and `check-host`), `hostwait.py` (code in the built components that waits on the host: the report's Time section, what may keep stepped time from working), `build.py` (`fprime-wsts build`: configures and builds overlays), `survey.py` (`fprime-wsts survey` and `init`: what a flight project needs, and starter manifests; the `wsts-configure` skill's `scripts/survey.py` calls it), `manifest.py`, `simulators.py` (added F´ instances, bus devices), `registers.py` (`Wsts.SimRegister` written for a flight register interface component), `system.py` (multi-element systems), `bridge.py`, `models.py` (serves the Python device models of `run.models` for a run), `runner.py`, `lockstep.py` (the conductor of a system in lockstep, system scenarios), `scaffold.py`, `cli.py` |
-| `examples/mission/` | The example's flight project: `Cdh` (VxWorks, no `main()`, UART inside the `SensorLink` subtopology of `lib/sensor-lib`, `CONFIGURATION_OVERRIDES`, `system.fpp`) and `Payload` (Linux: I2C, SPI, UART, GPIO, an FPGA driver on the register interface component of `lib/sensor-lib`, and `Components/Imager`, which links a camera SDK and has a stub under `if (BUILD_TESTING)`), joined by a `GenericHub`. Only read by the toolkit |
+| `examples/mission/` | The example's flight project: `Cdh` (VxWorks, no `main()`, UART inside the `SensorLink` subtopology of `lib/sensor-lib`, `CONFIGURATION_OVERRIDES`, `system.fpp`, and `Cdh/Heartbeat`, which calls the VxWorks kernel without guards) and `Payload` (Linux: I2C, SPI, UART, GPIO, an FPGA driver on the register interface component of `lib/sensor-lib`, and `Components/Imager`, which links a camera SDK and has a stub under `if (BUILD_TESTING)`), joined by a `GenericHub`. Only read by the toolkit |
 | `examples/mission-sim/` | The example's simulation project: `wsts-system.yaml`, `cdh.yaml`, `payload.yaml`, simulators written as F´ components, a 125 Hz clock, a bus-less surrogate, mirror surrogates, a device model, a register block with an interrupt, a vendored library, configuration overrides. Its `wsts/Mission/` is **generated** and checked in. `examples/README.md` maps each feature to where it is |
 | `mkdocs.yml`, `docs/`, `docs-site/` | The documentation site (GitHub Pages, `.github/workflows/docs.yml`): the user guide in `docs/getting-started/` and `docs/user-guide/`, the reference documents at the top of `docs/`. `docs-site/hooks.py` points links to files outside `docs/` at GitHub. Build with `pip install -r docs-site/requirements.txt && mkdocs build --strict` |
 | `tests/e2e/` | End-to-end tests against the running Mission system and a GDS (`test_system.py`, `test_cdh.py`, `test_payload.py`, `test_stepped.py`, `test_lockstep.py`) |
@@ -31,7 +32,7 @@ pytest python/tests                                     # generator, manifest, s
 ```
 
 ```bash
-fprime-util generate --ut && (cd Wsts/Core && fprime-util check) && (cd Wsts/Os && fprime-util check)   # C++ unit tests
+fprime-util generate --ut && (cd Wsts/Core && fprime-util check) && (cd Wsts/Os && fprime-util check) && (cd Wsts/VxWorks && fprime-util check)   # C++ unit tests
 ```
 
 ```bash
@@ -144,6 +145,17 @@ version, unset `JAVA_HOME` so the bundled JRE is used.
   epoch); in lockstep `LinkByteStream` holds them and `Control::onTick` delivers those sent
   before the tick's time (`Inbound::deliverDue`). Anything new that carries bytes between
   elements must do the same, or two runs differ. `tests/e2e/test_lockstep.py` holds it.
+- VxWorks API shim (`Wsts/VxWorks`, `shims: [vxworks]`): `OK`, `ERROR`, `NO_WAIT` are
+  enumerators, not macros, as `fprime-vxworks` makes them (F´ headers use the names). Its
+  headers are found only when the manifest names the shim: the header index of `generate`
+  leaves `Wsts/VxWorks/include` out otherwise, so `check-host` reports them missing and
+  `generate` warns. A give or send hands the object to the first waiter itself. Whatever
+  wakes a waiter `Activity::begin()`s a piece of work for it, which the woken thread
+  `hold()`s until it blocks again (`releaseHeld()`: the shim's blocking calls, the counting
+  queue's blocking receive, thread exit). Only task threads hold (`setTaskThread()`, set by
+  `Wsts_Os_Task` and the shim): for any other thread the piece ends at once. Never touch the
+  turn (`Activity::enter`, `awaitTurn`, `poke`) with the kernel's mutex held: the turn asks
+  waiters whether they are ready under its own mutex, and they take the kernel's.
 - A new action goes in `Control::dispatch`, then `SimControl.fpp`/`.cpp`, `bridge.py`,
   `docs/reference.md`, and a test at each level.
 

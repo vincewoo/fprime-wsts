@@ -37,6 +37,7 @@ jobs:
           fprime-util generate --ut
           (cd Wsts/Core && fprime-util check -j"$(nproc)")
           (cd Wsts/Os && fprime-util check -j"$(nproc)")
+          (cd Wsts/VxWorks && fprime-util check -j"$(nproc)")
 
       - name: Build the simulated Mission system (a VxWorks and a Linux computer joined by a hub)
         run: fprime-wsts build examples/mission-sim/wsts/Mission

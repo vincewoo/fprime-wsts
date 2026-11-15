@@ -239,9 +239,10 @@ def test_simulation_override_wins_in_the_analysis_and_is_built_last(default):
     assert sorted(o["file"] for o in report["config_overrides"]) == ["CdhCoreConfig.fpp", "SensorLinkConfig.fpp"]
 
     # The value in force is the simulation's: the flight project gives its rate groups 6
-    # ports, and the patched model uses a seventh (FPP has checked it)
+    # ports, all used by flight, and the patched model uses a seventh and an eighth (FPP has
+    # checked them)
     top = (default.output / "Cdh" / "Top" / "topology.fpp").read_text()
-    assert "rateGroup1Hz.RateGroupMemberOut[6] -> SensorSim.txBuffers.schedIn" in top
+    assert "rateGroup1Hz.RateGroupMemberOut[7] -> SensorSim.txBuffers.schedIn" in top
     assert "ActiveRateGroupOutputPorts = 6" in (FLIGHT / "config" / "project" / "AcConstants.fpp").read_text()
     assert "ActiveRateGroupOutputPorts = 10" in (SIM / "config" / "AcConstants.fpp").read_text()
     # Table sizes are read from the file the build uses
@@ -281,7 +282,7 @@ def test_opcode_table_of_the_flight_project_is_too_small(project, tmp_path):
     with pytest.raises(WstsError) as error:
         run(project, tmp_path / "out")
     message = str(error.value)
-    assert "registers 44 opcodes" in message and "table holds 36" in message
+    assert "registers 45 opcodes" in message and "table holds 36" in message
     assert "mission/config/project/CommandDispatcherImplCfg.hpp" in message
     assert '"${CMAKE_CURRENT_LIST_DIR}/CommandDispatcherImplCfg.hpp"' in message
 

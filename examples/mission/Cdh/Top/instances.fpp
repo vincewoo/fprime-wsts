@@ -42,6 +42,9 @@ module Cdh {
 
   instance hubAdapter: Drv.ByteStreamBufferAdapter base id 0x10014000
 
+  @ The computer's heartbeat: a watchdog, a semaphore and a task of the VxWorks kernel
+  instance heartbeat: Cdh.Heartbeat base id 0x10015000
+
   # ----------------------------------------------------------------------
   # Hardware and operating system interfaces
   # ----------------------------------------------------------------------

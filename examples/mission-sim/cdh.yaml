@@ -29,6 +29,11 @@ main:
   start: cdhStart(hostname, port, 50050)
   stop: cdhStop()
 
+# Cdh/Heartbeat is written against the VxWorks kernel API (taskLib, semLib, msgQLib,
+# wdLib) and has no simulation guards. The toolkit's VxWorks API shim compiles it unchanged
+# and runs its task, watchdog and system clock in simulated time.
+shims: [vxworks]
+
 # The flight time source is replaced by a component of this project that has the same
 # port and talks to nothing else: no bus endpoint.
 substitute:

@@ -400,7 +400,7 @@ def test_stub_variant_outside_the_build_is_an_error(tmp_path):
                                           cmake={"stub_variants": [IMAGER]}), tmp_path / "out")
     message = str(error.value)
     assert f"cmake.stub_variants in the manifest names '{IMAGER}', which is not a module of the simulated build" in message
-    assert "Modules of the flight project that are built: config/project" in message, "says what could be meant"
+    assert "Modules of the flight project that are built: Cdh/Heartbeat, config/project" in message, "says what could be meant"
     assert "cmake.extra_subdirectories" in message
     # Left out and listed
     with pytest.raises(WstsError, match="which cmake.exclude_subdirectories leaves out of the build: remove one of the two"):

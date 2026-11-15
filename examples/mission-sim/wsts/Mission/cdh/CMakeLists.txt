@@ -8,6 +8,9 @@ project(CdhSim VERSION 1.0.0 LANGUAGES C CXX)
 add_compile_definitions(WSTS_SIM=1)
 # Carried over from the flight project's CMakeLists.txt
 add_compile_definitions(MISSION_VEHICLE_ID=2)
+# The VxWorks API shim (`shims` in the manifest): vxWorks.h, taskLib.h, ... for every module,
+# found after the directories of the build's own
+include_directories(AFTER "${CMAKE_CURRENT_LIST_DIR}/../../../../../Wsts/VxWorks/include")
 # Headers that stand in for those of replaced flight drivers: found before the originals
 include_directories(BEFORE "${CMAKE_CURRENT_LIST_DIR}/wsts-include")
 # From `cmake.cxx_flags` in the manifest: for every C++ source of this build
@@ -93,6 +96,7 @@ endfunction()
 fprime_setup_included_code()
 
 set(WSTS_FLIGHT_PROJECT "${CMAKE_CURRENT_LIST_DIR}/../../../../mission")
+add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/Cdh/Heartbeat")
 add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/config/project")
 
 # Configuration overrides of the simulation: registered after the flight project's, so that

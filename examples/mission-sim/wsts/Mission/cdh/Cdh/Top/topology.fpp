@@ -37,6 +37,7 @@ module Cdh {
     instance comDriver
     instance hubDriver
     instance vxTimer
+    instance heartbeat
 
     # ----------------------------------------------------------------------
     # Pattern graph specifiers
@@ -75,6 +76,7 @@ module Cdh {
       rateGroup1Hz.RateGroupMemberOut[2] -> ComCcsds.Subtopology.bufferManagerSchedIn
       rateGroup1Hz.RateGroupMemberOut[3] -> SensorLink.Subtopology.uartRun
       rateGroup1Hz.RateGroupMemberOut[4] -> SensorLink.Subtopology.bufferManagerRun
+      rateGroup1Hz.RateGroupMemberOut[5] -> heartbeat.run
     }
 
     connections Communications {
@@ -130,8 +132,8 @@ module Cdh {
     instance SensorSim.Simulator
 
     connections WstsSimulators {
-      rateGroup1Hz.RateGroupMemberOut[5] -> SensorSim.Simulator.schedIn
-      rateGroup1Hz.RateGroupMemberOut[6] -> SensorSim.txBuffers.schedIn
+      rateGroup1Hz.RateGroupMemberOut[6] -> SensorSim.Simulator.schedIn
+      rateGroup1Hz.RateGroupMemberOut[7] -> SensorSim.txBuffers.schedIn
     }
 
   }

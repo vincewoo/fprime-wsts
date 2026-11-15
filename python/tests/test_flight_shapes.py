@@ -24,8 +24,8 @@ UART_HEADER = "VxWorks/Drv/VxWorksUartDriver/VxWorksUartDriver.hpp"
 
 
 def cdh(**changes):
-    """A manifest for Cdh that lives in the flight project"""
-    return flight_manifest("Cdh", **{"keep": ["comDriver"], "main": CDH_MAIN, **changes})
+    """A manifest for Cdh that lives in the flight project (Cdh/Heartbeat calls the VxWorks kernel)"""
+    return flight_manifest("Cdh", **{"keep": ["comDriver"], "main": CDH_MAIN, "shims": ["vxworks"], **changes})
 
 
 def payload(**changes):
@@ -332,7 +332,7 @@ def test_module_added_by_another_appears_once(default):
     root = (default.output / "CMakeLists.txt").read_text()
     assert root.count("dep_config") == 0, "its parent adds it"
     assert root.count('add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/config/project")') == 1
-    assert default.report["project_modules"] == ["config/project"]
+    assert default.report["project_modules"] == ["Cdh/Heartbeat", "config/project"]
     assert default.report["nested_modules"] == [
         {"module": "config/project/dep_config", "added_by": "config/project", "in": "config/project/CMakeLists.txt"}]
     assert "`config/project/dep_config` is added by `config/project`" in (default.output / "wsts-report.md").read_text()

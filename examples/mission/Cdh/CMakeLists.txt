@@ -1,3 +1,4 @@
+add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Heartbeat/")
 add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Top/")
 
 # A downloadable kernel module: no main(). The entry points in Entry.cpp are called from

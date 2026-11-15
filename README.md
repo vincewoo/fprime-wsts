@@ -267,6 +267,7 @@ with `mkdocs.yml`); the reference documents below are published there too.
 | [docs/fidelity.md](docs/fidelity.md) | What the simulation reproduces and what it does not |
 | [docs/surrogate-guide.md](docs/surrogate-guide.md) | Writing surrogates and device models |
 | [docs/vxworks-conversion.md](docs/vxworks-conversion.md) | Converting a non-Linux deployment |
+| [docs/vxworks-shim.md](docs/vxworks-shim.md) | The VxWorks API shim: flight code that calls the VxWorks kernel, unchanged |
 | [AGENTS.md](AGENTS.md) | Working in this repository, and using the toolkit from an agent |
 
 ## Configuring your own project with an agent
@@ -290,7 +291,7 @@ pytest python/tests
 ```
 
 ```bash
-fprime-util generate --ut && (cd Wsts/Core && fprime-util check) && (cd Wsts/Os && fprime-util check)
+fprime-util generate --ut && (cd Wsts/Core && fprime-util check) && (cd Wsts/Os && fprime-util check) && (cd Wsts/VxWorks && fprime-util check)
 ```
 
 End-to-end, after building the simulated system (the merged dictionary is written when
@@ -309,6 +310,8 @@ Experimental: stepped time (`run --stepped`: ticks are taken as fast as flight s
 finishes them, and two runs give the same recording byte for byte; the generated report
 lists the code that waits on the host and would get in the way), for a single deployment
 and for a system in lockstep, its elements stepped together on one time base.
-Designed but not built yet: GPIO links between elements, a POSIX-backed VxWorks API shim,
-file-system path remapping. See
+A POSIX-backed VxWorks API shim (`shims: [vxworks]`) compiles flight code that calls the
+VxWorks kernel unchanged and runs its tasks, semaphores, message queues and watchdogs in
+simulated time. Designed but not built yet: GPIO links between elements, file-system path
+remapping. See
 [docs/design.md](docs/design.md#roadmap).

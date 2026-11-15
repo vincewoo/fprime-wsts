@@ -61,6 +61,7 @@ runs the end-to-end tests against it.
 | Drivers found and replaced from the surrogate catalog | Payload's timer, I2C, UART and GPIO drivers; Cdh's watchdog timer and UART | `test_payload.py`, `test_cdh.py` |
 | A flight instance kept real | Cdh's ground link `comDriver` (`keep`) | every test: the GDS connects through it |
 | A deployment for another OS, converted without its toolchain | Cdh (VxWorks), with a `main()` generated to call its entry points (`main` in `cdh.yaml`) | `test_cdh.py::test_watchdog_timer_surrogate_cycles_rate_groups` |
+| Flight code that calls the VxWorks kernel, without guards | `Cdh/Heartbeat`: a task (`taskSpawn`), a watchdog (`wdStart`), binary and mutex semaphores, a message queue; `shims: [vxworks]` in `cdh.yaml` | `test_cdh.py` (the heartbeat tests, one in stepped time) |
 | An instance inside a library subtopology | `SensorLink.uart` in `mission/lib/sensor-lib`, patched in a copy | `test_cdh.py` (the serial sensor tests) |
 | Configuration overrides of the flight project | `mission/config/project`: CdhCore and SensorLink IDs, 6 rate group ports, a 36-opcode table | `test_system.py::test_merged_dictionary_has_both_elements_and_the_project_ids` |
 | A library kept for the configuration it supplies | `lib/fprime-vxworks`: `config/project` overrides its `VxWorksCfg.hpp` | Python tests (`test_flight_shapes.py`); the build |
