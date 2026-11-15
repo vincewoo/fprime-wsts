@@ -258,6 +258,52 @@ def read_run_file(directory: Path) -> Optional[dict]:
     return None
 
 
+def group_members(group: int) -> Optional[List[int]]:
+    """The running processes of a process group (not those that have ended and wait to be
+    collected), or None where the kernel's process table cannot be read"""
+    found: List[int] = []
+    try:
+        entries = [entry for entry in os.listdir("/proc") if entry.isdigit()]
+    except OSError:
+        return None
+    for entry in entries:
+        try:
+            # pid (name) state ppid pgrp ...: the name may hold spaces and parentheses
+            fields = Path(f"/proc/{entry}/stat").read_text().rpartition(")")[2].split()
+        except OSError:
+            continue
+        if len(fields) > 2 and fields[0] != "Z" and fields[2] == str(group):
+            found.append(int(entry))
+    return found
+
+
+def end_group(group: int, grace: float = 2.0) -> bool:
+    """Make sure no process of a process group is left: ask (SIGTERM), wait a little, then
+    force (SIGKILL). True if there was anything left to end."""
+    def alive() -> bool:
+        try:
+            os.killpg(group, 0)
+        except (ProcessLookupError, PermissionError):
+            return False
+        # A process that has ended and has not been collected yet still answers: look closer
+        members = group_members(group)
+        return True if members is None else bool(members)
+
+    if not alive():
+        return False
+    for sign, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, 1.0)):
+        try:
+            os.killpg(group, sign)
+        except (ProcessLookupError, PermissionError):
+            return True
+        deadline = time.monotonic() + wait
+        while alive() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if not alive():
+            break
+    return True
+
+
 def gds_command(executable: str, dictionary: Path, gds_port: int, log_dir: Path,
                 gui_port: Optional[int] = None, gui_addr: str = "127.0.0.1",
                 zmq_transport: Optional[List[str]] = None) -> List[str]:
@@ -485,6 +531,11 @@ class Simulation:
                     process.wait()
             if process is self.sim:
                 code = process.returncode
+            else:
+                # The GDS and the model server lead a process group of their own. Whether
+                # the leader went by itself, on the interrupt or by force, nothing of its
+                # group may outlive the run: a GDS child left behind keeps a processor busy.
+                end_group(process.pid)
         self._processes.clear()
         if self.owns_run_file:
             (self.log_dir / RUN_FILE).unlink(missing_ok=True)
