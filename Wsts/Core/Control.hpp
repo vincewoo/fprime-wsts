@@ -252,6 +252,9 @@ class Control : public BusObserver {
     void notifyListeners(bool paused);
     void grantClocks();
     bool waitFinished(Clock::time_point limit);
+    //! Wait until nothing is outstanding and every task that was started has come to its
+    //! queue (Activity::tasksSettled()). False if the limit came first.
+    bool waitSettled(Clock::time_point limit);
     struct PendingCycle {
         std::uint64_t offsetNs;  //!< from the start of the tick
         std::size_t order;       //!< of the clock, among the clocks
@@ -264,6 +267,8 @@ class Control : public BusObserver {
     std::atomic<bool> m_stepped{false};
     std::atomic<double> m_steppedRate{0.0};  //!< pace of stepped time against the wall clock; 0: as fast as it goes
     std::atomic<std::uint32_t> m_stepLimitMs{10000};
+    std::atomic<bool> m_startedUp{false};  //!< stepped time: the tasks were let go before the first tick
+    std::atomic<bool> m_settled{false};    //!< ... and had settled
     std::atomic<std::uint64_t> m_epochSeconds{DEFAULT_EPOCH};
     std::mutex m_gateMutex;  //!< the three below, and m_stuck
     std::condition_variable m_gate;

@@ -182,3 +182,61 @@ def test_stepped_time_is_chosen_per_run(tmp_path, capsys):
     assert "single deployment so far" in capsys.readouterr().err
     with __import__("pytest").raises(SystemExit):
         main(["run", str(tmp_path), "--stepped", "--realtime"])
+
+
+def test_a_stepped_run_waits_for_the_tick_source_to_say_how_long_a_tick_is(tmp_path, monkeypatch, capsys):
+    """On a loaded host the deployment's start-up code may start its timer, which declares
+    the tick period, a while after the bridge answers: the run waits for it"""
+    from fprime_wsts import runner
+    from fprime_wsts.cli import main
+
+    make_deployment(tmp_path)
+    steps = []
+
+    class Process:
+        def poll(self):
+            return None
+
+    class Bridge:
+        statuses = 0
+
+        def status(self):
+            Bridge.statuses += 1
+            if not steps:  # the timer is started on the fifth look
+                period = 50_000_000 if Bridge.statuses >= 5 else 0
+                return {"tick": 0, "tick_period_ns": period, "paused": True}
+            return {"tick": steps[0], "tick_period_ns": 50_000_000, "paused": True, "sim_seconds": steps[0] / 20}
+
+        def request(self, op, **fields):
+            assert op == "step"
+            steps.append(fields["ticks"])
+
+        def wait_quiescent(self, timeout):
+            pass
+
+        def close(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            pass
+
+    def start(simulation):
+        simulation.sim = Process()
+        simulation.started = runner.time.monotonic()
+        return simulation
+
+    monkeypatch.setattr(Simulation, "start", start)
+    monkeypatch.setattr(Simulation, "connect", lambda simulation: Bridge())
+    monkeypatch.setattr(Simulation, "stop", lambda simulation: 0)
+    assert main(["run", str(tmp_path), "--stepped", "--duration", "5", "--json"]) == 0
+    summary = json.loads(capsys.readouterr().out)
+    assert steps == [100] and summary["sim_seconds"] == 5.0
+    # A tick source that never says fails with a message, after the wait
+    steps.clear()
+    Bridge.statuses = -10**9
+    monkeypatch.setattr(runner, "TICK_SOURCE_WAIT", 0.1)
+    assert main(["run", str(tmp_path), "--stepped", "--duration", "5"]) == 2
+    assert "did not say how long a tick is within 0.1 s" in capsys.readouterr().err and steps == []

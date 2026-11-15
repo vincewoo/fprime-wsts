@@ -85,6 +85,17 @@ class Activity {
     //! first tick is asked for. Only while flight code runs one at a time.
     void holdTasks(bool hold);
     bool holdingTasks() const { return m_holdTasks.load(); }
+    //! A task of this rank (TASK_START_RANK plus its order) has been started, on the thread
+    //! that starts it, and its own thread is not there yet. Until that thread first takes
+    //! the turn, no contender of a higher rank is given it: the order in which tasks begin
+    //! does not depend on how quickly the host schedules their threads.
+    void expectTask(std::uint64_t rank);
+    //! The task will not come after all (its thread could not be started)
+    void unexpectTask(std::uint64_t rank);
+    //! Start-up has settled: every task that was started has come to its queue (or is held
+    //! there by holdTasks()), and no one has the turn. With nothing outstanding as well,
+    //! the deployment is in the same state in every run.
+    bool tasksSettled();
     //! Give up the turn however often this thread took it (a task that ends inside its
     //! last handler never comes back to give it up)
     void abandon();
@@ -131,6 +142,7 @@ class Activity {
     std::thread::id m_owner;
     std::uint32_t m_depth = 0;
     std::vector<const Contender*> m_contenders;
+    std::vector<std::uint64_t> m_expected;  //!< ranks of tasks started whose thread has not taken the turn yet
 };
 
 }  // namespace Wsts

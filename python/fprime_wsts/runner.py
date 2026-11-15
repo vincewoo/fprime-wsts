@@ -900,6 +900,10 @@ def _assert_summary(assertion: dict) -> dict:
     return {key: value for key, value in assertion.items() if key != "message"}
 
 
+#: How long a stepped run of a set duration waits for the tick source to say how long a tick is
+TICK_SOURCE_WAIT = 20.0
+
+
 def run_cli(args) -> int:
     from .system import SYSTEM_FILE
 
@@ -955,12 +959,21 @@ def run_cli(args) -> int:
         deadline = time.monotonic() + args.duration if args.duration else None
         watch = simulation.connect() if is_stepped and simulation.bridge != "none" else None
         if watch is not None and simulation.hold:
+            # The tick source declares its period when the deployment's start-up code
+            # starts it, after the bridge is up: on a loaded host that can take a while.
+            # Waited for on a connection of its own: the step is recorded with the number
+            # of its request, which must not depend on how long that took.
+            waited_until = time.monotonic() + TICK_SOURCE_WAIT
+            with simulation.connect() as probe:
+                while (not probe.status().get("tick_period_ns") and time.monotonic() < waited_until
+                       and simulation.sim.poll() is None):
+                    time.sleep(0.02)
             now = watch.status()
             period = now.get("tick_period_ns") or 0
             if not period:
-                raise WstsError("the deployment's tick source does not say how long a tick is, so a duration in "
-                                "simulated seconds cannot be turned into ticks: run without --duration and stop it "
-                                "through the bridge, or in real time")
+                raise WstsError(f"the deployment's tick source did not say how long a tick is within "
+                                f"{TICK_SOURCE_WAIT:g} s of start, so a duration in simulated seconds cannot be turned "
+                                "into ticks: run without --duration and stop it through the bridge, or in real time")
             ticks = max(1, -(-int(args.duration * 1e9) // period) - now["tick"])
             watch.request("step", ticks=ticks)
         while simulation.sim.poll() is None:

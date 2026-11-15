@@ -79,6 +79,38 @@ void Activity::holdTasks(bool hold) {
     m_turn.notify_all();
 }
 
+void Activity::expectTask(std::uint64_t rank) {
+    std::lock_guard<std::mutex> lock(m_turnMutex);
+    m_expected.push_back(rank);
+}
+
+void Activity::unexpectTask(std::uint64_t rank) {
+    {
+        std::lock_guard<std::mutex> lock(m_turnMutex);
+        const auto found = std::find(m_expected.begin(), m_expected.end(), rank);
+        if (found != m_expected.end()) {
+            m_expected.erase(found);
+        }
+    }
+    m_turn.notify_all();
+}
+
+bool Activity::tasksSettled() {
+    std::lock_guard<std::mutex> lock(m_turnMutex);
+    if (m_holdTasks.load()) {
+        return m_depth == 0;  // no task can run while start-up holds them
+    }
+    if (!m_expected.empty() || m_depth != 0) {
+        return false;
+    }
+    for (const Contender* other : m_contenders) {
+        if (other->rank >= TASK_START_RANK && other->rank < TASK_RANK) {
+            return false;  // a task that has not begun yet
+        }
+    }
+    return true;
+}
+
 bool Activity::hasTurn() const {
     Activity* self = const_cast<Activity*>(this);
     std::lock_guard<std::mutex> lock(self->m_turnMutex);
@@ -107,6 +139,11 @@ bool Activity::grantedLocked(const Contender* self) {
     if (self->rank >= TASK_START_RANK && m_holdTasks.load()) {
         return false;  // start-up is not over
     }
+    for (const std::uint64_t expected : m_expected) {
+        if (expected < self->rank) {
+            return false;  // a task started before this one has not come yet
+        }
+    }
     if (self->ready != nullptr && !(*self->ready)()) {
         return false;
     }
@@ -119,10 +156,24 @@ bool Activity::grantedLocked(const Contender* self) {
 }
 
 bool Activity::enter(std::uint64_t rank) {
-    if (!m_exclusive.load()) {
+    const bool starting = rank >= TASK_START_RANK && rank < TASK_RANK;
+    if (!m_exclusive.load() && !starting) {
         return false;
     }
     std::unique_lock<std::mutex> lock(m_turnMutex);
+    if (starting) {
+        // The task's thread has come: from here it is a contender like any other, in the
+        // same step, so that no one of a higher rank slips in between
+        const auto found = std::find(m_expected.begin(), m_expected.end(), rank);
+        if (found != m_expected.end()) {
+            m_expected.erase(found);
+        }
+        if (!m_exclusive.load()) {
+            lock.unlock();
+            m_turn.notify_all();
+            return false;
+        }
+    }
     if (m_depth > 0 && m_owner == std::this_thread::get_id()) {
         m_depth++;
         return true;
@@ -193,6 +244,7 @@ void Activity::reset() {
         std::lock_guard<std::mutex> lock(m_turnMutex);
         m_exclusive.store(false);
         m_holdTasks.store(false);
+        m_expected.clear();
         m_owner = std::thread::id();
         m_depth = 0;
     }

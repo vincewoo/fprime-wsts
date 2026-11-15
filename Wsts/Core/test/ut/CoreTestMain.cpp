@@ -582,6 +582,140 @@ TEST_F(CoreTest, WorkOfTheSimulationTakesTheTurnAndStartUpHoldsTheTasks) {
     activity.leave();
 }
 
+TEST_F(CoreTest, TasksBeginInTheOrderTheyWereStartedHoweverLateTheirThreadsCome) {
+    Wsts::Activity& activity = Wsts::Activity::get();
+    activity.setExclusive(true);
+    const std::uint64_t first = Wsts::Activity::TASK_START_RANK;
+    const std::uint64_t atQueue = Wsts::Activity::TASK_RANK;
+    // Os::Task::start() of two tasks: known at once, on the thread that starts them
+    activity.expectTask(first);
+    activity.expectTask(first + 1);
+    EXPECT_FALSE(activity.tasksSettled());
+    std::mutex orderMutex;
+    std::vector<std::uint64_t> order;
+    auto task = [&](std::uint64_t rank, int lateMs) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(lateMs));  // the host runs the thread when it will
+        ASSERT_TRUE(activity.enter(rank));
+        {
+            std::lock_guard<std::mutex> lock(orderMutex);
+            order.push_back(rank);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        activity.abandon();
+    };
+    std::thread second(task, first + 1, 0);
+    std::thread queued([&]() {
+        // A task at its queue with a message comes after every task that has not begun
+        const Wsts::Activity::Ready hasMessage = []() { return true; };
+        ASSERT_TRUE(activity.awaitTurn(atQueue, hasMessage));
+        {
+            std::lock_guard<std::mutex> lock(orderMutex);
+            order.push_back(atQueue);
+        }
+        activity.leave();
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    EXPECT_TRUE(order.empty()) << "the task started first has not come yet";
+    std::thread late(task, first, 0);
+    late.join();
+    second.join();
+    queued.join();
+    EXPECT_EQ(order, (std::vector<std::uint64_t>{first, first + 1, atQueue}));
+    EXPECT_TRUE(activity.tasksSettled());
+    // A task whose thread could not be started holds no one up
+    activity.expectTask(first + 2);
+    std::thread third(task, first + 3, 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    EXPECT_EQ(order.size(), 3u);
+    activity.unexpectTask(first + 2);
+    third.join();
+    EXPECT_EQ(order.back(), first + 3);
+    // In real time an expectation is taken back by the thread when it comes, and nothing waits
+    activity.setExclusive(false);
+    activity.expectTask(first + 4);
+    EXPECT_FALSE(activity.enter(first + 4));
+    activity.setExclusive(true);
+    EXPECT_TRUE(activity.tasksSettled());
+    activity.setExclusive(false);
+}
+
+TEST_F(CoreTest, TheFirstSteppedTickWaitsForStartUpToSettle) {
+    Control& control = Control::get();
+    Wsts::Activity& activity = Wsts::Activity::get();
+    control.setStepped(true);
+    activity.holdTasks(true);  // what the runtime does in stepped time
+    // Start-up started a task, and left a message for another one on its queue
+    activity.expectTask(Wsts::Activity::TASK_START_RANK);
+    activity.begin();
+    std::atomic<bool> begun{false};
+    Ticker ticker(1000);
+    std::thread task([&]() {
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));  // a thread the host runs late
+        ASSERT_TRUE(activity.enter(Wsts::Activity::TASK_START_RANK));
+        begun.store(true);
+        activity.abandon();  // at its queue
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+    EXPECT_TRUE(begun.load()) << "the first tick asked for lets the tasks go";
+    EXPECT_EQ(control.tick(), 0u) << "the message left by start-up is not handled yet";
+    activity.end();
+    ASSERT_TRUE(eventually([&control]() { return control.tick() >= 3; }));
+    EXPECT_EQ(control.status().busyTicks, 0u) << "start-up work is not the first tick's";
+    task.join();
+    control.setStepped(false);
+}
+
+TEST_F(CoreTest, SteppedTimeTellsListenersAtFixedPointsOnly) {
+    Control& control = Control::get();
+    ASSERT_TRUE(run(R"({"op": "pause"})"));
+    ASSERT_TRUE(run(R"({"op": "set_stepped", "stepped": true})"));
+    std::mutex callsMutex;
+    std::vector<std::pair<std::uint64_t, bool>> calls;
+    control.addTickListener([&](std::uint64_t tick, bool paused) {
+        std::lock_guard<std::mutex> lock(callsMutex);
+        calls.emplace_back(tick, paused);
+    });
+    Ticker ticker(1000);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));  // a hundred tick periods, paused
+    {
+        std::lock_guard<std::mutex> lock(callsMutex);
+        EXPECT_EQ(calls, (std::vector<std::pair<std::uint64_t, bool>>{{0, true}})) << "once, when start-up has settled";
+        calls.clear();
+    }
+    ASSERT_TRUE(run(R"({"op": "step", "ticks": 2})"));
+    ASSERT_TRUE(eventually([&control]() { return control.tick() == 2 && control.paused(); }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    std::lock_guard<std::mutex> lock(callsMutex);
+    EXPECT_EQ(calls, (std::vector<std::pair<std::uint64_t, bool>>{{1, false}, {2, false}, {2, true}}))
+        << "every tick, and the one that leaves it paused once more";
+    control.setStepped(false);
+}
+
+TEST_F(CoreTest, WhatIsDoneWhilePausedIsFinishedBeforeTheNextTick) {
+    Control& control = Control::get();
+    ASSERT_TRUE(run(R"({"op": "pause"})"));
+    ASSERT_TRUE(run(R"({"op": "set_stepped", "stepped": true})"));
+    // Wsts.SimControl: told now and then while paused, it handles that on a thread of its own
+    std::atomic<int> told{0};
+    std::atomic<bool> handling{false};
+    control.addTickListener([&](std::uint64_t, bool paused) {
+        if (paused && !handling.exchange(true)) {
+            told++;
+            Wsts::Activity::get().begin();
+        }
+    });
+    Ticker ticker(1000);
+    ASSERT_TRUE(eventually([&told]() { return told.load() > 0; }));
+    ASSERT_TRUE(run(R"({"op": "step", "ticks": 1})"));
+    std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    EXPECT_EQ(control.tick(), 0u) << "the handler of the last notification is still running";
+    Wsts::Activity::get().end();
+    ASSERT_TRUE(eventually([&control]() { return control.tick() == 1 && control.paused(); }));
+    EXPECT_EQ(control.status().busyTicks, 0u);
+    EXPECT_EQ(told.load(), 1);
+    control.setStepped(false);
+}
+
 TEST_F(CoreTest, FlightSoftwareIsGivenSimulatedTimeInSteppedTime) {
     Control& control = Control::get();
     std::uint32_t seconds = 0;

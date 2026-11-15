@@ -99,6 +99,8 @@ void Control::reset() {
     m_paused.store(false);
     m_stepUntil.store(0);
     m_busyTicks.store(0);
+    m_startedUp = false;
+    m_settled = false;
     m_stepped.store(false);
     m_steppedRate.store(0.0);
     m_stepLimitMs.store(10000);
@@ -204,6 +206,20 @@ void Control::flightTime(std::uint32_t& seconds, std::uint32_t& microseconds) co
     microseconds = static_cast<std::uint32_t>((nanoseconds % 1000000000ull) / 1000ull);
 }
 
+bool Control::waitSettled(Clock::time_point limit) {
+    Activity& activity = Activity::get();
+    while (!(activity.pendingElsewhere() == 0 && activity.tasksSettled())) {
+        if (Clock::now() >= limit) {
+            return false;
+        }
+        (void)activity.waitQuiescent(std::chrono::milliseconds(1));
+        if (activity.pendingElsewhere() == 0) {
+            std::this_thread::sleep_for(std::chrono::microseconds(200));  // a task on its way to its queue
+        }
+    }
+    return true;
+}
+
 std::string Control::stuck() {
     std::lock_guard<std::mutex> lock(m_gateMutex);
     return m_stuck;
@@ -221,9 +237,25 @@ bool Control::awaitTick(std::uint64_t periodUs, Clock::time_point& next, const s
         std::this_thread::sleep_until(next);
         return !quit.load() && !m_paused.load();
     }
-    if (Activity::get().holdingTasks()) {
-        // The tick source is up: start-up is over, and the tasks may begin
+    if (!m_startedUp) {
+        // The tick source is up: start-up is over, and the tasks may begin. They begin
+        // before the first tick, and what they do then (their routines up to the first
+        // wait for a message, what start-up left on the queues) is finished before it, so
+        // that the first tick meets the same state in every run.
+        m_startedUp = true;
         Activity::get().holdTasks(false);
+        const auto limit = Clock::now() + std::chrono::milliseconds(m_stepLimitMs.load());
+        bool settled = this->waitSettled(limit);
+        // Then what the simulation has to say about start-up (Wsts.SimControl's first
+        // events and telemetry), before any action from outside can come in
+        this->notifyListeners(true);  // not a tick
+        settled = this->waitSettled(limit) && settled;
+        if (!settled) {
+            std::fprintf(stderr, "[WSTS] stepped time: the tasks did not settle within %u ms of start-up (work "
+                                 "outstanding: %s); the first tick is taken all the same\n",
+                         m_stepLimitMs.load(), Activity::get().holders().c_str());
+        }
+        m_settled = true;
     }
     if (m_paused.load()) {
         // Nothing to wait for but a step or a resume: look again shortly
@@ -242,6 +274,10 @@ bool Control::awaitTick(std::uint64_t periodUs, Clock::time_point& next, const s
         }
         m_tickOpen = true;
     }
+    // What was done between two ticks is finished before the next one starts, like the
+    // work of the last tick (an action waits for its own work, but whatever else reached
+    // flight software meanwhile, the ground link's commands for one, is waited for here)
+    (void)this->waitFinished(Clock::now() + std::chrono::milliseconds(m_stepLimitMs.load()));
     const double rate = m_steppedRate.load();
     if (rate > 0.0) {
         // An operator's pace: no faster than this, however quickly ticks finish
@@ -307,6 +343,12 @@ void Control::finishTick() {
         this->post(SimEvent::LOG, "", "stepped time: a tick did not finish, paused: " + stuck);
         this->post(SimEvent::PAUSED, "", "", static_cast<std::uint32_t>(m_tick.load()));
     }
+    if (m_stepped.load() && m_paused.load()) {
+        // The tick left the simulation paused (the last tick of a step, or one that did not
+        // finish): listeners hear of it now, and that is part of the tick
+        this->notifyListeners(true);
+        (void)this->waitFinished(Clock::now() + std::chrono::milliseconds(m_stepLimitMs.load()));
+    }
     {
         std::lock_guard<std::mutex> lock(m_gateMutex);
         m_tickOpen = false;
@@ -336,9 +378,14 @@ Control::ActionGate::ActionGate() : m_held(false) {
         // earlier delivery) is finished first, so that the action meets the same state
         // in every run
         const auto limit = Clock::now() + std::chrono::milliseconds(control.m_stepLimitMs.load());
-        while (Activity::get().pendingElsewhere() > 0 && Clock::now() < limit) {
-            (void)Activity::get().waitQuiescent(std::chrono::milliseconds(1));
+        // Not in the middle of start-up either: an action that arrives while the tasks are
+        // held, or while they are beginning, is applied once they have settled. Where the
+        // tasks were let go without a tick (no tick source came), there is nothing to wait for.
+        while (!control.m_settled.load() && (Activity::get().holdingTasks() || control.m_startedUp.load()) &&
+               Clock::now() < limit) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
+        (void)control.waitSettled(limit);
     }
 }
 
@@ -364,6 +411,12 @@ Control::ActionGate::~ActionGate() {
 
 void Control::onIdle() {
     m_lastTickValid = false;  // the interval across a pause says nothing about the period
+    if (m_stepped.load()) {
+        // Stepped time: listeners are told at fixed points instead (when start-up has
+        // settled, on every tick, after every action, when a tick leaves the simulation
+        // paused), not whenever the wall clock lets the tick source look again
+        return;
+    }
     this->notifyListeners(true);
 }
 
