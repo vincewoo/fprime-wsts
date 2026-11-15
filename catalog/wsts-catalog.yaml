@@ -17,6 +17,14 @@ surrogates:
       - Drv.LinuxUartDriver
       - VxWorksDrv.VxWorksUartDriver
 
+  # The time source: the host's clock in real time, as the components it replaces give;
+  # simulated time in stepped time. It talks to flight components only.
+  - surrogate: Wsts.SimTime
+    endpoint: none
+    replaces:
+      - Svc.PosixTime
+      - Svc.ChronoTime
+
   - surrogate: Wsts.SimI2c
     replaces:
       - Drv.LinuxI2cDriver

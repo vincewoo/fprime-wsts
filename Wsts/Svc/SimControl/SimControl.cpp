@@ -26,6 +26,16 @@ void SimControl::wstsBind(const char* endpoint, const char* options) {
         (void)tick;
         (void)paused;
         const auto now = std::chrono::steady_clock::now();
+        if (Control::get().stepped()) {
+            // Stepped time: on every tick, and whenever the core says so while paused,
+            // whatever the wall clock says: events of the simulation then fall in the
+            // same place in every run
+            if (!m_notifyPending.exchange(true)) {
+                m_lastNotify = now;
+                this->tickNotify_internalInterfaceInvoke();
+            }
+            return;
+        }
         if (now - m_lastNotify < NOTIFY_PERIOD || m_notifyPending.exchange(true)) {
             return;
         }
@@ -38,6 +48,16 @@ void SimControl::tickNotify_internalInterfaceHandler() {
     m_notifyPending.store(false);
     this->drainEvents();
     const auto now = std::chrono::steady_clock::now();
+    if (Control::get().stepped()) {
+        // Once a simulated second
+        const std::uint64_t simulated = Control::get().simTimeNs();
+        if (simulated - m_lastTelemetrySim >= 1000000000ull || simulated < m_lastTelemetrySim) {
+            m_lastTelemetrySim = simulated;
+            m_lastTelemetry = now;
+            this->publishTelemetry();
+        }
+        return;
+    }
     if (now - m_lastTelemetry >= TELEMETRY_PERIOD) {
         m_lastTelemetry = now;
         this->publishTelemetry();

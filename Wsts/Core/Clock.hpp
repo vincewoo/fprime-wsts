@@ -69,6 +69,11 @@ class CycleClock {
     //! Called by the control core on each simulation tick, on the tick thread: simulated
     //! time advances by `periodNs`, which takes `periodNs / rate` of wall time from `now`.
     void grant(std::uint64_t periodNs, double rate, Time now);
+    //! Stepped time: the cycles that lie in the next `periodNs` of simulated time, as
+    //! offsets from its start. The stepper issues them itself, with issue(), in order.
+    void schedule(std::uint64_t periodNs, std::vector<std::uint64_t>& offsets);
+    //! Stepped time: one cycle, on the calling thread
+    void issue();
 
     //! Cycles issued (the callback has returned)
     std::uint64_t cycles() const { return m_cycles.load(); }
@@ -86,8 +91,6 @@ class CycleClock {
     std::mutex m_mutex;
     std::condition_variable m_wake;
     std::deque<Time> m_due;  //!< wall times of the cycles granted and not yet issued
-    //! For each of them, whether it counts as work of its tick (granted in stepped time)
-    std::deque<bool> m_counted;
     std::thread m_thread;
     std::atomic<bool> m_quit{false};
     std::atomic<bool> m_running{false};

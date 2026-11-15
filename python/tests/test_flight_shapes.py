@@ -230,7 +230,8 @@ def test_no_driver_header_while_the_flight_module_is_still_built(tmp_path):
 @needs_fpp
 def test_no_include_directory_without_substitutions(tmp_path):
     project = REPO / "lib" / "fprime" / "TestDeploymentsProject"
-    result = generate(project, flight_manifest("Ref", keep=["comDriver", "linuxTimer"]), tmp_path / "out")
+    # (posixTime too: the catalog would give it the simulation's time source)
+    result = generate(project, flight_manifest("Ref", keep=["comDriver", "linuxTimer", "posixTime"]), tmp_path / "out")
     assert not result.report["substitutions"] and "driver_headers" not in result.report
     assert not (result.output / "wsts-include").exists()
     assert "include_directories" not in (result.output / "CMakeLists.txt").read_text()

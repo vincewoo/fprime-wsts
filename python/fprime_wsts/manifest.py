@@ -258,6 +258,8 @@ class Manifest:
     # How simulated time advances unless a run says otherwise: "real-time" (ticks follow the
     # wall clock) or "stepped" (a tick is taken when the last one is finished)
     time_mode: str = "real-time"
+    # Where simulated time starts in stepped time, seconds since 1970; None: the default
+    time_epoch: Optional[int] = None
     tick_hz: int = 10
     catalogs: List[str] = field(default_factory=list)
     topology_fpp: Optional[List[str]] = None
@@ -326,7 +328,7 @@ KNOWN_KEYS = {
     "catalogs", "sources", "main", "cmake", "libraries", "fpp_exclude", "defines", "simulators", "devices",
     "clocks", "run", "host", "setup", "time",
 }
-TIME_KEYS = {"mode"}
+TIME_KEYS = {"mode", "epoch"}
 #: How a manifest may write the two ways simulated time advances, and how the report does
 TIME_MODES = {"realtime": "real-time", "real-time": "real-time", "stepped": "stepped"}
 SETUP_KEYS = {"code", "headers"}
@@ -367,6 +369,29 @@ def unknown_keys(unknown, known, nested: Optional[Dict[str, str]] = None) -> str
         else:
             named.append(key)
     return ", ".join(named)
+
+
+def _epoch(value, where: str) -> int:
+    """`time.epoch`: seconds since 1970, or a date and time (2030-01-01T00:00:00Z; UTC unless it says otherwise)"""
+    import datetime
+
+    if isinstance(value, bool):
+        value = str(value)
+    if isinstance(value, int):
+        seconds = value
+    elif isinstance(value, (datetime.datetime, datetime.date)):  # YAML reads an unquoted date as one
+        moment = value if isinstance(value, datetime.datetime) else datetime.datetime(value.year, value.month, value.day)
+        seconds = int((moment if moment.tzinfo else moment.replace(tzinfo=datetime.timezone.utc)).timestamp())
+    else:
+        try:
+            moment = datetime.datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+        except ValueError:
+            raise WstsError(f"{where}: time.epoch '{value}' is neither seconds since 1970 nor a date and time such "
+                            "as 2030-01-01T00:00:00Z") from None
+        seconds = int((moment if moment.tzinfo else moment.replace(tzinfo=datetime.timezone.utc)).timestamp())
+    if not 0 < seconds < 2 ** 32:
+        raise WstsError(f"{where}: time.epoch must be after 1970 and fit 32 bits of seconds (it is {value})")
+    return seconds
 
 
 def parse_connection(text: str, where: str) -> ConnectionSpec:
@@ -438,6 +463,8 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
     if mode not in TIME_MODES:
         raise WstsError(f"{where}: time.mode must be 'realtime' or 'stepped', not '{time.get('mode')}'")
     manifest.time_mode = TIME_MODES[mode]
+    if time.get("epoch") is not None:
+        manifest.time_epoch = _epoch(time["epoch"], where)
     manifest.tick_hz = _int(data.get("tick_hz", 10), f"{where}: tick_hz")
     manifest.catalogs = [str(c) for c in data.get("catalogs", [])]
     manifest.fpp_exclude = [str(g) for g in data.get("fpp_exclude", [])]

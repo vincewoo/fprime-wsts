@@ -93,6 +93,7 @@ def test_subtopology_instance_is_substituted_from_the_catalog(default):
     assert chosen(default) == {
         "Cdh.vxTimer": ("Wsts.SimTick", "catalog", "vxTimer"),
         UART: ("Wsts.SimByteStream", "catalog", "uart"),
+        "Cdh.chronoTime": ("Wsts.SimTime", "catalog", None),  # the time source has no bus endpoint
     }
 
 
@@ -142,7 +143,7 @@ def test_two_instances_with_one_base_name_need_endpoints(two_uarts, tmp_path):
     ])
     result = generate(two_uarts, manifest, tmp_path / "out")
     assert {name: values[2] for name, values in chosen(result).items()} == {
-        "Cdh.vxTimer": "vxTimer", "Cdh.uart": "spare", UART: "uart"}
+        "Cdh.vxTimer": "vxTimer", "Cdh.uart": "spare", UART: "uart", "Cdh.chronoTime": None}
     removed = result.report["dictionary"]["removed"]["events"]
     assert "SensorLink.uart.OpenError" in removed and "Cdh.uart.OpenError" in removed
 

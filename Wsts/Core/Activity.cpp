@@ -4,6 +4,8 @@
 // ======================================================================
 #include <Wsts/Core/Activity.hpp>
 
+#include <algorithm>
+
 namespace Wsts {
 
 namespace {
@@ -57,7 +59,144 @@ std::string Activity::holders() {
     return reporter ? reporter() : std::string();
 }
 
+// ----------------------------------------------------------------------
+// One at a time
+// ----------------------------------------------------------------------
+
+void Activity::setExclusive(bool exclusive) {
+    {
+        std::lock_guard<std::mutex> lock(m_turnMutex);
+        m_exclusive.store(exclusive);
+    }
+    m_turn.notify_all();
+}
+
+void Activity::holdTasks(bool hold) {
+    {
+        std::lock_guard<std::mutex> lock(m_turnMutex);
+        m_holdTasks.store(hold);
+    }
+    m_turn.notify_all();
+}
+
+bool Activity::hasTurn() const {
+    Activity* self = const_cast<Activity*>(this);
+    std::lock_guard<std::mutex> lock(self->m_turnMutex);
+    return m_depth > 0 && m_owner == std::this_thread::get_id();
+}
+
+void Activity::poke() {
+    if (m_exclusive.load()) {
+        // Taken so that a contender cannot miss it between its check and its wait
+        { std::lock_guard<std::mutex> lock(m_turnMutex); }
+        m_turn.notify_all();
+    }
+}
+
+void Activity::releaseLocked() {
+    if (m_depth > 0 && m_owner == std::this_thread::get_id() && --m_depth == 0) {
+        m_owner = std::thread::id();
+    }
+}
+
+bool Activity::grantedLocked(const Contender* self) {
+    // The turn is free and this contender is the first of those that are ready
+    if (m_depth != 0) {
+        return false;
+    }
+    if (self->rank >= TASK_START_RANK && m_holdTasks.load()) {
+        return false;  // start-up is not over
+    }
+    if (self->ready != nullptr && !(*self->ready)()) {
+        return false;
+    }
+    for (const Contender* other : m_contenders) {
+        if (other != self && other->rank < self->rank && (other->ready == nullptr || (*other->ready)())) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool Activity::enter(std::uint64_t rank) {
+    if (!m_exclusive.load()) {
+        return false;
+    }
+    std::unique_lock<std::mutex> lock(m_turnMutex);
+    if (m_depth > 0 && m_owner == std::this_thread::get_id()) {
+        m_depth++;
+        return true;
+    }
+    const Contender self{rank, nullptr};
+    m_contenders.push_back(&self);
+    m_turn.wait(lock, [this, &self]() { return !m_exclusive.load() || this->grantedLocked(&self); });
+    m_contenders.erase(std::find(m_contenders.begin(), m_contenders.end(), &self));
+    if (!m_exclusive.load()) {
+        lock.unlock();
+        m_turn.notify_all();
+        return false;
+    }
+    m_owner = std::this_thread::get_id();
+    m_depth = 1;
+    return true;
+}
+
+void Activity::leave() {
+    {
+        std::lock_guard<std::mutex> lock(m_turnMutex);
+        this->releaseLocked();
+    }
+    m_turn.notify_all();
+}
+
+void Activity::abandon() {
+    {
+        std::lock_guard<std::mutex> lock(m_turnMutex);
+        if (m_depth > 0 && m_owner == std::this_thread::get_id()) {
+            m_depth = 0;
+            m_owner = std::thread::id();
+        }
+    }
+    m_turn.notify_all();
+}
+
+bool Activity::awaitTurn(std::uint64_t rank, const Ready& ready) {
+    std::unique_lock<std::mutex> lock(m_turnMutex);
+    // Whatever this thread held, from the message it has just finished, is given up here,
+    // in the same step in which it queues for the next one
+    if (m_depth > 0 && m_owner == std::this_thread::get_id()) {
+        m_depth = 0;
+        m_owner = std::thread::id();
+    }
+    if (!m_exclusive.load()) {
+        lock.unlock();
+        m_turn.notify_all();
+        return false;
+    }
+    const Contender self{rank, &ready};
+    m_contenders.push_back(&self);
+    m_turn.notify_all();  // the turn is free: others look again
+    m_turn.wait(lock, [this, &self]() { return !m_exclusive.load() || this->grantedLocked(&self); });
+    m_contenders.erase(std::find(m_contenders.begin(), m_contenders.end(), &self));
+    if (!m_exclusive.load()) {
+        lock.unlock();
+        m_turn.notify_all();
+        return false;
+    }
+    m_owner = std::this_thread::get_id();
+    m_depth = 1;
+    return true;
+}
+
 void Activity::reset() {
+    {
+        std::lock_guard<std::mutex> lock(m_turnMutex);
+        m_exclusive.store(false);
+        m_holdTasks.store(false);
+        m_owner = std::thread::id();
+        m_depth = 0;
+    }
+    m_turn.notify_all();
     m_pending.store(0);
     m_total.store(0);
     m_counting.store(false);
@@ -65,12 +204,16 @@ void Activity::reset() {
     m_quiet.notify_all();
 }
 
-Activity::Scope::Scope() {
+Activity::Scope::Scope() : m_entered(false) {
     t_scopes++;
-    Activity::get().begin();
+    Activity::get().begin();  // outstanding from here, also while it waits for the turn
+    m_entered = Activity::get().enter();
 }
 
 Activity::Scope::~Scope() {
+    if (m_entered) {
+        Activity::get().leave();
+    }
     Activity::get().end();
     t_scopes--;
 }

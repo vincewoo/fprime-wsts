@@ -170,7 +170,7 @@ endif()
 
 # Headers of replaced flight drivers resolve to stand-ins (wsts-include/). A driver module that is
 # still part of this build compiles against its own header.
-foreach (WSTS_MODULE IN ITEMS Drv_LinuxGpioDriver Drv_LinuxI2cDriver Drv_LinuxSpiDriver Drv_PosixUartDriver Drv_TcpClient SensorLib_RegisterInterface Svc_LinuxTimer)
+foreach (WSTS_MODULE IN ITEMS Drv_LinuxGpioDriver Drv_LinuxI2cDriver Drv_LinuxSpiDriver Drv_PosixUartDriver Drv_TcpClient SensorLib_RegisterInterface Svc_LinuxTimer Svc_PosixTime)
     if (TARGET ${WSTS_MODULE})
         get_target_property(WSTS_MODULE_TYPE ${WSTS_MODULE} TYPE)
         if (NOT WSTS_MODULE_TYPE STREQUAL "INTERFACE_LIBRARY")

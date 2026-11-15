@@ -11,4 +11,6 @@ register_fprime_deployment(
     # simulation knows that flight software has finished what a tick caused
     CHOOSES_IMPLEMENTATIONS
         Wsts_Os_Queue
+        Wsts_Os_RawTime
+        Wsts_Os_Task
 )

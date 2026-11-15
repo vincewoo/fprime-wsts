@@ -66,13 +66,7 @@ void CycleClock::stop() {
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_quit.store(true);
-        for (const bool counted : m_counted) {
-            if (counted) {
-                Activity::get().end();
-            }
-        }
         m_due.clear();
-        m_counted.clear();
     }
     m_wake.notify_all();
     if (m_thread.joinable() && m_thread.get_id() != std::this_thread::get_id()) {
@@ -106,17 +100,23 @@ void CycleClock::grant(std::uint64_t periodNs, double rate, Time now) {
                 continue;
             }
             m_due.push_back(now + std::chrono::nanoseconds(static_cast<std::int64_t>(static_cast<double>(offset) * scale)));
-            // In stepped time a cycle that is granted and not yet issued is part of the
-            // tick's work. In real time it is not: cycles held across a pause are not
-            // something flight software is busy with.
-            const bool counted = Control::get().stepped();
-            m_counted.push_back(counted);
-            if (counted) {
-                Activity::get().begin();
-            }
+
         }
     }
     m_wake.notify_one();
+}
+
+void CycleClock::schedule(std::uint64_t periodNs, std::vector<std::uint64_t>& offsets) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_schedule.advance(periodNs, offsets);
+}
+
+void CycleClock::issue() {
+    if (m_callback) {
+        Activity::Scope cycleWork;  // the simulation's rate group runs on this thread
+        m_callback();
+    }
+    m_cycles.fetch_add(1);
 }
 
 void CycleClock::loop() {
@@ -128,11 +128,8 @@ void CycleClock::loop() {
         }
         // Wait for the instant of the next cycle in short slices, so that a pause is noticed
         bool fire = false;
-        bool counted = false;
         while (!m_quit.load() && !fire) {
-            // In stepped time a pause falls between ticks, and what a tick was granted is
-            // issued with it: a step that ends in a pause is finished only then
-            if (control.paused() && !control.stepped()) {
+            if (control.paused()) {
                 // What was granted before the pause waits for the resume and keeps its
                 // spacing: nothing is issued in a burst afterwards
                 const Time pausedAt = std::chrono::steady_clock::now();
@@ -155,14 +152,10 @@ void CycleClock::loop() {
                 due = m_due.front();
             }
             const Time now = std::chrono::steady_clock::now();
-            // In stepped time the wall clock spaces nothing: cycles are issued in order,
-            // each as soon as the one before has been
-            if (now >= due || control.stepped()) {
+            if (now >= due) {
                 std::lock_guard<std::mutex> lock(m_mutex);
                 if (!m_due.empty()) {
                     m_due.pop_front();
-                    counted = m_counted.front();
-                    m_counted.pop_front();
                     fire = true;
                 }
             } else {
@@ -176,9 +169,7 @@ void CycleClock::loop() {
             }
             m_cycles.fetch_add(1);
         }
-        if (fire && counted) {
-            Activity::get().end();
-        }
+
     }
 }
 

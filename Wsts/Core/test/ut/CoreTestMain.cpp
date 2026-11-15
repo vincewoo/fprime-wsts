@@ -495,6 +495,115 @@ TEST_F(CoreTest, ClockCyclesBelongToTheirTickInSteppedTime) {
     control.setStepped(false);
 }
 
+// ----------------------------------------------------------------------
+// One at a time: the turn that flight code takes in stepped time
+// ----------------------------------------------------------------------
+
+TEST_F(CoreTest, TheTurnGoesToTheReadyContenderOfLowestRank) {
+    Wsts::Activity& activity = Wsts::Activity::get();
+    EXPECT_FALSE(activity.enter()) << "in real time nothing is taken";
+    activity.setExclusive(true);
+    ASSERT_TRUE(activity.enter());
+    ASSERT_TRUE(activity.enter()) << "again, by the thread that has it";
+    EXPECT_TRUE(activity.hasTurn());
+    std::mutex orderMutex;
+    std::vector<int> order;
+    std::atomic<bool> ready{false};
+    auto contender = [&](int rank) {
+        ASSERT_TRUE(activity.enter(static_cast<std::uint64_t>(rank)));
+        {
+            std::lock_guard<std::mutex> lock(orderMutex);
+            order.push_back(rank);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        activity.leave();
+    };
+    std::thread third(contender, 30);
+    std::thread first(contender, 10);
+    std::thread second(contender, 20);
+    // A task between two messages: nothing to do yet, so it is passed over although its rank is lowest
+    std::thread task([&]() {
+        const Wsts::Activity::Ready hasMessage = [&ready]() { return ready.load(); };
+        ASSERT_TRUE(activity.awaitTurn(5, hasMessage));
+        {
+            std::lock_guard<std::mutex> lock(orderMutex);
+            order.push_back(5);
+        }
+        activity.leave();
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    EXPECT_TRUE(order.empty()) << "the turn is taken";
+    activity.leave();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    EXPECT_TRUE(order.empty()) << "taken twice, given up once";
+    activity.leave();
+    first.join();
+    second.join();
+    third.join();
+    EXPECT_EQ(order, (std::vector<int>{10, 20, 30})) << "whichever thread got there first";
+    ready.store(true);
+    activity.poke();
+    task.join();
+    EXPECT_EQ(order.back(), 5);
+    EXPECT_FALSE(activity.hasTurn());
+}
+
+TEST_F(CoreTest, WorkOfTheSimulationTakesTheTurnAndStartUpHoldsTheTasks) {
+    Wsts::Activity& activity = Wsts::Activity::get();
+    activity.setExclusive(true);
+    activity.holdTasks(true);
+    {
+        Wsts::Activity::Scope scope;  // a tick, a delivery: not held by start-up
+        EXPECT_TRUE(activity.hasTurn());
+        Wsts::Activity::Scope nested;
+        EXPECT_TRUE(activity.hasTurn());
+    }
+    EXPECT_FALSE(activity.hasTurn());
+    std::atomic<int> ran{0};
+    std::thread starting([&]() {
+        ASSERT_TRUE(activity.enter(Wsts::Activity::TASK_START_RANK + 1));
+        ran.store(1);
+        // A task that ends inside its routine never gives the turn up itself
+        activity.abandon();
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    EXPECT_EQ(ran.load(), 0) << "tasks wait for start-up to be over";
+    activity.holdTasks(false);
+    starting.join();
+    EXPECT_EQ(ran.load(), 1);
+    ASSERT_TRUE(activity.enter());
+    activity.leave();
+    // Leaving stepped time lets everyone go
+    ASSERT_TRUE(activity.enter());
+    std::thread waiting([&]() { EXPECT_FALSE(activity.enter()); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    activity.setExclusive(false);
+    waiting.join();
+    activity.leave();
+}
+
+TEST_F(CoreTest, FlightSoftwareIsGivenSimulatedTimeInSteppedTime) {
+    Control& control = Control::get();
+    std::uint32_t seconds = 0;
+    std::uint32_t microseconds = 0;
+    control.flightTime(seconds, microseconds);
+    EXPECT_GT(seconds, 1700000000u) << "real time: the host's clock";
+    control.setTickPeriod(50000000);  // 20 Hz
+    control.setStepped(true);
+    control.flightTime(seconds, microseconds);
+    EXPECT_EQ(seconds, 946684800u) << "2000-01-01T00:00:00Z unless an epoch is set";
+    EXPECT_EQ(microseconds, 0u);
+    for (int i = 0; i < 25; i++) {
+        control.onTick();
+    }
+    control.flightTime(seconds, microseconds);
+    EXPECT_EQ(seconds, 946684801u);
+    EXPECT_EQ(microseconds, 250000u);
+    control.setEpoch(1893456000);  // 2030-01-01
+    EXPECT_EQ(control.simTimeNs(), 1893456001250000000ull);
+    control.setStepped(false);
+}
+
 TEST_F(CoreTest, StepRunsForSomeTicksAndPauses) {
     Control& control = Control::get();
     // A tick source takes a tick only while the simulation is not paused

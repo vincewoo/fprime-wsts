@@ -102,6 +102,7 @@ void Control::reset() {
     m_stepped.store(false);
     m_steppedRate.store(0.0);
     m_stepLimitMs.store(10000);
+    m_epochSeconds.store(DEFAULT_EPOCH);
     {
         std::lock_guard<std::mutex> lock(m_gateMutex);
         m_tickOpen = false;
@@ -181,8 +182,26 @@ void Control::setStepped(bool stepped) {
         m_stuck.clear();
     }
     m_gate.notify_all();
+    // In stepped time flight code runs on one thread at a time, in a fixed order
+    Activity::get().setExclusive(stepped);
     this->post(SimEvent::LOG, "", stepped ? "stepped time: a tick is taken when the last one is finished"
                                           : "real time: ticks are paced by the wall clock");
+}
+
+std::uint64_t Control::simTimeNs() const {
+    return m_epochSeconds.load() * 1000000000ull + m_tick.load() * this->tickPeriodNs();
+}
+
+void Control::flightTime(std::uint32_t& seconds, std::uint32_t& microseconds) const {
+    std::uint64_t nanoseconds = 0;
+    if (m_stepped.load()) {
+        nanoseconds = this->simTimeNs();
+    } else {
+        nanoseconds = static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count());
+    }
+    seconds = static_cast<std::uint32_t>(nanoseconds / 1000000000ull);
+    microseconds = static_cast<std::uint32_t>((nanoseconds % 1000000000ull) / 1000ull);
 }
 
 std::string Control::stuck() {
@@ -201,6 +220,10 @@ bool Control::awaitTick(std::uint64_t periodUs, Clock::time_point& next, const s
         }
         std::this_thread::sleep_until(next);
         return !quit.load() && !m_paused.load();
+    }
+    if (Activity::get().holdingTasks()) {
+        // The tick source is up: start-up is over, and the tasks may begin
+        Activity::get().holdTasks(false);
     }
     if (m_paused.load()) {
         // Nothing to wait for but a step or a resume: look again shortly
@@ -245,10 +268,23 @@ void Control::finishTick() {
     // are not waited for.
     const auto limit = Clock::now() + std::chrono::milliseconds(m_stepLimitMs.load());
     Activity& activity = Activity::get();
-    bool finished = activity.pendingElsewhere() == 0;
-    while (!finished && Clock::now() < limit && m_stepped.load()) {
-        (void)activity.waitQuiescent(std::chrono::milliseconds(1));
-        finished = activity.pendingElsewhere() == 0;
+    bool finished = this->waitFinished(limit);
+    // Then the cycles of the simulation's own clocks that lie in this tick, one by one
+    std::vector<PendingCycle> cycles;
+    cycles.swap(m_cycles);
+    for (const PendingCycle& cycle : cycles) {
+        if (!finished || !m_stepped.load()) {
+            break;
+        }
+        bool registered = false;
+        {
+            std::lock_guard<std::mutex> lock(m_clockMutex);
+            registered = std::find(m_clocks.begin(), m_clocks.end(), cycle.clock) != m_clocks.end();
+        }
+        if (registered) {
+            cycle.clock->issue();
+            finished = this->waitFinished(limit);
+        }
     }
     std::string stuck;
     if (!finished && m_stepped.load()) {
@@ -294,6 +330,16 @@ Control::ActionGate::ActionGate() : m_held(false) {
         control.m_actionOpen = true;
         m_held = true;
     }
+    lock.unlock();
+    if (m_held) {
+        // Between two ticks is not enough: whatever else is under way (start-up, an
+        // earlier delivery) is finished first, so that the action meets the same state
+        // in every run
+        const auto limit = Clock::now() + std::chrono::milliseconds(control.m_stepLimitMs.load());
+        while (Activity::get().pendingElsewhere() > 0 && Clock::now() < limit) {
+            (void)Activity::get().waitQuiescent(std::chrono::milliseconds(1));
+        }
+    }
 }
 
 Control::ActionGate::~ActionGate() {
@@ -301,7 +347,10 @@ Control::ActionGate::~ActionGate() {
         return;
     }
     Control& control = Control::get();
-    // What the action caused (injected bytes being handled, an interrupt) is part of it
+    // What the action caused (injected bytes being handled, an interrupt) is part of it,
+    // and so is what the simulation has to say about it (SimPaused, FaultArmed): listeners
+    // are told now, so that it is said before the next tick and not at some moment after
+    control.notifyListeners(true);
     const auto limit = Clock::now() + std::chrono::milliseconds(control.m_stepLimitMs.load());
     while (Activity::get().pendingElsewhere() > 0 && Clock::now() < limit) {
         (void)Activity::get().waitQuiescent(std::chrono::milliseconds(1));
@@ -346,9 +395,40 @@ void Control::grantClocks() {
         std::lock_guard<std::mutex> lock(m_clockMutex);
         clocks = m_clocks;
     }
+    bool stepperIssues = false;
+    if (m_stepped.load()) {
+        std::lock_guard<std::mutex> lock(m_gateMutex);
+        stepperIssues = m_tickOpen;  // the tick source brackets its ticks: finishTick() will come
+    }
+    if (stepperIssues) {
+        // Stepped time: no clock thread and no wall clock. The cycles of this tick are
+        // issued by the stepper, in the order of their instants, each when the one before
+        // is finished (finishTick).
+        for (std::size_t index = 0; index < clocks.size(); index++) {
+            std::vector<std::uint64_t> offsets;
+            clocks[index]->schedule(period, offsets);
+            for (const std::uint64_t offset : offsets) {
+                m_cycles.push_back(PendingCycle{offset, index, clocks[index]});
+            }
+        }
+        std::stable_sort(m_cycles.begin(), m_cycles.end(), [](const PendingCycle& a, const PendingCycle& b) {
+            return a.offsetNs != b.offsetNs ? a.offsetNs < b.offsetNs : a.order < b.order;
+        });
+        return;
+    }
     for (CycleClock* clock : clocks) {
         clock->grant(period, rate, now);
     }
+}
+
+bool Control::waitFinished(Clock::time_point limit) {
+    Activity& activity = Activity::get();
+    bool finished = activity.pendingElsewhere() == 0;
+    while (!finished && Clock::now() < limit && m_stepped.load()) {
+        (void)activity.waitQuiescent(std::chrono::milliseconds(1));
+        finished = activity.pendingElsewhere() == 0;
+    }
+    return finished;
 }
 
 void Control::addClock(CycleClock* clock) {

@@ -38,6 +38,8 @@ def test_manifest_in_the_flight_project(tmp_path):
         "Payload.heaterPin": ("Wsts.SimGpio", "catalog"),
         "Payload.switchPin": ("Wsts.SimGpio", "catalog"),
         "Payload.spiBus": ("Wsts.SimSpi", "catalog"),
+        # The time source: the host's clock in real time, simulated time in stepped time
+        "Payload.posixTime": ("Wsts.SimTime", "catalog"),
     }, "hubDriver is kept by the manifest"
     assert "simulation_project" not in report
     instances = (result.output / "Payload" / "Top" / "instances.fpp").read_text()
@@ -74,7 +76,7 @@ def test_vxworks_deployment_converts_without_its_toolchain(tmp_path):
     report = result.report
     # The hub driver (a Drv.TcpServer) is replaced only when a system ends a link at it
     assert {s["flight_component"] for s in report["substitutions"]} == {
-        "VxWorksSvc.VxWatchDogTimer", "VxWorksDrv.VxWorksUartDriver"}
+        "VxWorksSvc.VxWatchDogTimer", "VxWorksDrv.VxWorksUartDriver", "Svc.ChronoTime"}
     timer = next(s for s in report["substitutions"] if s["surrogate"] == "Wsts.SimTick")
     assert "mode=thread" in timer["options"]
     # The platform library stays, for one file: the project's configuration module overrides
@@ -134,7 +136,7 @@ def test_upstream_ref_with_telemetry_packets(tmp_path):
     """Ref defines telemetry packets and its topology shares its module's name"""
     project = REPO / "lib" / "fprime" / "TestDeploymentsProject"
     result = generate(project, parse_manifest({"deployment": "Ref", "keep": ["comDriver"]}), tmp_path / "out")
-    assert [s["instance"] for s in result.report["substitutions"]] == ["Ref.linuxTimer"]
+    assert [s["instance"] for s in result.report["substitutions"]] == ["Ref.posixTime", "Ref.linuxTimer"]
     assert result.report["dictionary"]["removed"] == {"commands": [], "events": [], "channels": [], "params": []}
     packets = (result.output / "Ref" / "Top" / "RefPackets.fppi").read_text()
     assert "wstsControl.SimTicks" in packets.split("omit {")[1]

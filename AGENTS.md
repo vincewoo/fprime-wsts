@@ -8,8 +8,8 @@ Start with [README.md](README.md); the design is in [docs/design.md](docs/design
 | Path | Contents |
 |---|---|
 | `Wsts/Core/` | Plain C++: bus (byte stream, I2C, SPI, GPIO, registers), faults, control core, cycle clocks, scenario player, recorder, bridge, reference models, links between elements, `RegisterSurrogate` (the bus side of a register interface surrogate), `Dma` (address translation a project registers). No F´ dependencies |
-| `Wsts/Os/` | The `Os::Queue` of a simulated deployment (`Wsts_Os_Queue`, chosen by the overlay's `register_fprime_deployment()`): the framework's generic priority queue, telling `Wsts/Core/Activity` which messages are outstanding. The basis of stepped time (`docs/stepped-time.md`) |
-| `Wsts/Drv/`, `Wsts/Svc/` | F´ components: surrogates (`SimRegister` is the one for register interface components), `BusByteStreamDevice` (adapter that puts an F´ simulator on a bus endpoint), `SimCycle` (cycle source with its own rate), `SimControl` (commands/events/telemetry), `SimSetup` (anchor) |
+| `Wsts/Os/` | The `Os::Queue`, `Os::Task` and `Os::RawTime` of a simulated deployment (`Wsts_Os_Queue`, `Wsts_Os_Task`, `Wsts_Os_RawTime`, chosen by the overlay's `register_fprime_deployment()`): the framework's generic priority queue and POSIX task and raw time, with what stepped time needs around them (the count of outstanding messages, the turn, simulated time). `docs/stepped-time.md` |
+| `Wsts/Drv/`, `Wsts/Svc/` | F´ components: surrogates (`SimRegister` is the one for register interface components), `BusByteStreamDevice` (adapter that puts an F´ simulator on a bus endpoint), `SimCycle` (cycle source with its own rate), `SimTime` (the time source: host clock, or simulated time in stepped time), `SimControl` (commands/events/telemetry), `SimSetup` (anchor) |
 | `catalog/wsts-catalog.yaml` | Which flight components each surrogate replaces |
 | `schemas/` | JSON Schemas of `wsts.yaml` and `wsts-system.yaml`, for editors. Written by hand: a new manifest key goes there too (`python/tests/test_schema.py` compares them with the parser's key sets) |
 | `python/fprime_wsts/` | `generate.py` (transform), `fpp.py` (model loading), `flight_cmake.py` (flight CMake read as text: root `CMakeLists.txt`, nested modules, SDK links, `BUILD_TESTING` branches, the build tree), `hostcheck.py` (what the build takes from the host, and `check-host`), `build.py` (`fprime-wsts build`: configures and builds overlays), `survey.py` (`fprime-wsts survey` and `init`: what a flight project needs, and starter manifests; the `wsts-configure` skill's `scripts/survey.py` calls it), `manifest.py`, `simulators.py` (added F´ instances, bus devices), `registers.py` (`Wsts.SimRegister` written for a flight register interface component), `system.py` (multi-element systems), `bridge.py`, `models.py` (serves the Python device models of `run.models` for a run), `runner.py`, `scaffold.py`, `cli.py` |
@@ -123,7 +123,12 @@ version, unset `JAVA_HOME` so the bundled JRE is used.
   stepped time wait for the last tick's work instead of the wall clock. The bridge holds a
   `Control::ActionGate` around an action, so it falls between two ticks. A tick that does not
   finish within `WSTS_STEP_LIMIT_MS` pauses the simulation and sets `stuck` in `status`.
-  Time stamps and `wstsControl` telemetry still follow the host clock, and a system is not
+  In stepped time flight software is given simulated time (`Control::flightTime()`,
+  `Wsts.SimTime`, `Wsts_Os_RawTime`) and runs on one thread at a time, in a fixed order
+  (`Activity::enter()`/`awaitTurn()`; `Wsts_Os_Task` and the queue take the turn): two runs
+  record the same bytes, which `tests/e2e/test_stepped.py` holds. Anything new that runs
+  flight handlers on a thread of the simulation needs an `Activity::Scope`; anything that
+  reads the host's clock on flight software's behalf breaks the comparison. A system is not
   stepped as a whole.
 - A new action goes in `Control::dispatch`, then `SimControl.fpp`/`.cpp`, `bridge.py`,
   `docs/reference.md`, and a test at each level.

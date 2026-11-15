@@ -35,6 +35,7 @@ struct Entry {
     std::int64_t waiting = 0;   // sent, not yet received
     std::int64_t handling = 0;  // received, handler not yet returned
     bool polled = false;
+    std::uint64_t index = 0;    // in order of creation: the order tasks take their turn in
 };
 // Neither is ever destroyed: the queues are members of components with static storage,
 // which are destroyed after anything created here on first use, and tasks may still be
@@ -63,6 +64,13 @@ std::string report() {
     return text;
 }
 
+// A task ends by returning from the handler of its exit message, without asking for
+// another: when its thread goes, what it still held goes with it. (The count of that last
+// message is left: the deployment is shutting down.)
+struct TaskEnd {
+    ~TaskEnd() { Activity::get().abandon(); }
+};
+
 bool finished(const CountedQueue* queue) {
     const auto it = std::find(t_handling.begin(), t_handling.end(), queue);
     if (it == t_handling.end()) {
@@ -89,8 +97,11 @@ Os::QueueInterface::Status CountedQueue::create(FwEnumStoreType id,
                                                 FwSizeType depth,
                                                 FwSizeType messageSize) {
     {
+        static std::uint64_t created = 0;
         std::lock_guard<std::mutex> lock(s_mutex);
-        entries()[this].name = name.toChar();
+        Entry& entry = entries()[this];
+        entry.name = name.toChar();
+        entry.index = created++;
     }
     return Os::Generic::PriorityQueue::create(id, name, depth, messageSize);
 }
@@ -110,7 +121,19 @@ Os::QueueInterface::Status CountedQueue::send(const U8* buffer,
             Activity::get().begin();
         }
     }
-    const Status status = Os::Generic::PriorityQueue::send(buffer, size, priority, blockType);
+    Status status = Os::Generic::PriorityQueue::send(buffer, size, priority, BlockingType::NONBLOCKING);
+    if (status == Os::QueueInterface::Status::FULL && blockType == BlockingType::BLOCKING) {
+        // The sender waits for room, which only the receiver can make: while flight code
+        // runs one at a time the sender lets go of the turn meanwhile
+        const bool had = Activity::get().hasTurn();
+        if (had) {
+            Activity::get().leave();
+        }
+        status = Os::Generic::PriorityQueue::send(buffer, size, priority, BlockingType::BLOCKING);
+        if (had) {
+            (void)Activity::get().enter();
+        }
+    }
     if (status != Os::QueueInterface::Status::OP_OK) {
         // Full, or refused: nothing to handle
         std::lock_guard<std::mutex> lock(s_mutex);
@@ -119,6 +142,8 @@ Os::QueueInterface::Status CountedQueue::send(const U8* buffer,
         if (counted && !entry.polled) {
             Activity::get().end();
         }
+    } else {
+        Activity::get().poke();  // a task that waits for its turn may have something to do now
     }
     return status;
 }
@@ -128,9 +153,11 @@ Os::QueueInterface::Status CountedQueue::receive(U8* destination,
                                                  BlockingType blockType,
                                                  FwSizeType& actualSize,
                                                  FwQueuePriorityType& priority) {
+    std::uint64_t index = 0;
     {
         std::lock_guard<std::mutex> lock(s_mutex);
         Entry& entry = entries()[this];
+        index = entry.index;
         if (finished(this)) {
             entry.handling--;
             Activity::get().end();
@@ -143,7 +170,30 @@ Os::QueueInterface::Status CountedQueue::receive(U8* destination,
             }
         }
     }
-    const Status status = Os::Generic::PriorityQueue::receive(destination, capacity, blockType, actualSize, priority);
+    Status status = Os::QueueInterface::Status::EMPTY;
+    bool received = false;
+    if (blockType == BlockingType::BLOCKING) {
+        thread_local TaskEnd taskEnd;
+        (void)taskEnd;
+        // A task between two messages. While flight code runs one at a time (stepped time)
+        // it gives up its turn and waits until there is a message and the turn is its own
+        // again; tasks take their turns in the order their queues were created.
+        const Activity::Ready ready = [this]() {
+            std::lock_guard<std::mutex> lock(s_mutex);
+            return entries()[this].waiting > 0;
+        };
+        while (!received && Activity::get().awaitTurn(Activity::TASK_RANK + index, ready)) {
+            status = Os::Generic::PriorityQueue::receive(destination, capacity, BlockingType::NONBLOCKING, actualSize,
+                                                         priority);
+            if (status == Os::QueueInterface::Status::EMPTY) {
+                continue;  // taken by someone else meanwhile: wait again (the turn is given up there)
+            }
+            received = true;
+        }
+    }
+    if (!received) {
+        status = Os::Generic::PriorityQueue::receive(destination, capacity, blockType, actualSize, priority);
+    }
     if (status == Os::QueueInterface::Status::OP_OK) {
         std::lock_guard<std::mutex> lock(s_mutex);
         Entry& entry = entries()[this];
@@ -153,6 +203,8 @@ Os::QueueInterface::Status CountedQueue::receive(U8* destination,
             Activity::get().begin();  // a waiting message of a polled queue counts from here
         }
         t_handling.push_back(this);  // outstanding until this thread asks for the next one
+    } else if (received) {
+        Activity::get().leave();  // nothing to handle after all (a message that does not fit)
     }
     return status;
 }
