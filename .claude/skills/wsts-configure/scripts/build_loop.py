@@ -5,7 +5,7 @@ One pass over the stages a new configuration has to get through:
 
   generate   fprime-wsts generate <manifest>                     (deployment or system manifest)
   host       fprime-wsts check-host <generated dir>              (what the host lacks)
-  build      fprime-util generate [options] && fprime-util build, per element
+  build      fprime-wsts build <generated dir>                   (configures each element when it has to)
   run        fprime-wsts run <generated dir> --duration S --json (no GDS unless --gds)
 
 Each stage's full output goes to <generated dir>/build-wsts-loop/<stage>[-<element>].log
@@ -202,37 +202,33 @@ def main(argv=None) -> int:
 
     # ---- build ----
     if "build" in stages:
+        # `fprime-wsts build` decides whether to configure, and keeps each element's whole
+        # output in <generated dir>/wsts-logs/[<element>/]build.log
+        log = logs / "build.log"
+        command = ["fprime-wsts", "build", str(output), "--json", "-j", str(args.jobs)]
+        command += (["--fresh"] if args.fresh else []) + (["--keep-going"] if args.keep_going else [])
+        code = run(command, output, log, timeout=7200 * max(1, len(elements)))
+        text = log.read_text(errors="replace")
+        start = text.find("{\n")
+        try:
+            result = json.loads(text[start:text.rfind("}") + 1]) if start >= 0 else {}
+        except json.JSONDecodeError:
+            result = {}
+        if not result.get("elements"):
+            return fail("build", exit_code=code, log=str(log), error=generator_error(log))
         built: Dict[str, dict] = {}
-        failed = None
-        for name, directory in elements.items():
-            options = configure_options(directory)
-            build_dirs = sorted(directory.glob("build-fprime-automatic-*"))
-            entry: dict = {"directory": str(directory), "configure_options": options}
-            if args.fresh or not build_dirs:
-                log = logs / f"configure-{name}.log"
-                code = run(["fprime-util", "generate", *options, *(["-f"] if args.fresh and build_dirs else [])],
-                           directory, log, timeout=1800)
-                entry["configure_log"] = str(log)
-                if code != 0:
-                    entry.update(ok=False, step="fprime-util generate", exit_code=code, error=excerpt(log))
-                    built[name] = entry
-                    failed = failed or name
-                    if not args.keep_going:
-                        break
-                    continue
-            log = logs / f"build-{name}.log"
-            code = run(["fprime-util", "build", "-j", str(args.jobs)], directory, log, timeout=7200)
-            entry["build_log"] = str(log)
-            if code != 0:
-                entry.update(ok=False, step="fprime-util build", exit_code=code, error=excerpt(log))
-                failed = failed or name
-                built[name] = entry
-                if not args.keep_going:
-                    break
-                continue
-            entry["ok"] = True
+        for name, element in result["elements"].items():
+            entry: dict = {"directory": element["directory"], "configure": f"{element['configure']} ({element['reason']})",
+                           "configure_options": configure_options(Path(element["directory"])),
+                           "build_log": element["log"], "ok": element["exit_code"] == 0}
+            if not entry["ok"]:
+                step = "fprime-util generate" if element.get("stage") == "configure" else "fprime-util build"
+                entry.update(step=step, exit_code=element["exit_code"],
+                             error=element.get("errors") or excerpt(Path(element["log"])))
             built[name] = entry
-        summary["stages"]["build"] = {"ok": failed is None, "elements": built}
+        failed = next((name for name, entry in built.items() if not entry["ok"]), None)
+        summary["stages"]["build"] = {"ok": failed is None, "elements": built, "log": str(log),
+                                      "warnings": result.get("warnings", [])}
         if failed:
             summary["failed"] = "build"
             return finish()
@@ -323,6 +319,10 @@ def render(summary: dict) -> str:
                            + (f" (options: {' '.join(entry['configure_options'])})" if entry.get("configure_options") else ""))
                 for line in entry.get("error", []):
                     out.append(f"  | {line}")
+                if entry.get("build_log"):
+                    out.append(f"    log: {entry['build_log']}")
+            for warning in info.get("warnings", []):
+                out.append(f"  warning: {warning}")
         elif stage == "run":
             for finding in info.get("findings", []):
                 out.append(f"  {finding}")

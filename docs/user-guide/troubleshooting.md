@@ -87,7 +87,7 @@ Each fix belongs in one of three places:
 | `tick` stays at 0 | The tick source is not simulated (`generate` warned), or the run is paused |
 | `errors` > 0 in the final status | An endpoint without a model, or a model that rejects what flight sends. `--record run.jsonl` shows each transaction |
 | Links down in a system | One element did not start or did not open its link driver: check its `sim.log` |
-| GDS: `cannot merge dictionaries … versions differ` | Rebuild every element from the same checkout state |
+| `the elements were built from different states of the checkout` (from `run --gds`, or as a warning of `build`) | One element was built before a commit or a local change and another after, so their dictionaries carry different versions and the GDS cannot merge them: `fprime-wsts build <system> --fresh` |
 | Injected telemetry values are overwritten | A free-running model sends again before the once-a-second downlink: silence it first |
 | Events arrive late, even after `clear_histories()` | Expected for elements behind a hub |
 

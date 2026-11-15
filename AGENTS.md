@@ -56,7 +56,9 @@ version, unset `JAVA_HOME` so the bundled JRE is used.
   on it.
 - After changing anything under `Wsts/`, rebuild both elements of the example before running
   e2e tests. Build them from the same checkout state: the GDS refuses to merge dictionaries
-  whose project versions differ (`-dirty` on one of them).
+  whose project versions differ (`-dirty` on one of them). `fprime-wsts build` warns and
+  `run --gds` stops with the versions when they do; `fprime-wsts build <system> --fresh`
+  rebuilds them from one state.
 - FPP keywords (`state`, `reg`, `text`, …) must be escaped with `$` when used as names.
 - Instances of imported subtopologies are named by their own module (`SensorLink.uart`),
   not the deployment's. A substituted instance outside `Top` is patched in a copy of its

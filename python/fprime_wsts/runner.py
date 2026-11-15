@@ -554,6 +554,30 @@ def one_value(option: str, values) -> Optional[str]:
     return values[0]
 
 
+def dictionary_mismatch(dictionaries: Dict[str, Path], directory: Optional[Path] = None) -> Optional[str]:
+    """Why the dictionaries of a system's elements cannot be merged into one, if they
+    cannot: F Prime writes the version of the checkout into each when its build is
+    configured, and the merge refuses dictionaries whose project or framework versions
+    differ. That happens when the elements were built at different times: one before a
+    commit and one after, or one from a clean tree and one with changes (`-dirty`)."""
+    versions: Dict[str, Dict[str, str]] = {}
+    for name, path in dictionaries.items():
+        try:
+            metadata = json.loads(Path(path).read_text()).get("metadata", {})
+        except (OSError, ValueError):
+            continue
+        versions[name] = {field: str(metadata.get(field)) for field in ("projectVersion", "frameworkVersion")}
+    for field, what in (("projectVersion", "project"), ("frameworkVersion", "framework")):
+        found = {name: version[field] for name, version in versions.items()}
+        if len(set(found.values())) > 1:
+            return (f"the elements were built from different states of the checkout ({what} version "
+                    + ", ".join(f"{version} in {name}" for name, version in found.items())
+                    + "), and the GDS cannot merge their dictionaries. The version is written when a build is "
+                    "configured: build them again from one state with\n  fprime-wsts build "
+                    + (str(directory) if directory else "<system directory>") + " --fresh")
+    return None
+
+
 class SystemSimulation:
     """A running system: one simulated deployment per element, joined by their links, with
     an optional GDS on the ground element using the merged dictionary (headless, or with its
@@ -603,6 +627,9 @@ class SystemSimulation:
             if dictionary is None:
                 raise WstsError(f"no dictionary found for element '{element['name']}': has it been built?")
             dictionaries[element["name"]] = dictionary
+        mismatch = dictionary_mismatch(dictionaries, self.directory)
+        if mismatch:
+            raise WstsError(mismatch)
         merged = dictionaries.pop(self.ground)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         for index, (name, dictionary) in enumerate(dictionaries.items()):
