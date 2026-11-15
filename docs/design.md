@@ -886,7 +886,8 @@ Replay is repeatable to tick granularity. It is not cycle-exact: see
 1. **Stepped time.** A simulated `Os_RawTime` plus instrumented `Os_Queue`/`Os_Task`
    implementations that detect quiescence, selected per deployment with
    `CHOOSES_IMPLEMENTATIONS`. The bridge then steps the simulation tick by tick,
-   deterministically and faster than real time.
+   deterministically and faster than real time. The design is drafted in
+   [stepped-time.md](stepped-time.md).
 2. **VxWorks API shim.** A POSIX-backed subset of `taskLib`, `semLib`, `msgQLib`, `wdLib`
    and `ioLib` so project components that include VxWorks headers compile unchanged.
 3. **File-system remapping.** An `Os_File` implementation that maps target paths
