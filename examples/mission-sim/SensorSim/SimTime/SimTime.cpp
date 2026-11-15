@@ -1,6 +1,6 @@
 #include "SensorSim/SimTime/SimTime.hpp"
 
-#include <chrono>
+#include <Wsts/Core/Control.hpp>
 
 namespace SensorSim {
 
@@ -8,11 +8,13 @@ SimTime::SimTime(const char* compName) : SimTimeComponentBase(compName) {}
 
 void SimTime::timeGetPort_handler(FwIndexType portNum, Fw::Time& time) {
     (void)portNum;
-    // The workstation's clock, as the flight component gives on Linux
-    const auto now = std::chrono::system_clock::now().time_since_epoch();
-    time.set(TimeBase::TB_WORKSTATION_TIME,
-             static_cast<U32>(std::chrono::duration_cast<std::chrono::seconds>(now).count()),
-             static_cast<U32>(std::chrono::duration_cast<std::chrono::microseconds>(now).count() % 1000000));
+    // The workstation's clock in real time, as the flight component gives on Linux, and
+    // simulated time in stepped time: reading the host's clock here would make two stepped
+    // runs differ (the 'Time' section of the report lists code that does)
+    std::uint32_t seconds = 0;
+    std::uint32_t microseconds = 0;
+    Wsts::Control::get().flightTime(seconds, microseconds);
+    time.set(TimeBase::TB_WORKSTATION_TIME, seconds, microseconds);
 }
 
 }  // namespace SensorSim

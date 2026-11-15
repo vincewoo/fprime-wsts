@@ -120,6 +120,17 @@ Register interface components replaced at their ports: the flight drivers above 
 - `Payload.wstsControl.SimTicks`
 - `Payload.wstsControl.SimTimeScale`
 
+## Time
+
+- Mode: real-time (`time.mode`; `--stepped` chooses it for one run, and `set_stepped` switches a running simulation)
+- Tick source: `Payload.linuxTimer`
+- Epoch of simulated time: 2000-01-01T00:00:00Z
+- Time source: `Payload.posixTime` (`Svc.PosixTime`), replaced by `Wsts.SimTime`: the host's clock in real time, simulated time in stepped time
+
+**Code that waits on the host** (read from the sources of the components this deployment builds; what each costs in stepped time):
+
+Nothing in the sources of the components this deployment builds waits on the host, as far as their text shows: stepped time should work, and two stepped runs record the same bytes.
+
 ## Fidelity notes
 
 - Payload.fpgaRegs is a register interface component, replaced by WstsAdapted.SensorLib_RegisterInterface: the flight drivers that read and write registers through it run as in flight, against the model 'fpga' on endpoint 'fpgaRegs'. Register semantics are exactly what the model implements. Bus timing, caches, the order of accesses from several cores and accesses of other widths than 4 and 8 bytes are not reproduced. Interrupts are delivered on the thread that raises them (a model's is the simulation's tick thread), one at a time: the target's interrupt priorities, masking and nesting are not reproduced.
@@ -128,7 +139,7 @@ Register interface components replaced at their ports: the flight drivers above 
 - Operating system: flight OSAL implementations are replaced by the Linux/POSIX ones. Task priorities are advisory and scheduling is not real-time, so timing and preemption order differ from the target.
 - Word size and byte order are those of the host; code that depends on the target's differs here.
 - Surrogates replace drivers at their port interface: driver internals (register access, interrupt handling, device files) are not exercised.
-- Time follows the host wall clock, scaled by the simulation rate. Runs are repeatable to tick granularity, not cycle-exact.
+- Time follows the host wall clock, scaled by the simulation rate, and runs are repeatable to tick granularity, not cycle-exact; in stepped time (time.mode, --stepped) a tick is taken when flight software has finished the last one and time is simulated. See 'Time' for what may keep stepped time from working here.
 
 ## Headers of replaced drivers
 

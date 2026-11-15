@@ -87,6 +87,7 @@ sections:
 | Substituted instances | Each replaced instance, its flight component, the surrogate, *chosen by* (`catalog`, `manifest`, `link`), and its endpoint |
 | Register blocks, Device models, Simulator components, Links | What answers on each endpoint |
 | Dictionary changes | Flight commands, events and channels that disappear with replaced drivers, and the WSTS entries added |
+| Time | The time mode, the tick source, what gives time stamps, and **code that waits on the host**: calls in the sources of the components this deployment builds that sleep, read the host's clock, start threads of their own, wait for another thread or block on a device, with what each costs in [stepped time](control.md#stepped-time-experimental) |
 | Fidelity notes | What this deployment does not reproduce, specifically |
 | Flight root CMakeLists.txt | Statements carried over, and those not carried over with the manifest key that reproduces each |
 | Modules that change under BUILD_TESTING | Modules with a stub variant, and what the stub lacks |
@@ -116,6 +117,7 @@ Warnings do not stop generation, but several stop the build or the run later:
 |---|---|
 | `X cycles the flight rate groups … and is kept` | A project timer: nothing scheduled will run. Write a [project tick surrogate](surrogates.md#a-project-timer), or model its registers |
 | `time comes from X, a project component that is kept` | Substitute it if it reads a hardware clock |
+| `time.mode is stepped, and X … waits for another thread` (or reads the host's clock, starts a thread, waits on a device) | Only with `time.mode: stepped`. Substitute the component, or run the deployment in real time; the Time section of the report has the calls and what each costs |
 | `module M links '${SDK}/…'` | Use the module's stub variant, or another option the warning lists ([step 5](build.md)) |
 | `flight root CMakeLists.txt: … not carried over (key: …)` | Put the statement under the key named, if the build needs it |
 | `BUILD_TESTING …` | Do not set it for the whole build; use `cmake.stub_variants` |

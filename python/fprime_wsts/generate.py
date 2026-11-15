@@ -22,6 +22,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from . import flight_cmake
 from . import fpp
 from . import hostcheck
+from . import hostwait
 from . import registers
 from . import simulators as sims
 from .fpp import WstsError
@@ -221,6 +222,53 @@ def _check_tick_sources(plan: Plan, model: fpp.Model, framework: Optional[Path],
             plan.fidelity_notes.append(
                 f"Time stamps come from {source} ({component.name}), which is not simulated and may depend on hardware."
             )
+
+
+def waits_on_host(plan: Plan, model: fpp.Model, topology: fpp.Topology, owner, framework: Path,
+                  sim_roots: List[Path], stub_dirs: List[Path]) -> List[hostwait.Entry]:
+    """The modules of the simulated build that run flight-style handlers, and what in their
+    sources waits on the host: the kept components of the topology, the simulation
+    project's surrogates and its simulators. Framework components by what is known of them;
+    the toolkit's are not read."""
+    toolkit = TOOLKIT_ROOT / "Wsts"
+    substituted = {sub.instance.name for sub in plan.substitutions}
+    users: Dict[Tuple[str, Path], Tuple[List[str], List[str]]] = {}  # (role, module) -> (components, instances)
+    known: Dict[str, List[str]] = {}  # framework component -> instances
+
+    def add(role: str, component_name: str, instance: str) -> None:
+        component = model.components.get(component_name)
+        if component is None:
+            return
+        root = owner(component.file)
+        if root is None or root == toolkit:
+            return
+        if root == framework:
+            if role == "flight" and component_name in hostwait.FRAMEWORK:
+                known.setdefault(component_name, []).append(instance)
+            return
+        directory = module_dir(component.file, root) or component.file.parent
+        if role == "flight" and root in sim_roots:
+            role = "surrogate"
+        components, instances = users.setdefault((role, directory), ([], []))
+        if component_name not in components:
+            components.append(component_name)
+        if instance not in instances:
+            instances.append(instance)
+
+    for name in topology.instances:
+        if name not in substituted:
+            add("flight", model.instances[name].component, name)
+    for sub in plan.substitutions:
+        if sub.surrogate.name not in plan.adapted and owner(sub.surrogate.file) in sim_roots:
+            add("surrogate", sub.surrogate.name, sub.instance.name)
+    for item in plan.sim.added:
+        add("simulator", item.component, item.name)
+    entries = [hostwait.Entry(role, sorted(components), sorted(instances), directory,
+                              hostwait.scan_module(directory, directory in stub_dirs))
+               for (role, directory), (components, instances) in users.items()]
+    entries += [hostwait.Entry("framework", [component], sorted(instances), known=hostwait.FRAMEWORK[component])
+                for component, instances in known.items()]
+    return entries
 
 
 def adapt_register_surrogates(model: fpp.Model, manifest: Manifest, topology: fpp.Topology,
@@ -1587,6 +1635,13 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
         for kind in added:
             added[kind] = [f"{prefix}.{n}" for n in getattr(control, kind)]
     identical = not any(removed.values()) and not any(added.values()) and not plan.sim.added
+    time_source = None
+    if plan.topology.time_source:
+        name = plan.topology.time_source
+        sub = next((sub for sub in plan.substitutions if sub.instance.name == name), None)
+        time_source = {"instance": name, "flight_component": sub.original.name if sub else
+                       model.instances[name].component if name in model.instances else None,
+                       "given_by": sub.surrogate.name if sub else None}
     simulator_report = {}
     if plan.sim:
         sim = plan.sim
@@ -1653,7 +1708,8 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
         "sim_toolchain": "native (Linux)",
         "time": {"mode": manifest.time_mode, **({"epoch": manifest.time_epoch} if manifest.time_epoch else {}),
                  "tick_source": next(
-            (s.instance.name for s in plan.substitutions if s.surrogate.name == "Wsts.SimTick"), "internal ticker")},
+            (s.instance.name for s in plan.substitutions if s.surrogate.name == "Wsts.SimTick"), "internal ticker"),
+                 **({"time_source": time_source} if time_source else {})},
         "substitutions": substitutions,
         "kept_hardware_instances": plan.kept_hardware,
         "models": [
@@ -1685,8 +1741,10 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
             "Word size and byte order are those of the host; code that depends on the target's differs here.",
             "Surrogates replace drivers at their port interface: driver internals (register access, interrupt "
             "handling, device files) are not exercised.",
-            "Time follows the host wall clock, scaled by the simulation rate. Runs are repeatable to tick "
-            "granularity, not cycle-exact.",
+            "Time follows the host wall clock, scaled by the simulation rate, and runs are repeatable to tick "
+            "granularity, not cycle-exact; in stepped time (time.mode, --stepped) a tick is taken when flight "
+            "software has finished the last one and time is simulated. See 'Time' for what may keep stepped "
+            "time from working here.",
         ],
         "warnings": plan.warnings,
     }
@@ -1802,6 +1860,32 @@ def testing_warning(source: str, carried: bool, count: int) -> str:
     if carried:
         return f"BUILD_TESTING is ON for the whole simulated build: {source}. {effect} {remedy}"
     return (f"{source}; it is not carried over to the simulated build. {effect} {remedy}")
+
+
+def render_time(time: dict) -> List[str]:
+    """The report's 'Time' section: the mode, the tick and the time, and what may keep
+    stepped time from working"""
+    lines = ["## Time", "",
+             f"- Mode: {time['mode']} (`time.mode`; `--stepped` chooses it for one run, and `set_stepped` switches "
+             "a running simulation)",
+             f"- Tick source: `{time['tick_source']}`",
+             "- Epoch of simulated time: " + (f"`{time['epoch']}`" if time.get("epoch") else "2000-01-01T00:00:00Z")]
+    source = time.get("time_source")
+    if source:
+        given = source["given_by"]
+        if given == "Wsts.SimTime":
+            how = "replaced by `Wsts.SimTime`: the host's clock in real time, simulated time in stepped time"
+        elif given:
+            how = (f"replaced by `{given}`: simulated time in stepped time only if it asks "
+                   "`Wsts::Control::flightTime()` (code that waits on the host, below, lists it if it reads the "
+                   "host's clock)")
+        else:
+            how = "kept as it is: time stamps are whatever it reads, in either mode"
+        lines.append(f"- Time source: `{source['instance']}` (`{source['flight_component']}`), {how}")
+    else:
+        lines.append("- Time source: none in the topology")
+    lines += [""] + hostwait.render(time.get("waits_on_host", []))
+    return lines
 
 
 def render_report(report: dict) -> str:
@@ -1938,6 +2022,7 @@ def render_report(report: dict) -> str:
         lines.append(f"**{title}:** {len(items)}")
         lines += [f"- `{item}`" for item in items]
         lines.append("")
+    lines += render_time(report["time"]) + [""]
     lines += ["## Fidelity notes", ""]
     lines += [f"- {note}" for note in report["fidelity_notes"]]
     if report.get("replaced_modules"):
@@ -2992,6 +3077,12 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
             "file": rel(flight_root.file), "carried_over": flight_root.carried, "not_carried_over": flight_root.not_carried}
     if skipped_dirs:
         report["excluded_modules"] = [rel(d) for d in skipped_dirs]
+    # ---- Code that waits on the host: what may keep stepped time from working ----
+    waiting = hostwait.describe(
+        waits_on_host(plan, model, topology, owner, settings.framework_path, sim_roots, stub_dirs), rel)
+    report["time"]["waits_on_host"] = waiting
+    if manifest.time_mode == "stepped":
+        plan.warnings += [hostwait.warning(item) for item in waiting if item["effect"] != "slower"]
     # ---- What the build takes from outside the project ----
     users = module_users(model, plan, topology, owner)
     sdk_modules: Dict[Path, List[str]] = {}

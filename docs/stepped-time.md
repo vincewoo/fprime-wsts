@@ -1,12 +1,13 @@
 # Stepped Time (design draft)
 
-**Status: phases 0 to 2 are built (stepped time is experimental); reporting and lockstep
-for systems are a proposal.** It is item 1 of the
+**Status: phases 0 to 3 are built (stepped time is experimental); lockstep for systems is
+a proposal.** It is item 1 of the
 [roadmap](design.md#roadmap). The choices under [What to decide](#what-to-decide) were
 settled as recommended. [Phase 0: what it showed](#phase-0-what-it-showed) has the results
 of the spike, and one correction to the design that came out of it;
-[Phase 1](#phase-1-what-is-built) and [Phase 2](#phase-2-what-is-built) say what stepped
-time does today and what it leaves to the later phases.
+[Phase 1](#phase-1-what-is-built), [Phase 2](#phase-2-what-is-built) and
+[Phase 3](#phase-3-what-is-built) say what stepped time does today and what it leaves to
+the later phases.
 
 ## The problem
 
@@ -113,10 +114,10 @@ project thread started with `Os::Task` that polls) is never counted. Three measu
   with that name rather than hanging.
 - The toolkit's own threads (bus delivery, link readers, bridge injection) take and
   release the activity count explicitly around what they deliver.
-- `generate` already reports kept components that supply time or ticks. It will also
-  report kept components whose sources call `sleep`, `usleep`, `nanosleep`,
-  `clock_gettime`, `std::chrono` clocks or `Os::Task::delay` in a loop: candidates for
-  trouble in stepped mode, listed in the fidelity report.
+- `generate` already reports kept components that supply time or ticks. It also reports
+  components whose sources call `sleep`, `usleep`, `nanosleep`, `clock_gettime`,
+  `std::chrono` clocks, `Os::Task::delay`, start threads of their own or wait for one:
+  candidates for trouble in stepped mode, in the report's Time section (phase 3).
 
 ### 2. Simulated time
 
@@ -231,7 +232,7 @@ assert sim.gpio_get("heaterPin") is False     # no timeout, no retry
 `--duration` counts simulated seconds in stepped mode. The `--json` summary gains the
 simulated time reached and the ratio to wall time. The fidelity report gains a "Time"
 section: the mode, the surrogate for the time component, and the components reported as
-waiting on the host.
+waiting on the host (built in phase 3).
 
 ## Phases
 
@@ -240,7 +241,7 @@ waiting on the host.
 | 0. Spike | `Wsts_Os_Queue` with the activity count, chosen by the overlay; the example's Payload reaches quiescence after each tick | Small | That implementations can be chosen from the overlay as assumed, and that quiescence is reached with the example's framework components (ground link, hub, health) |
 | 1. Stepped ticks | The stepper, `--stepped`, exact `step`, bridge actions between ticks, the stuck-task report | Medium | Faster than real time; tests without timeouts |
 | 2. Simulated time | `Wsts_Os_RawTime`, `Wsts.SimTime`, `Os::Task::delay`, clocks without threads, `delay` faults, serialised bus | Medium | Two runs of one scenario give identical recordings and time stamps: a test in CI that compares them |
-| 3. Reporting | The generator's report of code that waits on the host; fidelity and user guide pages | Small | A project learns before it builds whether stepped mode will work |
+| 3. Reporting | The generator's report of code that waits on the host; fidelity and user guide pages | Small | A project learns before it builds whether stepped mode will work (built: [Phase 3](#phase-3-what-is-built)) |
 | 4. Lockstep | The conductor for systems, time-tagged links, system-wide pause, step and scenarios | Medium to large | The example system repeatable end to end |
 
 Each phase ends with something usable and can be merged by itself. Phase 0 is the one to
@@ -331,6 +332,41 @@ Not built, of what phase 2 listed:
   `busy_ticks` counts the ticks that started while such a delivery was under way.
 - **Telemetry that reads the host** (`Svc.SystemResources`: processor and memory use)
   differs between runs as it does between machines.
+
+## Phase 3: what is built
+
+A project learns before it builds whether stepped time will work for a deployment.
+`fprime-wsts generate` reads the sources of the components the simulated deployment
+builds and reports the calls that wait on the host, in a **Time** section of
+`wsts-report.md` (`time.waits_on_host` in `wsts-report.json`); `fprime-wsts survey` gives
+the same from its trial generation, before a manifest is written. The code is in
+`python/fprime_wsts/hostwait.py`.
+
+| | |
+|---|---|
+| What is read | The kept components of the topology (flight project and flight libraries), the simulation project's surrogates and its simulators: the C and C++ files their module's `CMakeLists.txt` names, in the variant the build takes (`cmake.stub_variants`), or every such file of the directory when it names none. Comments and string literals are left out. Text only: the report is the same on every machine |
+| What is not | The framework's components go through the OSAL; the few that do not are known by name (socket, serial and GPIO drivers, `Svc.PosixTime`, `Svc.ChronoTime`, `Svc.LinuxTimer`, `Svc.SystemResources`) and listed with what they do when they are kept. The toolkit's own components are not read |
+| Sleeps on the wall clock | `sleep`, `usleep`, `nanosleep`, `std::this_thread::sleep_for`, `taskDelay`, `Os::Task::delay`: *slower*, the result the same |
+| Reads the host's clock | `clock_gettime`, `gettimeofday`, `time(NULL)`, `std::chrono` clocks: *not repeatable* |
+| Reads the state of the host | `Svc.SystemResources`: *not repeatable* |
+| Waits on a device or socket | `select`, `poll`, `recv` and the like: *not repeatable* (what arrives is outside input) |
+| Starts a thread outside `Os::Task` | `pthread_create`, `std::thread`, `std::async`, `taskSpawn`: *not repeatable* (its work is not counted and does not take the turn) |
+| Waits for another thread | `sem_wait`, `pthread_cond_wait`, `std::condition_variable`, `Os::ConditionVariable`: *may stall a tick* (one thread runs at a time) |
+| Warnings | When the manifest asks for stepped time (`time.mode: stepped`), each module that is not merely slower is also a warning of `generate`. In real time the report says it and nothing is printed |
+| The time source | The Time section also says what gives time stamps: `Wsts.SimTime`, a surrogate of the simulation project (simulated time only if it asks `Control::flightTime()`), or the flight component kept |
+
+The example's Payload has nothing to report. Cdh has its ground link, `Drv.TcpClient`,
+which is kept on purpose. Phase 3 found one real case in the example: Cdh's time
+surrogate (`SensorSim.SimTime`) read `std::chrono::system_clock`, so Cdh's time stamps
+were the host's in stepped time too. It now asks `Control::flightTime()`.
+
+What it is **not**: an analysis of what is reached. A call in a branch that never runs
+costs nothing and is still listed; a wait reached through a function of another module,
+or through a variable that holds a function, is not seen. Whether a sleep is in a handler
+or in a task of its own is not known either: the report gives the consequence for each.
+
+Not built, of what the design listed: the slowest ticks in host time in the run summary
+([decision 4](#what-to-decide)).
 
 ## Risks
 

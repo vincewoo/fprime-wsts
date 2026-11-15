@@ -173,6 +173,23 @@ F´ components that the simulation adds to the topology. They are not in the fli
 - `SensorSim.gyroSim.Steps`
 - `SensorSim.sensorSim.TEMPERATURE`
 
+## Time
+
+- Mode: real-time (`time.mode`; `--stepped` chooses it for one run, and `set_stepped` switches a running simulation)
+- Tick source: `Cdh.vxTimer`
+- Epoch of simulated time: 2000-01-01T00:00:00Z
+- Time source: `Cdh.chronoTime` (`Svc.ChronoTime`), replaced by `SensorSim.SimTime`: simulated time in stepped time only if it asks `Wsts::Control::flightTime()` (code that waits on the host, below, lists it if it reads the host's clock)
+
+**Code that waits on the host** (read from the sources of the components this deployment builds; what each costs in stepped time):
+
+One module of this deployment does something that waits on the host: one keeps two stepped runs from recording the same bytes. Read from the text: a call that is never reached in a run costs nothing.
+
+| Instances | Component | Module | What it does | In stepped time |
+|---|---|---|---|---|
+| `Cdh.comDriver` | `Drv.TcpClient` (framework) |  | a socket driver: its receive task waits in recv() between messages and sleeps on the wall clock (Os::Task::delay) while it reconnects | not repeatable |
+
+- **Waits on a device or socket.** What arrives comes from outside the simulation, at a moment of its own: it is handled in whichever tick is being taken, a different one in each run (`busy_ticks` in `status` counts them). Waiting in a task of its own, between messages, does not keep a tick from finishing.
+
 ## Fidelity notes
 
 - Cdh.chronoTime is replaced by SensorSim.SimTime, which has no bus endpoint: it talks to the flight components over their ports directly. Fault injection, recording, replay and the bridge do not reach that link.
@@ -180,7 +197,7 @@ F´ components that the simulation adds to the topology. They are not in the fli
 - Operating system: flight OSAL implementations are replaced by the Linux/POSIX ones. Task priorities are advisory and scheduling is not real-time, so timing and preemption order differ from the target.
 - Word size and byte order are those of the host; code that depends on the target's differs here.
 - Surrogates replace drivers at their port interface: driver internals (register access, interrupt handling, device files) are not exercised.
-- Time follows the host wall clock, scaled by the simulation rate. Runs are repeatable to tick granularity, not cycle-exact.
+- Time follows the host wall clock, scaled by the simulation rate, and runs are repeatable to tick granularity, not cycle-exact; in stepped time (time.mode, --stepped) a tick is taken when flight software has finished the last one and time is simulated. See 'Time' for what may keep stepped time from working here.
 
 ## Modules built from a patched copy
 
