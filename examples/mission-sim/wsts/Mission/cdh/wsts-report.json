@@ -295,7 +295,28 @@
   "sim_toolchain": "native (Linux)",
   "time": {
     "mode": "real-time",
-    "tick_source": "Cdh.vxTimer"
+    "tick_source": "Cdh.vxTimer",
+    "time_source": {
+      "instance": "Cdh.chronoTime",
+      "flight_component": "Svc.ChronoTime",
+      "given_by": "SensorSim.SimTime"
+    },
+    "waits_on_host": [
+      {
+        "role": "framework",
+        "components": [
+          "Drv.TcpClient"
+        ],
+        "instances": [
+          "Cdh.comDriver"
+        ],
+        "kinds": [
+          "waits_on_io"
+        ],
+        "effect": "not_repeatable",
+        "known": "a socket driver: its receive task waits in recv() between messages and sleeps on the wall clock (Os::Task::delay) while it reconnects"
+      }
+    ]
   },
   "substitutions": [
     {
@@ -543,7 +564,7 @@
     "Operating system: flight OSAL implementations are replaced by the Linux/POSIX ones. Task priorities are advisory and scheduling is not real-time, so timing and preemption order differ from the target.",
     "Word size and byte order are those of the host; code that depends on the target's differs here.",
     "Surrogates replace drivers at their port interface: driver internals (register access, interrupt handling, device files) are not exercised.",
-    "Time follows the host wall clock, scaled by the simulation rate. Runs are repeatable to tick granularity, not cycle-exact."
+    "Time follows the host wall clock, scaled by the simulation rate, and runs are repeatable to tick granularity, not cycle-exact; in stepped time (time.mode, --stepped) a tick is taken when flight software has finished the last one and time is simulated. See 'Time' for what may keep stepped time from working here."
   ],
   "warnings": [],
   "nested_modules": [

@@ -5,4 +5,6 @@ register_fprime_library(
         "${CMAKE_CURRENT_LIST_DIR}/SimTime.cpp"
     HEADERS
         "${CMAKE_CURRENT_LIST_DIR}/SimTime.hpp"
+    DEPENDS
+        Wsts_Core
 )

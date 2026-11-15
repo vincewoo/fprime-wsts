@@ -13,7 +13,8 @@ it lists the deployments, and for each deployment:
   - whether the deployment has a main(), and entry points if it does not;
   - its ID range, command splitters and hubs (for a system's `ids` windows and links);
   - the result of a trial generation with a minimal manifest: substitutions, warnings,
-    and the first error the generator stops on.
+    the first error the generator stops on, and the code that waits on the host (what may
+    keep stepped time from working).
 
 It also lists existing WSTS manifests found under the same directories, so an earlier
 configuration can be continued instead of started again.
@@ -36,7 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from . import fpp, registers
+from . import fpp, hostwait, registers
 from .cli import format_warning
 from .fpp import WstsError
 from .generate import generate, read_registration
@@ -464,6 +465,8 @@ def trial_generate(project: Path, deployment: Path, analysis: dict) -> dict:
         trial["warnings"] = report.get("warnings", [])
         trial["kept_hardware_instances"] = report.get("kept_hardware_instances", [])
         trial["configure_options"] = report.get("configure_options", [])
+        # What may keep stepped time from working (docs/stepped-time.md), before anything is built
+        trial["waits_on_host"] = report.get("time", {}).get("waits_on_host", [])
         return trial
 
 
@@ -644,6 +647,14 @@ def render(report: dict) -> str:
                         out.append(format_warning(w, indent="  "))
                     if trial["configure_options"]:
                         out.append(f"  - configure options: {' '.join(trial['configure_options'])}")
+                    waiting = trial.get("waits_on_host", [])
+                    out.append(f"- stepped time: {hostwait.verdict(waiting)}")
+                    for item in waiting:
+                        what = item.get("known") or ", ".join(f"`{c['call']}` at `{c['file']}:{c['line']}`"
+                                                              for c in item["calls"][:2])
+                        out.append(f"  - `{', '.join(item['instances']) or ', '.join(item['components'])}` "
+                                   f"({', '.join(item['components'])}): {what} "
+                                   f"({hostwait.EFFECT_NAMES[item['effect']]})")
         out.append("")
     hints = report["system_hints"]
     if hints["hub_link_ends"] or len(report.get("deployment_names", [])) > 1:

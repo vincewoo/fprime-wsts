@@ -62,8 +62,8 @@ what those ticks caused (every message handled, no handler running), with the ti
 stopped at. An assertion right after it needs no timeout. The
 ticks are still paced by the wall clock and the time scale (`set_rate(100)` makes a step
 quick), and within a tick the flight threads run as the host schedules them: this is
-control over how far time goes, not yet the deterministic stepped time of the
-[roadmap](../design.md#roadmap).
+control over how far time goes. For a deterministic order within a tick, use stepped time
+(below).
 
 ## Stepped time (experimental)
 
@@ -89,6 +89,12 @@ sim.step(1200)                                   # a minute at 20 Hz, in a momen
 
 What to know:
 
+- **Check the report first.** The Time section of `wsts-report.md` lists the code in the
+  deployment's components that waits on the host (sleeps, reads the host's clock, starts
+  threads of its own, waits for another thread, blocks on a device), and says for each
+  whether it only makes stepped runs slower, keeps two of them from recording the same
+  bytes, or may keep a tick from finishing. `fprime-wsts survey` says the same before
+  there is a manifest.
 - If a component never finishes its work (a handler that blocks, a task that sleeps or
   polls by itself), the tick cannot finish. After ten seconds the simulation pauses, and
   `status()["stuck"]` and the log name the queues that hold work. Such a component needs
@@ -102,8 +108,9 @@ What to know:
 - The fixed order is not the flight scheduler's: tasks run in the order of their queues,
   whatever their priorities, and none preempts another.
 - A project's own time component still gives the host's clock unless its surrogate asks
-  the simulation (`Wsts::Control::flightTime`); `Svc.PosixTime` and `Svc.ChronoTime` are
-  replaced for you.
+  the simulation (`Wsts::Control::flightTime`, as the example's
+  `SensorSim/SimTime/SimTime.cpp` does); `Svc.PosixTime` and `Svc.ChronoTime` are
+  replaced for you. The report flags a surrogate that reads the host's clock.
 - A whole system is not stepped yet (`run --stepped` refuses one): step one element
   through its bridge.
 

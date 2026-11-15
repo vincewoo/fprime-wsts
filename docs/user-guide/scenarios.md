@@ -83,8 +83,9 @@ separately for each offset. When they run out, a read fails.
 
 !!! info "Repeatability"
 
-    Actions apply at fixed ticks, and replay is repeatable to tick granularity. Within a
-    tick, the order flight threads run in is the host scheduler's, so tests should assert
-    on outcomes (an event occurred, a channel reached a value) rather than exact
-    interleavings. Deterministic stepped time is on the
-    [roadmap](../design.md#roadmap).
+    Actions apply at fixed ticks, and replay is repeatable to tick granularity. In real
+    time the order flight threads run in within a tick is the host scheduler's, so tests
+    should assert on outcomes (an event occurred, a channel reached a value) rather than
+    exact interleavings. In [stepped time](control.md#stepped-time-experimental) two runs
+    record the same bytes, unless the report's Time section lists code that waits on the
+    host.

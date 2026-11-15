@@ -23,7 +23,7 @@ the concrete list for that deployment.
 | Device behaviour | Supplied by models | Only as good as the model. Timing inside a transaction is not modelled |
 | Operating system | Linux/POSIX OSAL instead of the target's | Priorities are advisory; no priority inheritance or preemption guarantees; stack sizes are not enforced the same way |
 | Time | Host wall clock, optionally scaled | Not cycle-exact. A loaded host stretches ticks; the tick source does not burst to catch up |
-| Stepped time (`--stepped`, experimental) | A tick is taken when flight software has finished the last one. Tasks run one at a time, in the order of their queues; time is simulated and stands still within a tick | A rate group that would overrun into the next cycle on the target does not: the overlap is removed, not reproduced, and a queue that overflows in flight because a consumer is slow may not overflow here. Priorities and preemption play no part. A rate group measures a cycle time of zero. Code that waits on the host, or on another task from inside a handler, cannot be stepped |
+| Stepped time (`--stepped`, experimental) | A tick is taken when flight software has finished the last one. Tasks run one at a time, in the order of their queues; time is simulated and stands still within a tick | A rate group that would overrun into the next cycle on the target does not: the overlap is removed, not reproduced, and a queue that overflows in flight because a consumer is slow may not overflow here. Priorities and preemption play no part. A rate group measures a cycle time of zero. Code that waits on the host, or on another task from inside a handler, cannot be stepped: the report's Time section lists what does ([below](#code-that-waits-on-the-host)) |
 | Time source (`Svc.PosixTime`, `Svc.ChronoTime`) | Replaced by `Wsts.SimTime` | The host's clock in real time, as before; simulated time in stepped time |
 | Queue, task and raw time of the framework | The toolkit's (`Wsts_Os_Queue`, `Wsts_Os_Task`, `Wsts_Os_RawTime`): the framework's generic queue and the POSIX task and raw time, with a count and the stepped behaviour around them | In real time they behave as the ones they wrap |
 | Interrupts | Delivered on ordinary threads: a register block's on the thread that raises it (the tick thread for a model), one at a time | Code that relies on interrupt context (no blocking, masking) is not checked. Priorities, masking and nesting of the target's interrupts are not reproduced |
@@ -48,9 +48,31 @@ the concrete list for that deployment.
 ## Repeatability
 
 A scenario applies its actions at fixed ticks, and a recording replays at the ticks it was
-recorded at. Within a tick, the order in which flight threads run is decided by the host
-scheduler. Tests should therefore assert on outcomes (an event occurred, a channel reached
-a value) rather than on exact interleavings. Deterministic stepped time is on the roadmap.
+recorded at. In real time, the order in which flight threads run within a tick is decided
+by the host scheduler: tests should assert on outcomes (an event occurred, a channel
+reached a value) rather than on exact interleavings. In
+[stepped time](user-guide/control.md#stepped-time-experimental) the order is fixed and two
+runs record the same bytes, as long as nothing in the deployment waits on the host.
+
+## Code that waits on the host
+
+Stepped time sees what flight software does through the OSAL. Code that sleeps, reads the
+host's clock, starts a thread of its own, waits for another thread or blocks on a device
+works around it. Each generated `wsts-report.md` has a **Time** section that lists such
+code in the components the deployment builds, read from their sources, with what each
+costs in stepped time:
+
+| What the code does | In stepped time |
+|---|---|
+| Sleeps on the wall clock | The same result, more slowly: the sleep holds the turn |
+| Reads the host's clock, or the host's state | Two runs differ; time stamps and time-outs follow the host |
+| Waits on a device or socket | What arrives lands in whichever tick is being taken |
+| Starts a thread outside `Os::Task` | Its work is not counted and does not wait for the turn: two runs differ |
+| Waits for another thread from a handler | The tick never finishes, and is reported stuck |
+
+The list is read from text, so it shows calls whether or not a run reaches them, and does
+not see a wait reached through another module. `fprime-wsts survey` gives the same list
+before a manifest is written.
 
 Pausing the simulation stops the flight rate groups, which also stops downlink: the
 response to `SIM_PAUSE` arrives after the resume. Uplink does not depend on the rate

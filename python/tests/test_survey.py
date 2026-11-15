@@ -50,3 +50,19 @@ def test_init_refuses_what_is_not_a_project_and_the_flight_project_itself(tmp_pa
     assert main(["init", str(MISSION), "--output", str(MISSION / "sim")]) == 2
     assert "only reads" in capsys.readouterr().err
     assert main(["survey", str(tmp_path)]) == 1
+
+
+@needs_fpp
+def test_the_survey_says_whether_stepped_time_will_work(capsys):
+    """From the trial generation, before a manifest is written or anything built"""
+    assert main(["survey", str(MISSION), "--deployment", "Payload", "--json"]) == 0
+    (project,) = json.loads(capsys.readouterr().out)["projects"]
+    (payload,) = project["deployments"]
+    waiting = payload["trial"]["waits_on_host"]
+    # The hub driver is kept by a manifest of one deployment: a socket driver, known to wait on it
+    assert [(i["instances"], i["components"], i["effect"]) for i in waiting] == [
+        (["Payload.hubDriver"], ["Drv.TcpClient"], "not_repeatable")]
+    assert main(["survey", str(MISSION), "--deployment", "Payload"]) == 0
+    printed = capsys.readouterr().out
+    assert "- stepped time: One module of this deployment does something that waits on the host" in printed
+    assert "  - `Payload.hubDriver` (Drv.TcpClient): a socket driver" in printed

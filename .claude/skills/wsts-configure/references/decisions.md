@@ -137,7 +137,16 @@ project component that the catalog does not replace drives them.
   ("A time unit"). This is real work: agree with the user on the approach before writing
   code.
 - A project time source that reads a hardware clock keeps time stamps from advancing.
-  Substitute it, as `cdh.yaml` does with `SensorSim.SimTime` (`endpoint: none`).
+  Substitute it, as `cdh.yaml` does with `SensorSim.SimTime` (`endpoint: none`). Its
+  surrogate gives time with `Wsts::Control::flightTime()`, not the host's clock, so that
+  stepped time works.
+- **Stepped time.** The trial generation's `waits_on_host` (and the Time section of
+  `wsts-report.md` after `generate`) lists code in the built components that sleeps,
+  reads the host's clock, starts its own threads, waits for another thread or blocks on a
+  device, each with its effect: `slower`, `not_repeatable` or `may_stall`. If the user
+  wants stepped runs (fast CI, recordings to compare), say what is listed: `may_stall`
+  needs a surrogate before `--stepped` can be used; `not_repeatable` from a kept ground
+  link is expected. Do not set `time.mode: stepped` while a `may_stall` entry is left.
 
 ## 7. Register interfaces
 
