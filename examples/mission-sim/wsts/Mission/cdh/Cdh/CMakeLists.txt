@@ -14,3 +14,6 @@ register_fprime_deployment(
         Wsts_Os_RawTime
         Wsts_Os_Task
 )
+# The VxWorks API shim (`shims` in the manifest), whole: any module may call it, whatever the
+# order in which the static libraries are linked
+target_link_libraries(${FPRIME_CURRENT_MODULE} PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,Wsts_VxWorks>")

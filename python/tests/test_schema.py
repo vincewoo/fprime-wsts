@@ -36,6 +36,7 @@ def test_the_deployment_schema_has_the_keys_the_parser_accepts():
     assert keys(properties["host"]) == manifest.HOST_KEYS
     assert keys(properties["time"]) == manifest.TIME_KEYS
     assert set(properties["time"]["properties"]["mode"]["enum"]) <= set(manifest.TIME_MODES)
+    assert set(properties["shims"]["items"]["enum"]) == set(manifest.SHIMS)
     assert keys(properties["setup"]["oneOf"][1]) == manifest.SETUP_KEYS
     assert set(properties["models"]["items"]["properties"]["kind"]["enum"]) == set(manifest.MODEL_KINDS)
 

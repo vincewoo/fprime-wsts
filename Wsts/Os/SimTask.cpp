@@ -25,6 +25,7 @@ void run(void* pointer) {
     Started* started = static_cast<Started*>(pointer);
     const Started task = *started;
     delete started;
+    Activity::get().setTaskThread();
     // While flight code runs one at a time: wait for this task's turn. It is given up when
     // the task first waits for a message, and at the latest when its routine returns.
     (void)Activity::get().enter(Activity::TASK_START_RANK + task.order);

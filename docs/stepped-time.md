@@ -439,7 +439,10 @@ What it is **not**:
 - **The implementation choice.** Shown for `Os_Queue` in phase 0. `Os_Task` and
   `Os_RawTime` are chosen the same way and are expected to behave the same.
 - **VxWorks deployments with their own tasks.** Project code that starts threads outside
-  `Os::Task` (the POSIX shim of roadmap item 2 would cover it) is invisible to the count.
+  `Os::Task` is invisible to the count. Tasks started through the
+  [VxWorks API shim](vxworks-shim.md) (`taskSpawn`) are `Os::Task`s, and its semaphores,
+  message queues, delays and watchdogs take part in the count and the turn: a tick waits
+  for the tasks it wakes.
 - **Queue overflow behaves differently.** With the stepper waiting for each tick to
   finish, a queue that overflows in flight because a consumer is slow may not overflow
   here. This is the price of removing overlap, and belongs in the fidelity page.

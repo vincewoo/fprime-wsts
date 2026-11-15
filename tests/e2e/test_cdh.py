@@ -209,3 +209,82 @@ def test_time_comes_from_the_surrogate_without_an_endpoint(gds):
     time.sleep(1.5)
     _, second = sample(gds)
     assert second > first > 1_600_000_000
+
+
+# ----------------------------------------------------------------------
+# VxWorks code through the API shim: Cdh.heartbeat (Cdh/Heartbeat) spawns a task with
+# taskSpawn, which takes a binary semaphore that a watchdog (wdStart) gives every six ticks
+# of the system clock (60 Hz), counts under a mutex semaphore, and takes a new period from
+# a message queue. Nothing in it is guarded for simulation: cdh.yaml has `shims: [vxworks]`.
+# ----------------------------------------------------------------------
+
+BEATS = "Cdh.heartbeat.Beats"
+SYSTEM_TICKS = "Cdh.heartbeat.SystemTicks"
+PERIOD = "Cdh.heartbeat.PeriodTicks"
+
+
+def heartbeat_samples(gds, count, timeout=T):
+    """(system ticks, beats) of the first `count` reports of the heartbeat since the histories
+    were cleared. The two channels of one report are written one after the other: paired by
+    time tag, which is the same in stepped time and microseconds apart in real time."""
+    def seconds(item):
+        tag = item.get_time()
+        return tag.seconds + tag.useconds / 1e6
+
+    beats = gds.await_telemetry_count(count, BEATS, start=0, timeout=timeout)
+    ticks = gds.await_telemetry_count(count, SYSTEM_TICKS, start=0, timeout=timeout)
+    pairs = []
+    for beat in beats:
+        nearest = min(ticks, key=lambda t: abs(seconds(t) - seconds(beat)), default=None)
+        if nearest is not None and abs(seconds(nearest) - seconds(beat)) < 0.05:
+            pairs.append((nearest.get_val(), beat.get_val()))
+    return pairs
+
+
+def test_vxworks_heartbeat_beats_on_the_system_clock(gds):
+    gds.assert_telemetry(PERIOD, value=6, timeout=T)
+    gds.clear_histories()
+    first = min(heartbeat_samples(gds, 3))  # a clear can fall between the channels of one report
+    time.sleep(3)
+    gds.clear_histories()
+    last = max(heartbeat_samples(gds, 3))
+    ticks, beats = last[0] - first[0], last[1] - first[1]
+    assert ticks >= 120, "60 ticks of the system clock a second"
+    # In real time the task may count the last beat just after the report
+    assert abs(beats - ticks / 6) <= 1.5, f"{beats} beats in {ticks} system clock ticks"
+
+
+def test_a_command_reaches_the_vxworks_task_through_a_message_queue(gds):
+    try:
+        gds.send_and_assert_command("Cdh.heartbeat.HEARTBEAT_SET_PERIOD", [3], timeout=T)
+        # Taken by the task between two beats, which says so itself
+        gds.assert_event("Cdh.heartbeat.PeriodSet", args=[3], timeout=T)
+        gds.assert_telemetry(PERIOD, value=3, timeout=T)
+    finally:
+        gds.send_and_assert_command("Cdh.heartbeat.HEARTBEAT_SET_PERIOD", [6], timeout=T)
+    gds.assert_telemetry(PERIOD, value=6, timeout=T)
+    gds.send_command("Cdh.heartbeat.HEARTBEAT_SET_PERIOD", [0])
+    gds.assert_event("Cdh.heartbeat.PeriodRejected", args=[0], timeout=T)
+
+
+def test_in_stepped_time_every_beat_is_counted_in_its_tick(gds, cdh):
+    """The watchdog runs in the tick its system clock tick falls in, and the tick is not over
+    until the task it woke has counted the beat: each report, a simulated second after the
+    last, is exactly 60 system clock ticks and 10 beats on"""
+    gds.assert_telemetry(PERIOD, value=6, timeout=T)
+    cdh.pause()
+    cdh.set_stepped(True)
+    try:
+        time.sleep(0.5)  # what real time had sent is in
+        gds.clear_histories()
+        cdh.step(100)  # ten simulated seconds: ten reports, the last still on its way down
+        samples = heartbeat_samples(gds, 7)
+    finally:
+        cdh.set_stepped(False)
+        cdh.resume()
+    # In the order they were written (the history is in the order of time tags: simulated
+    # time in stepped time, the host's clock in real time), from the second on: the first
+    # may have been written in real time, before the pause
+    samples = sorted(samples)
+    steps = [(b[0] - a[0], b[1] - a[1]) for a, b in zip(samples[1:], samples[2:])]
+    assert len(steps) >= 5 and all(step == (60, 10) for step in steps), f"{samples}"

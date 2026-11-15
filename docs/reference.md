@@ -157,6 +157,7 @@ fpp_exclude: ["*/Experimental/*"]    # FPP files to leave out of the analysis
 defines: [MY_SIM_FLAG]               # compile definitions, in addition to WSTS_SIM=1
 host:
   ignore: [vendor/gen.h, -lcodec]    # names the host check does not report (header, -l<library>, package, SDK entry)
+shims: [vxworks]                     # operating system APIs the toolkit implements for project code (see "Shims")
 ```
 
 ### Instance names
@@ -473,6 +474,17 @@ Recipes and reasons:
   report (`compiler`, `flight_compiler`, `missing: [{kind, name, needed_by, remedies,
   hint?}]`, `notes`, `warnings`, `ok`); that file is not compared by `--check` and is not
   meant to be checked in.
+
+### Shims
+
+`shims` lists operating system APIs that project code calls and the toolkit implements on
+the host. The one there is, `vxworks`, is the [VxWorks API shim](vxworks-shim.md)
+(`Wsts/VxWorks`). For each, the overlay puts the shim's headers on every module's include
+path (after the module's own), links the shim into the deployment as a whole archive, and
+the host check counts its headers as provided. The calls it implements in simulated time
+are left out of the report's "Code that waits on the host". Report: `shims`, and a section
+"Operating system shims". Without it, a module that includes one of its headers without a
+guard is a warning that names the key, and `check-host` gives the key as the first remedy.
 
 ### Surrogates of another kind, or with other port names
 

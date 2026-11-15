@@ -194,12 +194,12 @@
     ],
     "connections": [
       {
-        "connection": "rateGroup1Hz.RateGroupMemberOut[5] -> SensorSim.Simulator.schedIn",
+        "connection": "rateGroup1Hz.RateGroupMemberOut[6] -> SensorSim.Simulator.schedIn",
         "port_type": "Svc.Sched",
         "port_number_chosen": true
       },
       {
-        "connection": "rateGroup1Hz.RateGroupMemberOut[6] -> SensorSim.txBuffers.schedIn",
+        "connection": "rateGroup1Hz.RateGroupMemberOut[7] -> SensorSim.txBuffers.schedIn",
         "port_type": "Svc.Sched",
         "port_number_chosen": true
       }
@@ -208,12 +208,12 @@
       {
         "instance": "SensorSim.sensorSim",
         "port": "schedIn",
-        "driven_by": "Cdh.rateGroup1Hz.RateGroupMemberOut[5]"
+        "driven_by": "Cdh.rateGroup1Hz.RateGroupMemberOut[6]"
       },
       {
         "instance": "SensorSim.txBuffers",
         "port": "schedIn",
-        "driven_by": "Cdh.rateGroup1Hz.RateGroupMemberOut[6]"
+        "driven_by": "Cdh.rateGroup1Hz.RateGroupMemberOut[7]"
       }
     ],
     "clocks": [
@@ -547,6 +547,7 @@
     ]
   },
   "project_modules": [
+    "Cdh/Heartbeat",
     "config/project"
   ],
   "reused_sources": {
@@ -664,6 +665,12 @@
     },
     "modules": [
       {
+        "module": "Cdh/Heartbeat",
+        "instances": [
+          "Cdh.heartbeat (Cdh.Heartbeat)"
+        ]
+      },
+      {
         "module": "config/project",
         "instances": []
       },
@@ -771,6 +778,9 @@
     "sanitizers": [],
     "ignore": []
   },
+  "shims": [
+    "vxworks"
+  ],
   "dropped_cmake_options": [
     "VX_TARGET_TYPE=DKM",
     "FPRIME_PLATFORM=VxWorks"
@@ -788,12 +798,12 @@
   ],
   "capacity": {
     "command_ports": {
-      "used": 10,
+      "used": 11,
       "size": 30,
       "constant": "CmdDispatcherComponentCommandPorts"
     },
     "command_table": {
-      "used": 44,
+      "used": 45,
       "size": 80,
       "source": "../../../config/CommandDispatcherImplCfg.hpp"
     },

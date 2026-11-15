@@ -75,6 +75,7 @@ Warnings do not stop generation, but most of these stop the build or the run lat
 
 | Warning (gist) | Fix |
 |---|---|
+| `vxWorks.h, taskLib.h, … are included without a guard … add shims: [vxworks]` | `shims: [vxworks]` in the manifest, and regenerate: the VxWorks API shim builds that code unchanged (`docs/vxworks-shim.md`). If the user would rather the simulation left it out, propose a `#ifndef WSTS_SIM` guard in flight |
 | `module M links '${SDK}/…': … not set in the simulated build` | `cmake.stub_variants: [M]` when the warning says a stub variant exists; otherwise the options it lists ([decisions §9](decisions.md#9-what-does-not-build-on-the-host)) |
 | `X cycles the flight rate groups … and is kept` | A project tick surrogate ([decisions §6](decisions.md#6-ticks-and-time)). Without one, nothing scheduled runs |
 | `time comes from X, a project component that is kept` | Substitute it if it reads a hardware clock |
@@ -120,7 +121,8 @@ carried over from flight); `--fresh` always regenerates.
 | Symptom | Fix |
 |---|---|
 | `'memcpy'/'strlen'/'std::…' was not declared`, `incomplete type std::…` in flight or library code | The flight compiler's headers included it indirectly: `cmake.cxx_flags: {<module dir>: ["-include cstring"]}` (or `<cstdint>`, `<functional>`…), for the module named in the path, or `["…"]` for all |
-| `vxWorks.h`, `sysLib.h`, a board header: `No such file` from a project component | The component is OS- or board-specific. Substitute its instances (a project surrogate), stand in for the header (`host/include`), or ask the user to guard the code with `#ifndef WSTS_SIM` in flight |
+| `vxWorks.h`, `taskLib.h`, `semLib.h`, `sysLib.h`: `No such file` from a project component | Code that calls the VxWorks kernel: `shims: [vxworks]` in the manifest (`docs/vxworks-shim.md`), then regenerate. `generate` names the key in a warning |
+| A VxWorks call the shim does not have (`sioLib`, `taskCpuAffinitySet`, a BSP function), or a board header: `No such file` or an undeclared name | The component is OS- or board-specific beyond the shim. Substitute its instances (a project surrogate), stand in for the header (`host/include`), or ask the user to guard the code with `#ifndef WSTS_SIM` in flight |
 | Errors in a `…Topology.cpp` naming a driver type or enumerator | The generated aliases (`WstsCompat.hpp`, `wsts-include/`) should cover replaced drivers. If one is missing, a catalog or manifest entry's `compat:` can declare it (see `catalog/wsts-catalog.yaml`, SPI). Report it to the user as a possible toolkit gap |
 | `undefined reference` to functions of a module built from its stub variant | The stub is not enough (the generate report, "Modules that change under BUILD_TESTING", says what it lacks). Use a stand-in module of the simulation, or substitute the instance |
 | `undefined reference` to a plain C++ library of the project | Its directory has no FPP model: `cmake.extra_subdirectories: [<dir>]`, and `cmake.depends` if the topology needs it |

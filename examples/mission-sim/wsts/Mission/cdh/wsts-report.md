@@ -43,8 +43,8 @@ F´ components that the simulation adds to the topology. They are not in the fli
 
 **Scheduling:**
 
-- `SensorSim.sensorSim.schedIn` is driven by `Cdh.rateGroup1Hz.RateGroupMemberOut[5]`
-- `SensorSim.txBuffers.schedIn` is driven by `Cdh.rateGroup1Hz.RateGroupMemberOut[6]`
+- `SensorSim.sensorSim.schedIn` is driven by `Cdh.rateGroup1Hz.RateGroupMemberOut[6]`
+- `SensorSim.txBuffers.schedIn` is driven by `Cdh.rateGroup1Hz.RateGroupMemberOut[7]`
 
 **Clocks** (cycle sources with a rate of their own, in simulated time; they stop while the simulation is paused):
 
@@ -52,15 +52,15 @@ F´ components that the simulation adds to the topology. They are not in the fli
 
 **Connections added** (flight connections keep their port numbers):
 
-- `rateGroup1Hz.RateGroupMemberOut[5] -> SensorSim.Simulator.schedIn` (port number chosen by the generator)
-- `rateGroup1Hz.RateGroupMemberOut[6] -> SensorSim.txBuffers.schedIn` (port number chosen by the generator)
+- `rateGroup1Hz.RateGroupMemberOut[6] -> SensorSim.Simulator.schedIn` (port number chosen by the generator)
+- `rateGroup1Hz.RateGroupMemberOut[7] -> SensorSim.txBuffers.schedIn` (port number chosen by the generator)
 
 **Health:** `SensorSim.prmDb` have ping ports and are not pinged. Ping ports are numbered over every instance the health pattern reaches, and the flight ping table is indexed by that number, so the pattern is limited to the flight instances (listed explicitly in the patched topology). To have a simulator pinged, the project's ping table needs an entry for it.
 
 **Capacity used by the simulated topology:**
 
-- Command registration ports: 10 of 30 (`CmdDispatcherComponentCommandPorts`)
-- Opcodes: 44 of 80 (`CMD_DISPATCHER_DISPATCH_TABLE_SIZE` in `../../../config/CommandDispatcherImplCfg.hpp`)
+- Command registration ports: 11 of 30 (`CmdDispatcherComponentCommandPorts`)
+- Opcodes: 45 of 80 (`CMD_DISPATCHER_DISPATCH_TABLE_SIZE` in `../../../config/CommandDispatcherImplCfg.hpp`)
 - Parameters: 1 of 25 (`PRMDB_NUM_DB_ENTRIES` in `../../../../../lib/fprime/default/config/PrmDbImplCfg.hpp`)
 
 ## Device models
@@ -261,6 +261,12 @@ Modules of this build whose `CMakeLists.txt` does something else when `BUILD_TES
 From `cmake.cxx_flags` in the manifest, for C++ sources.
 
 - all modules: `-include cstring`
+
+## Operating system shims
+
+From `shims` in the manifest. Project code includes the API's headers and calls it unchanged; the toolkit implements it on the host, in simulated time (`docs/vxworks-shim.md` of fprime-wsts).
+
+- `vxworks`: headers from `Wsts/VxWorks/include`, after every module's own; `Wsts_VxWorks` linked whole into the deployment
 
 ## What the build takes from the host
 

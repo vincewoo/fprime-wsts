@@ -94,9 +94,15 @@ main:
   stop: cdhStop()
 ```
 
-Code that includes the target OS's headers must be guarded in the flight source
-(`#ifndef WSTS_SIM` or `#ifdef TGT_OS_TYPE_VXWORKS`). That is a change to the flight project,
-so propose it to the user and do not make it yourself. See `docs/vxworks-conversion.md`.
+Code that calls the VxWorks kernel (`taskSpawn`, `semTake`, `msgQSend`, `wdStart`,
+`sysClkRateGet`, `tickGet`, `logMsg`) needs no flight change: `shims: [vxworks]` in the
+manifest compiles it unchanged against the toolkit's VxWorks API shim, which runs it in
+simulated time (`docs/vxworks-shim.md`). `generate` warns, naming the key, when a module
+includes one of its headers without a guard. Other code that includes the target OS's
+headers (what the shim does not provide: `sioLib`, BSP calls, RTP calls) must be guarded in
+the flight source (`#ifndef WSTS_SIM` or `#ifdef TGT_OS_TYPE_VXWORKS`), or its component
+substituted. A guard is a change to the flight project, so propose it to the user and do not
+make it yourself. See `docs/vxworks-conversion.md`.
 
 ## 5. Hardware instances
 

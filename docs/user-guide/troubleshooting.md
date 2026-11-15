@@ -69,7 +69,8 @@ Each fix belongs in one of three places:
 | Symptom | Fix |
 |---|---|
 | `'memcpy'` (or `strlen`, `std::…`) `was not declared` in flight or library code | The flight compiler's headers included it indirectly: `cmake.cxx_flags: {<module>: ["-include cstring"]}` |
-| `vxWorks.h` or a board header: `No such file` from a project component | The component is OS-specific: substitute its instances, stand in for the header, or guard the code with `#ifndef WSTS_SIM` |
+| `vxWorks.h`, `taskLib.h`, `semLib.h`: `No such file` from a project component | Code that calls the VxWorks kernel: add `shims: [vxworks]` to the manifest ([VxWorks API shim](../vxworks-shim.md)) and regenerate |
+| A board header, or a VxWorks call the shim does not have: `No such file` or an undeclared name | The component is OS- or board-specific: substitute its instances, stand in for the header, or guard the code with `#ifndef WSTS_SIM` |
 | Errors in topology code naming a driver type or enumerator | A catalog or manifest entry's `compat:` can declare it (see the SPI entry of `catalog/wsts-catalog.yaml`) |
 | `undefined reference` into a module built from its stub variant | The stub is not enough (the report says what it lacks): a stand-in module, or substitute the instance |
 | `undefined reference` to a plain C++ library of the project | `cmake.extra_subdirectories: [<dir>]`, and `cmake.depends` if the topology needs it |

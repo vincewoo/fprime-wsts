@@ -24,6 +24,7 @@ names no drivers.
 | Flight code including a replaced driver's header | A stand-in header at the same include path |
 | Toolchain build options (`FPRIME_PLATFORM=VxWorks`, …) | Not carried over (reported) |
 | Simple values in the flight root `CMakeLists.txt` | Carried over; the rest reported with the key to use |
+| Flight code that calls the VxWorks kernel without guards | `shims: [vxworks]` ([below](#code-that-calls-the-vxworks-kernel)) |
 
 ## What you write
 
@@ -44,6 +45,23 @@ main:
 
 That is all the Cdh conversion needs; the rest of `cdh.yaml` adds its simulators.
 
+### Code that calls the VxWorks kernel
+
+Flight code that spawns tasks, takes semaphores, sends messages or starts watchdogs
+compiles and runs unchanged with one line:
+
+```yaml title="cdh.yaml"
+shims: [vxworks]
+```
+
+The toolkit's [VxWorks API shim](../vxworks-shim.md) provides `vxWorks.h`, `taskLib.h`,
+`semLib.h`, `msgQLib.h`, `wdLib.h`, `sysLib.h`, `tickLib.h`, `intLib.h`, `logLib.h`,
+`errnoLib.h` and `ioLib.h`, and implements them on the host. Delays, time-outs and
+watchdogs follow simulated time, so they stop while the simulation is paused. In stepped
+time the tasks take their turn with flight software's own, and a tick waits for the tasks
+it wakes. The example's `Cdh/Heartbeat` is such code. Without the key, `generate` warns
+when a module includes one of these headers without a guard, and names it.
+
 ### Host bridges
 
 The target's toolchain and sysroot supply things that a workstation lacks. Each has a
@@ -60,10 +78,10 @@ manifest key, and `fprime-wsts check-host` lists them before you build
 
 ## What you still deal with
 
-- **Code that includes the target OS's headers.** Guard it with
+- **Code that includes the target OS's headers** and calls more than the
+  [VxWorks API shim](#code-that-calls-the-vxworks-kernel) provides. Guard it with
   `#ifdef TGT_OS_TYPE_VXWORKS` or `#ifndef WSTS_SIM` (defined in every simulated build),
-  or replace the component with a surrogate. A POSIX-backed VxWorks API shim is planned,
-  not built.
+  or replace the component with a surrogate.
 - **A project component that drives the rate groups or supplies time from hardware.** It
   builds on Linux and is kept, but its interrupt never arrives. `generate` warns; write a
   [project timer surrogate](surrogates.md#a-project-timer), or model its registers.

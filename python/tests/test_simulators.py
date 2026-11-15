@@ -63,7 +63,7 @@ def analyze_overlay(out: Path, tmp: Path, sim_project: Path = SIM) -> fpp.Topolo
     originals = {FLIGHT / "lib" / "sensor-lib" / c.relative_to(out) for c in copies}
     top = sorted((out / "Cdh" / "Top").glob("*.fpp"))
     candidates = [c for c in fpp.select_candidates(fpp.find_fpp_files(roots), settings.framework_path, overrides)
-                  if FLIGHT / "Cdh" not in c.parents and c not in originals]
+                  if FLIGHT / "Cdh" / "Top" not in c.parents and c not in originals]
     fpp.locate_defs(tmp, candidates + copies)
     return fpp.analyze(tmp, fpp.depend(tmp, top) + top).topologies["Cdh.Cdh"]
 
@@ -135,8 +135,8 @@ def test_added_instances_are_in_the_patched_topology(default):
     topology = (default.output / "Cdh" / "Top" / "topology.fpp").read_text()
     flight = (FLIGHT / "Cdh" / "Top" / "topology.fpp").read_text()
     assert "    instance SensorSim.Simulator\n" in topology
-    assert "      rateGroup1Hz.RateGroupMemberOut[5] -> SensorSim.Simulator.schedIn\n" in topology
-    assert "      rateGroup1Hz.RateGroupMemberOut[6] -> SensorSim.txBuffers.schedIn\n" in topology
+    assert "      rateGroup1Hz.RateGroupMemberOut[6] -> SensorSim.Simulator.schedIn\n" in topology
+    assert "      rateGroup1Hz.RateGroupMemberOut[7] -> SensorSim.txBuffers.schedIn\n" in topology
     # After everything the flight topology has, and every flight connection as written
     assert topology.index("instance SensorSim.Simulator") > topology.index("connections ComCcsds_CdhCore")
     for line in flight.splitlines():
@@ -171,7 +171,7 @@ def test_flight_numbering_is_unchanged(default, tmp_path):
         ("CdhCore.health", 4, "CdhCore.tlmSend")}
     assert numbers(before, "RateGroupMemberOut") < numbers(after, "RateGroupMemberOut")
     assert numbers(after, "RateGroupMemberOut") - numbers(before, "RateGroupMemberOut") == {
-        ("Cdh.rateGroup1Hz", 5, "SensorSim.sensorSim"), ("Cdh.rateGroup1Hz", 6, "SensorSim.txBuffers"),
+        ("Cdh.rateGroup1Hz", 6, "SensorSim.sensorSim"), ("Cdh.rateGroup1Hz", 7, "SensorSim.txBuffers"),
         ("SensorSim.fastGroup", 0, "SensorSim.gyroSim")}, "the simulation's own rate group, and two flight ports"
     # Everything else the flight topology connects explicitly (pattern-made command,
     # event and telemetry connections aside) is where it was
@@ -207,8 +207,8 @@ def test_simulator_items_are_reported(default):
     assert simulators["devices"] == [{"instance": "SensorSim.sensorPort", "component": "Wsts.BusByteStreamDevice",
                                       "endpoint": "uart", "kind": "bytestream"}]
     assert simulators["scheduling"] == [
-        {"instance": "SensorSim.sensorSim", "port": "schedIn", "driven_by": "Cdh.rateGroup1Hz.RateGroupMemberOut[5]"},
-        {"instance": "SensorSim.txBuffers", "port": "schedIn", "driven_by": "Cdh.rateGroup1Hz.RateGroupMemberOut[6]"},
+        {"instance": "SensorSim.sensorSim", "port": "schedIn", "driven_by": "Cdh.rateGroup1Hz.RateGroupMemberOut[6]"},
+        {"instance": "SensorSim.txBuffers", "port": "schedIn", "driven_by": "Cdh.rateGroup1Hz.RateGroupMemberOut[7]"},
     ]
     assert simulators["health"]["not_pinged"] == ["SensorSim.prmDb"]
     added = report["dictionary"]["added_by_simulators"]

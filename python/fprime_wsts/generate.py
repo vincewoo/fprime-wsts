@@ -17,7 +17,7 @@ import shutil
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 from . import flight_cmake
 from . import fpp
@@ -26,7 +26,7 @@ from . import hostwait
 from . import registers
 from . import simulators as sims
 from .fpp import WstsError
-from .manifest import ALL_MODULES, DEFAULT_CATALOG, TOOLKIT_ROOT, LinkEnd, Manifest, ModelSpec, Surrogate, load_catalog
+from .manifest import ALL_MODULES, DEFAULT_CATALOG, SHIMS, TOOLKIT_ROOT, LinkEnd, Manifest, ModelSpec, Surrogate, load_catalog
 
 SETUP_COMPONENT = "Wsts.SimSetup"
 CONTROL_COMPONENT = "Wsts.SimControl"
@@ -225,7 +225,7 @@ def _check_tick_sources(plan: Plan, model: fpp.Model, framework: Optional[Path],
 
 
 def waits_on_host(plan: Plan, model: fpp.Model, topology: fpp.Topology, owner, framework: Path,
-                  sim_roots: List[Path], stub_dirs: List[Path]) -> List[hostwait.Entry]:
+                  sim_roots: List[Path], stub_dirs: List[Path], shims: Iterable[str] = ()) -> List[hostwait.Entry]:
     """The modules of the simulated build that run flight-style handlers, and what in their
     sources waits on the host: the kept components of the topology, the simulation
     project's surrogates and its simulators. Framework components by what is known of them;
@@ -264,7 +264,7 @@ def waits_on_host(plan: Plan, model: fpp.Model, topology: fpp.Topology, owner, f
     for item in plan.sim.added:
         add("simulator", item.component, item.name)
     entries = [hostwait.Entry(role, sorted(components), sorted(instances), directory,
-                              hostwait.scan_module(directory, directory in stub_dirs))
+                              hostwait.scan_module(directory, directory in stub_dirs, shims))
                for (role, directory), (components, instances) in users.items()]
     entries += [hostwait.Entry("framework", [component], sorted(instances), known=hostwait.FRAMEWORK[component])
                 for component, instances in known.items()]
@@ -1265,6 +1265,8 @@ def alias_declaration(sub: PlannedSubstitution) -> str:
 #: Where the overlay keeps headers that stand in for those of replaced flight drivers. It is
 #: the first include directory of the simulated build.
 STANDIN_DIR = "wsts-include"
+#: Include directory of each operating system shim (`shims` in the manifest)
+SHIM_INCLUDE = {name: TOOLKIT_ROOT / directory / "include" for name, directory in SHIMS.items()}
 #: Defined for a flight driver's own module where that module is still part of the build
 FLIGHT_DRIVER_MACRO = "WSTS_FLIGHT_DRIVER_BUILD"
 
@@ -2107,6 +2109,13 @@ def render_report(report: dict) -> str:
         lines += ["", "## Compiler flags of the simulation", "", "From `cmake.cxx_flags` in the manifest, for C++ sources.", ""]
         for where, flags in report["cxx_flags"].items():
             lines.append(f"- {where if where == 'all modules' else '`' + where + '`'}: " + ", ".join(f"`{f}`" for f in flags))
+    if report.get("shims"):
+        lines += ["", "## Operating system shims", "",
+                  "From `shims` in the manifest. Project code includes the API's headers and calls it unchanged; "
+                  "the toolkit implements it on the host, in simulated time (`docs/vxworks-shim.md` of fprime-wsts).", ""]
+        for shim in report["shims"]:
+            lines.append(f"- `{shim}`: headers from `{SHIMS[shim]}/include`, after every module's own; "
+                         f"`Wsts_{SHIMS[shim].rsplit('/', 1)[-1]}` linked whole into the deployment")
     if report.get("host_requirements"):
         host = report["host_requirements"]
         lines += ["", "## What the build takes from the host", "",
@@ -2873,6 +2882,10 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         "        Wsts_Os_RawTime",
         "        Wsts_Os_Task",
         ")",
+        *(["# The VxWorks API shim (`shims` in the manifest), whole: any module may call it, whatever the",
+           "# order in which the static libraries are linked",
+           'target_link_libraries(${FPRIME_CURRENT_MODULE} PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,Wsts_VxWorks>")']
+          if "vxworks" in manifest.shims else []),
         "",
     ]
     (out_deployment / "CMakeLists.txt").write_text("\n".join(deployment_cmake))
@@ -2987,6 +3000,10 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         f"add_compile_definitions({' '.join(defines)})",
         *(["# Carried over from the flight project's CMakeLists.txt",
            f"add_compile_definitions({' '.join(flight_root.defines_early)})"] if flight_root.defines_early else []),
+        *(["# The VxWorks API shim (`shims` in the manifest): vxWorks.h, taskLib.h, ... for every module,",
+           "# found after the directories of the build's own",
+           f'include_directories(AFTER "${{CMAKE_CURRENT_LIST_DIR}}/{rel(SHIM_INCLUDE["vxworks"])}")']
+          if "vxworks" in manifest.shims else []),
         *(["# Headers that stand in for those of replaced flight drivers: found before the originals",
            f'include_directories(BEFORE "${{CMAKE_CURRENT_LIST_DIR}}/{STANDIN_DIR}")'] if standin_files else []),
         *(["# From `cmake.cxx_flags` in the manifest: for every C++ source of this build",
@@ -3079,7 +3096,7 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         report["excluded_modules"] = [rel(d) for d in skipped_dirs]
     # ---- Code that waits on the host: what may keep stepped time from working ----
     waiting = hostwait.describe(
-        waits_on_host(plan, model, topology, owner, settings.framework_path, sim_roots, stub_dirs), rel)
+        waits_on_host(plan, model, topology, owner, settings.framework_path, sim_roots, stub_dirs, manifest.shims), rel)
     report["time"]["waits_on_host"] = waiting
     if manifest.time_mode == "stepped":
         plan.warnings += [hostwait.warning(item) for item in waiting if item["effect"] != "slower"]
@@ -3190,7 +3207,10 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
     index = hostcheck.HeaderIndex(
         [project_root, *[l for l in flight_libraries if l in kept_libraries], *sim_roots, settings.framework_path, TOOLKIT_ROOT],
         walked=[project_root, *[l for l in flight_libraries if l in kept_libraries], *sim_roots],
-        fixed=[settings.framework_path, TOOLKIT_ROOT / "Wsts"])
+        fixed=[settings.framework_path, TOOLKIT_ROOT / "Wsts"],
+        # A shim's headers are there for the deployments that use it, and for no other
+        exclude=[path for name, path in SHIM_INCLUDE.items() if name not in manifest.shims],
+        extra_roots=[SHIM_INCLUDE[name] for name in manifest.shims])
     defined = {d.split("=", 1)[0] for d in [*manifest.defines, *flight_root.defines_early, *flight_root.defines_late]}
     compiler = hostcheck.flight_compiler(
         settings.default_toolchain, [project_root, *flight_libraries, settings.framework_path], rel)
@@ -3220,6 +3240,20 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         "ignore": manifest.host_ignore,
         **({"not_read": unread_roots} if unread_roots else {}),
     }
+    # Headers of an operating system API the toolkit has a shim for, without the shim
+    for shim in sorted({hostcheck.shim_headers()[name] for name in report["host_requirements"]["system_headers"]
+                        if name in hostcheck.shim_headers()}):
+        needed = {name: needs for name, needs in report["host_requirements"]["system_headers"].items()
+                  if hostcheck.shim_headers().get(name) == shim and any("condition" not in n for n in needs)}
+        if needed:
+            first = next(n for n in next(iter(needed.values())) if "condition" not in n)
+            plan.warnings.append(
+                f"{', '.join(sorted(needed))} {'is' if len(needed) == 1 else 'are'} included without a guard "
+                f"(first in {first['file']}:{first['line']}, module {first['module']}). The toolkit has a shim of the "
+                f"{shim} API that provides {'it' if len(needed) == 1 else 'them'} on the host: add\n  shims: [{shim}]\n"
+                f"to the manifest (docs/vxworks-shim.md), or guard the include with #ifndef WSTS_SIM.")
+    if manifest.shims:
+        report["shims"] = manifest.shims
     report["warnings"] = plan.warnings
     report["dropped_cmake_options"] = dropped_options
     if sim_root is not None:

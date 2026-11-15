@@ -29,6 +29,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tupl
 
 from . import flight_cmake
 from .fpp import GENERATED_MARKER, WstsError
+from .manifest import SHIMS, TOOLKIT_ROOT
 
 HOST_FILE = "wsts-host"  # wsts-host.json and wsts-host.md, beside the report; not checked in
 
@@ -52,6 +53,16 @@ UNDEFINED = {"_WIN32", "WIN32", "_WIN64", "__WIN32__", "__CYGWIN__", "__MINGW32_
              "__MACH__", "__VXWORKS__", "__vxworks", "VXWORKS", "_WRS_KERNEL", "__RTP__", "__QNX__", "__QNXNTO__",
              "__ZEPHYR__", "ARDUINO", "__rtems__", "__FreeBSD__", "__ANDROID__", "BUILD_UT", "__has_include"}
 UNDEFINED_PATTERN = re.compile(r"TGT_OS_TYPE_(?!LINUX\b)\w+")
+
+def shim_headers() -> Dict[str, str]:
+    """Header -> the operating system shim (`shims` in the manifest) that has it"""
+    found: Dict[str, str] = {}
+    for name, directory in SHIMS.items():
+        include = TOOLKIT_ROOT / directory / "include"
+        if include.is_dir():
+            found.update({header.name: name for header in include.iterdir() if header.suffix == ".h"})
+    return found
+
 
 #: Usual development package of well-known headers and libraries, on Debian and Ubuntu.
 #: A hint only: names differ between distributions and releases.
@@ -117,17 +128,23 @@ class HeaderIndex:
     build would: relative to the including file, relative to a build root, or under any
     directory of a root (a module may export an include directory of its own)."""
 
-    def __init__(self, roots: Sequence[Path], walked: Sequence[Path] = (), fixed: Sequence[Path] = ()):
+    def __init__(self, roots: Sequence[Path], walked: Sequence[Path] = (), fixed: Sequence[Path] = (),
+                 exclude: Sequence[Path] = (), extra_roots: Sequence[Path] = ()):
         """`roots` are the directories includes are written relative to. Headers anywhere
         below `walked` and `fixed` are found by the end of their path; `fixed` trees do not
-        change while the generator runs and are read once."""
-        self.roots = list(roots)
+        change while the generator runs and are read once. Headers below `exclude` are not
+        found that way (an operating system shim the deployment does not use); those of
+        `extra_roots` are found as roots' are (one it does use)."""
+        self.roots = [*roots, *extra_roots]
         everything = {*walked, *fixed}
+        hidden = tuple(path.as_posix() + "/" for path in [*exclude, *extra_roots])
         self.index: Dict[str, List[str]] = {}
         for directory in dict.fromkeys([*walked, *fixed]):
             found = _fixed_index(directory) if directory in fixed else _walk_headers(directory, everything - {directory})
             for name, paths in found.items():
-                self.index.setdefault(name, []).extend(paths)
+                kept = [path for path in paths if not path.startswith(hidden)]
+                if kept:
+                    self.index.setdefault(name, []).extend(kept)
 
     def find(self, name: str, including: Path) -> Optional[Path]:
         beside = including.parent / name
@@ -487,7 +504,10 @@ def probe(requirements: dict, base: Path, env: Optional[Dict[str, str]] = None) 
                 continue
             needs = headers[name]
             hint = _hint(HEADER_HINTS, name)
+            shim = shim_headers().get(name)
             add("header", name, needs, [
+                *([f"shims: [{shim}] in the manifest: the toolkit's {shim} API shim has it, and implements what it "
+                   "declares on the host"] if shim else []),
                 *([f"install the package that has it (usually {hint}; a hint, names differ between distributions)"]
                   if hint else ["install the development package that has it"]),
                 "point the build at the directory that has it: include_directories(<dir>) in a file named under "

@@ -175,6 +175,9 @@ Os::QueueInterface::Status CountedQueue::receive(U8* destination,
     if (blockType == BlockingType::BLOCKING) {
         thread_local TaskEnd taskEnd;
         (void)taskEnd;
+        // What was handed to this task meanwhile (a VxWorks semaphore its handler took) is
+        // finished too, now that it waits for its next message
+        Activity::get().releaseHeld();
         // A task between two messages. While flight code runs one at a time (stepped time)
         // it gives up its turn and waits until there is a message and the turn is its own
         // again; tasks take their turns in the order their queues were created.

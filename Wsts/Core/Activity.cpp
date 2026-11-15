@@ -10,6 +10,48 @@ namespace Wsts {
 
 namespace {
 thread_local std::uint64_t t_scopes = 0;  // scopes this thread holds
+thread_local std::uint64_t t_rank = Activity::SIMULATION_RANK;  // rank this thread last took the turn with
+
+// Pieces of work handed to this thread (hold()). A thread that ends while it holds some
+// gives them up: nothing else would.
+struct Held {
+    std::uint64_t count = 0;
+    ~Held() {
+        while (count > 0) {
+            count--;
+            Activity::get().end();
+        }
+    }
+};
+thread_local Held t_held;
+thread_local bool t_task = false;  // a task of flight software, which holds what it is handed
+}  // namespace
+
+std::uint64_t Activity::rank() const {
+    return t_rank;
+}
+
+void Activity::hold() {
+    if (t_task) {
+        t_held.count++;
+    } else {
+        this->end();
+    }
+}
+
+void Activity::setTaskThread() {
+    t_task = true;
+}
+
+void Activity::releaseHeld() {
+    while (t_held.count > 0) {
+        t_held.count--;
+        this->end();
+    }
+}
+
+std::uint64_t Activity::held() const {
+    return t_held.count;
 }
 
 Activity& Activity::get() {
@@ -189,6 +231,7 @@ bool Activity::enter(std::uint64_t rank) {
     }
     m_owner = std::this_thread::get_id();
     m_depth = 1;
+    t_rank = rank;
     return true;
 }
 
@@ -236,6 +279,7 @@ bool Activity::awaitTurn(std::uint64_t rank, const Ready& ready) {
     }
     m_owner = std::this_thread::get_id();
     m_depth = 1;
+    t_rank = rank;
     return true;
 }
 

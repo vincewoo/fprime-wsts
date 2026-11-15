@@ -53,7 +53,7 @@ def two_uarts(tmp_path):
     (top / "topology.fpp").write_text(
         topology.replace("    instance vxTimer\n", "    instance vxTimer\n    instance uart\n")
         .replace("    connections Communications {",
-                 "    connections SecondUart {\n      rateGroup1Hz.RateGroupMemberOut[5] -> uart.run\n    }\n\n"
+                 "    connections SecondUart {\n      rateGroup10Hz.RateGroupMemberOut[4] -> uart.run\n    }\n\n"
                  "    connections Communications {"))
     return project
 
@@ -198,7 +198,7 @@ def test_original_subtopology_is_not_in_the_patched_model(default, tmp_path):
     original = MISSION / "lib/sensor-lib/SensorLib/SensorLink/SensorLink.fpp"
     top = sorted((out / "Cdh" / "Top").glob("*.fpp"))
     candidates = [c for c in fpp.select_candidates(fpp.find_fpp_files(roots), settings.framework_path, overrides)
-                  if MISSION / "Cdh" not in c.parents]
+                  if MISSION / "Cdh" / "Top" not in c.parents]
     copy = out / "SensorLib" / "SensorLink" / "SensorLink.fpp"
     fpp.locate_defs(tmp_path, [c for c in candidates if c != original] + [copy])
     closure = fpp.depend(tmp_path, top)
@@ -474,6 +474,6 @@ def test_subtopology_inside_the_flight_project(tmp_path):
     # The project module is still added from the flight project, and redirected to the
     # copy; the module that overrides its configuration comes after it
     names = [line.split("/")[-1].rstrip('")') for line in added]
-    assert sorted(names) == ["Cdh", "SensorLink", "SerialSensor", "project"]
+    assert sorted(names) == ["Cdh", "Heartbeat", "SensorLink", "SerialSensor", "project"]
     assert names.index("project") > names.index("SensorLink")
     assert 'add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/SensorLib/SensorLink")' in added

@@ -121,6 +121,13 @@ FRAMEWORK: Dict[str, Tuple[str, str]] = {
 
 SOURCE_FILES = (*flight_cmake.SOURCE_SUFFIXES, *flight_cmake.HEADER_SUFFIXES)
 
+#: Calls of an operating system API that its shim (`shims` in the manifest) implements on
+#: the simulation's terms: simulated time, the turn, the count of work. With the shim, they
+#: do not wait on the host.
+SHIMMED: Dict[str, Tuple[str, ...]] = {
+    "vxworks": ("taskDelay", "tickGet", "taskSpawn", "semTake", "msgQReceive"),
+}
+
 
 @dataclass
 class Finding:
@@ -194,10 +201,13 @@ def module_files(directory: Path, testing: bool = False) -> List[Path]:
     return list(dict.fromkeys(files))
 
 
-def scan_module(directory: Path, testing: bool = False) -> List[Finding]:
+def scan_module(directory: Path, testing: bool = False, shims: Iterable[str] = ()) -> List[Finding]:
+    """What one module does that waits on the host. Calls that a shim the deployment uses
+    implements in simulated time (`SHIMMED`) are not counted."""
+    handled = {call for shim in shims for call in SHIMMED.get(shim, ())}
     found = []
     for file in module_files(directory, testing):
-        found += scan_text(file.read_text(errors="replace"), file)
+        found += [f for f in scan_text(file.read_text(errors="replace"), file) if f.call not in handled]
     return found
 
 

@@ -139,6 +139,7 @@ nav:
       - Systems: systems.md
       - Surrogates and Device Models: surrogate-guide.md
       - Converting Other Targets: vxworks-conversion.md
+      - VxWorks API Shim: vxworks-shim.md
 
 validation:
   omitted_files: warn

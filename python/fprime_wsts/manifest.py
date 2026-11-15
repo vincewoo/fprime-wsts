@@ -292,6 +292,8 @@ class Manifest:
     drop_libraries: List[str] = field(default_factory=list)
     fpp_exclude: List[str] = field(default_factory=list)
     defines: List[str] = field(default_factory=list)
+    # Operating system APIs implemented for project code (SHIMS): "vxworks"
+    shims: List[str] = field(default_factory=list)
     # Set when the deployment is generated as one element of a system (see system.py)
     system: Optional[str] = None
     element: Optional[str] = None
@@ -326,8 +328,10 @@ class Manifest:
 KNOWN_KEYS = {
     "project", "deployment", "topology", "output", "substitute", "keep", "models", "control", "bridge", "tick_hz",
     "catalogs", "sources", "main", "cmake", "libraries", "fpp_exclude", "defines", "simulators", "devices",
-    "clocks", "run", "host", "setup", "time",
+    "clocks", "run", "host", "setup", "time", "shims",
 }
+#: Operating system APIs the toolkit implements for project code that calls them (`shims`)
+SHIMS = {"vxworks": "Wsts/VxWorks"}
 TIME_KEYS = {"mode", "epoch"}
 #: How a manifest may write the two ways simulated time advances, and how the report does
 TIME_MODES = {"realtime": "real-time", "real-time": "real-time", "stepped": "stepped"}
@@ -469,6 +473,13 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
     manifest.catalogs = [str(c) for c in data.get("catalogs", [])]
     manifest.fpp_exclude = [str(g) for g in data.get("fpp_exclude", [])]
     manifest.defines = [str(d) for d in data.get("defines", [])]
+    shims = data.get("shims") or []
+    if not isinstance(shims, list) or not all(isinstance(name, str) for name in shims):
+        raise WstsError(f"{where}: shims must be a list of operating system APIs: {', '.join(sorted(SHIMS))}")
+    unknown = [name for name in shims if name.strip().lower() not in SHIMS]
+    if unknown:
+        raise WstsError(f"{where}: shims: no shim for {', '.join(unknown)}; there is one for: {', '.join(sorted(SHIMS))}")
+    manifest.shims = list(dict.fromkeys(name.strip().lower() for name in shims))
 
     for entry in data.get("substitute", []):
         if "with" not in entry or ("instance" not in entry and "component" not in entry):
