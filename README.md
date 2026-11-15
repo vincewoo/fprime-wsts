@@ -306,8 +306,7 @@ Built against F´ v4.4.2. Working today: the surrogates and transform above, rea
 scaled simulation time, faults, scenarios, record/replay, the bridge, multi-element systems
 with byte stream links, substituting instances defined inside subtopologies, the example.
 Experimental: stepped time for a single deployment (`run --stepped`: ticks are taken as fast
-as flight software finishes them). Designed but not built yet: the rest of stepped time
-(simulated time stamps, byte-for-byte repeatable runs, lockstep across the elements of a
-system), GPIO links between elements, a POSIX-backed VxWorks API shim,
+as flight software finishes them, and two runs give the same recording byte for byte).
+Designed but not built yet: lockstep across the elements of a system, GPIO links between elements, a POSIX-backed VxWorks API shim,
 file-system path remapping. See
 [docs/design.md](docs/design.md#roadmap).

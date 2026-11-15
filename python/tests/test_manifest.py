@@ -137,3 +137,20 @@ def test_time_mode_of_a_manifest():
         parse_manifest({"deployment": "D", "time": {"mode": "fast"}})
     with pytest.raises(WstsError, match=r"time: unknown key\(s\): modes \(did you mean 'mode'\?\)"):
         parse_manifest({"deployment": "D", "time": {"modes": "stepped"}})
+
+
+def test_epoch_of_simulated_time():
+    import datetime
+
+    def epoch(value):
+        return parse_manifest({"deployment": "D", "time": {"mode": "stepped", "epoch": value}}).time_epoch
+
+    assert parse_manifest({"deployment": "D"}).time_epoch is None
+    assert epoch(1893456000) == 1893456000
+    assert epoch("2030-01-01T00:00:00Z") == 1893456000
+    assert epoch("2030-01-01T01:00:00+01:00") == 1893456000
+    assert epoch("2030-01-01") == 1893456000, "a date alone is midnight, UTC"
+    assert epoch(datetime.date(2030, 1, 1)) == 1893456000, "which YAML reads as a date"
+    for bad in ("next tuesday", 0, 2 ** 40):
+        with pytest.raises(WstsError, match="time.epoch"):
+            epoch(bad)

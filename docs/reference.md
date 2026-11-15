@@ -115,6 +115,8 @@ tick_hz: 10                      # only used when no tick source was substituted
 time:
   mode: realtime                 # or stepped: ticks are taken when flight software has finished the last one
                                  # (experimental; `fprime-wsts run --stepped` / `--realtime` choose per run)
+  epoch: 2030-01-01T00:00:00Z    # where simulated time starts in stepped time: a date and time (UTC unless it
+                                 # says otherwise) or seconds since 1970. Default 2000-01-01T00:00:00Z
 
 catalogs: [wsts-catalog.yaml]    # project surrogate catalogs, searched before the built-in one
 sources:
@@ -557,6 +559,7 @@ Built-in surrogates (`catalog/wsts-catalog.yaml`):
 | `Wsts.SimGpio` | `Drv.Gpio` (one pin per instance) | `Drv.LinuxGpioDriver` | |
 | `Wsts.SimRegister` | 32-bit and 64-bit register reads and writes, an interrupt output ([Register blocks](#register-blocks)) | nothing by itself: the manifest names a project's register interface component | `irq=serial\|direct\|off` |
 | `Wsts.SimTick` | `Drv.Tick` | `Svc.LinuxTimer`, `VxWorksSvc.VxWatchDogTimer` | `mode=block\|thread`, `tick_hz=<n>` |
+| `Wsts.SimTime` | `Svc.Time` (the time port; no bus endpoint) | `Svc.PosixTime`, `Svc.ChronoTime` | |
 
 Stock components that are not surrogates, for instances the simulation adds:
 `Wsts.BusByteStreamDevice` (the device on a byte stream endpoint, see `devices`) and
@@ -685,6 +688,7 @@ work up.
 | `WSTS_RECORD` | File to record to from start-up |
 | `WSTS_DIR` | Base directory for relative scenario and recording paths |
 | `WSTS_STEPPED` | `1`: stepped time; `0`: real time, whatever the manifest's `time.mode`. Set by `fprime-wsts run --stepped` / `--realtime` |
+| `WSTS_EPOCH` | Where simulated time starts, seconds since 1970, over the manifest's `time.epoch` |
 | `WSTS_STEP_LIMIT_MS` | Stepped time: wall-clock milliseconds a tick may take to finish before it is reported and the simulation pauses (default 10000) |
 | `WSTS_START_PAUSED` | `1`: start paused. `fprime-wsts run` sets it for a deployment with `run.models`, and resumes once they are attached |
 | any in `run.env` or `--env` | Set by `fprime-wsts run` and the pytest plugin for the simulator components' phase code |

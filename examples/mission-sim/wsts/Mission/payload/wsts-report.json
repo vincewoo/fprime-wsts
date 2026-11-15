@@ -50,6 +50,22 @@
   },
   "substitutions": [
     {
+      "instance": "Payload.posixTime",
+      "flight_component": "Svc.PosixTime",
+      "surrogate": "Wsts.SimTime",
+      "seam": "S1 topology",
+      "chosen_by": "catalog",
+      "endpoint": null,
+      "options": "",
+      "base_id": 536936448,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [],
+        "channels": [],
+        "params": []
+      }
+    },
+    {
       "instance": "Payload.linuxTimer",
       "flight_component": "Svc.LinuxTimer",
       "surrogate": "Wsts.SimTick",
@@ -365,6 +381,7 @@
   "fidelity_notes": [
     "Payload.fpgaRegs is a register interface component, replaced by WstsAdapted.SensorLib_RegisterInterface: the flight drivers that read and write registers through it run as in flight, against the model 'fpga' on endpoint 'fpgaRegs'. Register semantics are exactly what the model implements. Bus timing, caches, the order of accesses from several cores and accesses of other widths than 4 and 8 bytes are not reproduced. Interrupts are delivered on the thread that raises them (a model's is the simulation's tick thread), one at a time: the target's interrupt priorities, masking and nesting are not reproduced.",
     "DMA: a flight driver that allocates memory for hardware and writes its physical address into a register needs that address to mean something on the host. The toolkit cannot supply this: off the target, the flight libraries' virtual-to-physical translation has to go through the allocator's region (host base, physical base, size), and the model has to be given the same translation (Wsts::Dma, registered from 'setup' in the manifest). See docs/vxworks-conversion.md, 'Memory shared with hardware'.",
+    "Payload.posixTime is replaced by Wsts.SimTime, which has no bus endpoint: it talks to the flight components over their ports directly. Fault injection, recording, replay and the bridge do not reach that link.",
     "Operating system: flight OSAL implementations are replaced by the Linux/POSIX ones. Task priorities are advisory and scheduling is not real-time, so timing and preemption order differ from the target.",
     "Word size and byte order are those of the host; code that depends on the target's differs here.",
     "Surrogates replace drivers at their port interface: driver internals (register access, interrupt handling, device files) are not exercised.",
@@ -374,6 +391,14 @@
   "driver_headers": {
     "directory": "wsts-include",
     "components": [
+      {
+        "component": "Svc.PosixTime",
+        "surrogate": "Wsts.SimTime",
+        "headers": [
+          "Svc/PosixTime/PosixTime.hpp",
+          "Svc/PosixTime/PosixTimeComponentAc.hpp"
+        ]
+      },
       {
         "component": "Svc.LinuxTimer",
         "surrogate": "Wsts.SimTick",

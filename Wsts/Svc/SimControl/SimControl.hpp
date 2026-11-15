@@ -85,6 +85,7 @@ class SimControl final : public SimControlComponentBase {
     std::atomic<bool> m_notifyPending;
     std::chrono::steady_clock::time_point m_lastNotify;
     std::chrono::steady_clock::time_point m_lastTelemetry;
+    std::uint64_t m_lastTelemetrySim = 0;  //!< simulated time of the last telemetry, in stepped time
 };
 
 }  // namespace Wsts

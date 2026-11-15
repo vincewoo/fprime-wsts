@@ -528,6 +528,13 @@
             "stepped"
           ],
           "description": "realtime (default): ticks follow the wall clock. stepped: a tick is taken when flight software has finished the last one, as fast as the host computes"
+        },
+        "epoch": {
+          "type": [
+            "integer",
+            "string"
+          ],
+          "description": "Where simulated time starts in stepped time: seconds since 1970, or a date and time such as 2030-01-01T00:00:00Z (default 2000-01-01T00:00:00Z)"
         }
       }
     }

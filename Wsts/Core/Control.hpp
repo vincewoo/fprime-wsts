@@ -141,6 +141,7 @@ class Control : public BusObserver {
     // ticker do. Actions from outside (the bridge) run between two ticks, never inside one.
 
     using Clock = std::chrono::steady_clock;
+    static constexpr std::uint64_t DEFAULT_EPOCH = 946684800ull;  //!< 2000-01-01T00:00:00Z
     bool stepped() const { return m_stepped.load(); }
     void setStepped(bool stepped);
     //! For a tick source: wait until the next tick is due. `next` is the source's own
@@ -150,6 +151,13 @@ class Control : public BusObserver {
     //! For a tick source, after onTick() and after it has cycled flight software: in
     //! stepped time, wait until the work of the tick is finished.
     void finishTick();
+    //! Simulated time: the epoch plus the ticks taken so far, in nanoseconds
+    std::uint64_t simTimeNs() const;
+    //! Where simulated time starts, in seconds since 1970 (default: 2000-01-01T00:00:00Z)
+    void setEpoch(std::uint64_t seconds) { m_epochSeconds.store(seconds); }
+    std::uint64_t epoch() const { return m_epochSeconds.load(); }
+    //! The time flight software is given: simulated time in stepped time, else the host's clock
+    void flightTime(std::uint32_t& seconds, std::uint32_t& microseconds) const;
     //! Longest a tick may take to finish in stepped time before it is reported and the
     //! simulation pauses (wall-clock milliseconds)
     void setStepLimit(std::uint32_t milliseconds) { m_stepLimitMs.store(milliseconds); }
@@ -243,12 +251,20 @@ class Control : public BusObserver {
     void scenarioRun();
     void notifyListeners(bool paused);
     void grantClocks();
+    bool waitFinished(Clock::time_point limit);
+    struct PendingCycle {
+        std::uint64_t offsetNs;  //!< from the start of the tick
+        std::size_t order;       //!< of the clock, among the clocks
+        CycleClock* clock;
+    };
+    std::vector<PendingCycle> m_cycles;  //!< stepped time: granted by this tick, to issue (tick thread only)
 
     std::atomic<std::uint64_t> m_tick{0};
     std::atomic<bool> m_paused{false};
     std::atomic<bool> m_stepped{false};
     std::atomic<double> m_steppedRate{0.0};  //!< pace of stepped time against the wall clock; 0: as fast as it goes
     std::atomic<std::uint32_t> m_stepLimitMs{10000};
+    std::atomic<std::uint64_t> m_epochSeconds{DEFAULT_EPOCH};
     std::mutex m_gateMutex;  //!< the three below, and m_stuck
     std::condition_variable m_gate;
     bool m_tickOpen = false;       //!< a tick is being taken and has not finished

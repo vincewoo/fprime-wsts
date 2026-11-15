@@ -95,9 +95,15 @@ What to know:
   a surrogate, or the run real time.
 - `set_rate(1)` paces stepped time for someone watching a GDS; `set_rate(0)` removes the
   limit.
-- Time stamps of events and telemetry are still the host's, and telemetry of
-  `wstsControl` is still published once a wall-clock second. Two runs are the same tick
-  for tick, not yet byte for byte.
+- **Two runs are the same, byte for byte.** Flight software is given simulated time
+  (2000-01-01T00:00:00Z plus the ticks taken; `time: {epoch: …}` in the manifest moves
+  it), and its tasks run one at a time in a fixed order, so `--record` gives the same file
+  every time. That makes a recording something to compare against after a change.
+- The fixed order is not the flight scheduler's: tasks run in the order of their queues,
+  whatever their priorities, and none preempts another.
+- A project's own time component still gives the host's clock unless its surrogate asks
+  the simulation (`Wsts::Control::flightTime`); `Svc.PosixTime` and `Svc.ChronoTime` are
+  replaced for you.
 - A whole system is not stepped yet (`run --stepped` refuses one): step one element
   through its bridge.
 

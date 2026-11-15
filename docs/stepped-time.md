@@ -1,11 +1,12 @@
 # Stepped Time (design draft)
 
-**Status: phases 0 and 1 are built (stepped time is experimental), the rest is a proposal.** It is item 1 of the
+**Status: phases 0 to 2 are built (stepped time is experimental); reporting and lockstep
+for systems are a proposal.** It is item 1 of the
 [roadmap](design.md#roadmap). The choices under [What to decide](#what-to-decide) were
 settled as recommended. [Phase 0: what it showed](#phase-0-what-it-showed) has the results
 of the spike, and one correction to the design that came out of it;
-[Phase 1: what is built](#phase-1-what-is-built) says what stepped time does today and
-what it leaves to the later phases.
+[Phase 1](#phase-1-what-is-built) and [Phase 2](#phase-2-what-is-built) say what stepped
+time does today and what it leaves to the later phases.
 
 ## The problem
 
@@ -291,18 +292,45 @@ Measured on the example's Payload by itself: 600 simulated seconds (12,000 ticks
 of pieces of flight work and the same number of I2C, SPI and register transactions in two
 runs.
 
-Not yet, and why two such runs still differ byte for byte:
+After phase 1 two such runs still differed byte for byte: time stamps were the host's,
+`Wsts.SimControl` published by the wall clock, and tasks ran at once within a tick. Phase
+2 took those away.
 
-- **Time stamps are the host's.** Events and telemetry carry the wall clock (phase 2:
-  `Wsts_Os_RawTime`, `Wsts.SimTime`).
-- **`Wsts.SimControl` publishes telemetry once a wall-clock second**, so how many
-  telemetry packets a run sends depends on how long it took (phase 2).
-- **Tasks run at once within a tick**, as the host schedules them. Decision 2 (one task
-  at a time) needs `Wsts_Os_Task` and comes with phase 2, as does the serialised bus.
-- **`delay` faults and `Os::Task::delay` sleep on the wall clock** (phase 2).
+## Phase 2: what is built
+
+Two runs of one deployment in stepped time now give the same recording, byte for byte:
+every bus transaction and every packet of events and telemetry flight software sends,
+with its time stamp, in the same order. An end-to-end test runs each of the example's
+computers three times and compares the files.
+
+| | |
+|---|---|
+| Simulated time | `Control::simTimeNs()`: an epoch (2000-01-01T00:00:00Z, or `time.epoch` in the manifest) plus ticks times the tick period |
+| The time component | `Wsts.SimTime` replaces `Svc.PosixTime` and `Svc.ChronoTime` from the catalog: the host's clock in real time, simulated time in stepped time. A project's own time component needs a surrogate that asks `Control::flightTime()` (the example's Cdh has one) |
+| `Os::RawTime` | `Wsts_Os_RawTime`: the POSIX one in real time, simulated time in stepped time. Time stands still within a tick, so a rate group that times its cycle measures zero in every run |
+| One at a time | In stepped time flight code runs on one thread at a time (`Activity::enter()`, `awaitTurn()`). When the turn is free it goes to the ready contender of lowest rank: threads of the simulation (a tick, a delivery) first, then tasks that are starting, in the order they were started, then tasks at their queues, in the order the queues were created. A task gives up its turn and queues for the next in one step, so who runs next does not depend on how fast a thread comes back |
+| `Os::Task` | `Wsts_Os_Task`: the POSIX one; in stepped time a task takes the turn before its routine runs, so what it does before it first waits for a message is ordered too |
+| Start-up | From the start of the runtime to the first tick the tasks are held: the deployment's start-up code runs alone, and the tasks then begin together, in their order. If no tick is asked for within 5 s they are let go, and the log says so |
+| Clocks | No clock thread in stepped time: the stepper issues the cycles a tick grants itself, in the order of their instants, each when the one before is finished |
+| `Wsts.SimControl` | Told on every tick and after every action from outside; telemetry once a simulated second. An action's events (`SimPaused`, `FaultArmed`) are sent before the next tick |
+| Actions from outside | Applied when nothing is under way, not only between ticks: an action meets the same state in every run |
+
+What the order of tasks is **not**: the flight scheduler's. Tasks run in the order of
+their queues, whatever their priorities, and none preempts another.
+
+Not built, of what phase 2 listed:
+
+- **`Os::Task::delay` and `delay` faults still sleep on the wall clock.** They hold the
+  turn meanwhile, so the result is the same in every run, only slow.
+- **A handler that waits for another task** (a semaphore the other gives, a blocking
+  send to a full queue whose receiver must run) cannot be served one at a time. A
+  blocking send lets go of the turn while it waits; anything else ends as a tick that
+  does not finish, reported after `WSTS_STEP_LIMIT_MS`.
 - **What arrives from outside is not placed.** A ground command or bytes from another
   element land in whichever tick is being taken (ground link: by design; links: phase 4).
   `busy_ticks` counts the ticks that started while such a delivery was under way.
+- **Telemetry that reads the host** (`Svc.SystemResources`: processor and memory use)
+  differs between runs as it does between machines.
 
 ## Risks
 

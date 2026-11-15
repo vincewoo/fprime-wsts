@@ -36,7 +36,7 @@ module Payload {
   # Passive component instances
   # ----------------------------------------------------------------------
 
-  instance posixTime: Svc.PosixTime base id 0x20010000
+  instance posixTime: Wsts.SimTime base id 0x20010000
 
   instance rateGroupDriver: Svc.RateGroupDriver base id 0x20011000
 

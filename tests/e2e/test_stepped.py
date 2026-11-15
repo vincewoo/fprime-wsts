@@ -67,11 +67,13 @@ def test_a_limit_paces_stepped_time_for_someone_who_watches(stepped):
     assert time.monotonic() - began < 0.7, "no limit: as fast as it goes"
 
 
-def run_alone(request, tmp_path, name, seconds):
-    """Payload by itself (its hub link stays down), a run of a set simulated duration"""
+def run_alone(request, tmp_path, element, seconds, record=None):
+    """One element by itself (its hub link stays down), a run of a set simulated duration"""
     system = request.config.getoption("--wsts-system")
-    command = [sys.executable, "-m", "fprime_wsts", "run", f"{system}/payload", "--stepped", "--auto-ports",
-               "--duration", str(seconds), "--log-dir", str(tmp_path / name), "--json"]
+    command = [sys.executable, "-m", "fprime_wsts", "run", f"{system}/{element}", "--stepped", "--auto-ports",
+               "--duration", str(seconds), "--log-dir", str(tmp_path / "logs"), "--json"]
+    if record:
+        command += ["--record", str(record)]
     began = time.monotonic()
     done = subprocess.run(command, capture_output=True, text=True, timeout=120)
     assert done.returncode == 0, done.stderr
@@ -79,15 +81,39 @@ def run_alone(request, tmp_path, name, seconds):
 
 
 def test_a_whole_run_in_stepped_time(request, tmp_path):
-    first, wall = run_alone(request, tmp_path, "first", 300)
-    assert first["stepped"] and first["exit_code"] == 0 and not first.get("stuck")
-    assert first["sim_seconds"] == 300.0, "five minutes of flight time, to the tick"
-    assert first["final_status"]["tick"] == 6000 and first["final_status"]["busy_ticks"] == 0
-    assert first["speed"] > 10 and wall < 60, f"{first['speed']} times real time"
-    # Again: the same ticks, and flight software was given the same amount of work
-    second, _ = run_alone(request, tmp_path, "second", 300)
-    assert second["final_status"]["tick"] == 6000
-    assert second["final_status"]["transactions"] == pytest.approx(first["final_status"]["transactions"], abs=20)
+    summary, wall = run_alone(request, tmp_path, "payload", 300)
+    assert summary["stepped"] and summary["exit_code"] == 0 and not summary.get("stuck")
+    assert summary["sim_seconds"] == 300.0, "five minutes of flight time, to the tick"
+    assert summary["final_status"]["tick"] == 6000 and summary["final_status"]["busy_ticks"] == 0
+    assert summary["speed"] > 10 and wall < 60, f"{summary['speed']} times real time"
+
+
+@pytest.mark.parametrize("element, seconds", [("payload", 120), ("cdh", 120)])
+def test_two_runs_in_stepped_time_are_the_same_byte_for_byte(request, tmp_path, element, seconds):
+    """What phase 2 of stepped time is for. Everything flight software puts on a bus is in the
+    recording: every I2C, SPI and register transaction, and every packet of events and
+    telemetry it sends towards the ground through the hub, with its time stamp."""
+    recording = tmp_path / "run.jsonl"  # the same name both times: an event of the simulation names it
+    recordings = []
+    for _ in range(3):
+        summary, _ = run_alone(request, tmp_path, element, seconds, recording)
+        assert summary["exit_code"] == 0 and not summary.get("stuck")
+        recordings.append(recording.read_bytes())
+        recording.unlink()
+    assert len(recordings[0].splitlines()) > 100, "there is something to compare"
+    assert recordings[1] == recordings[0] and recordings[2] == recordings[0]
+
+
+def test_flight_software_is_given_simulated_time(request, tmp_path):
+    recording = tmp_path / "run.jsonl"
+    run_alone(request, tmp_path, "payload", 10, recording)
+    # Payload sends its events and telemetry to Cdh through the hub: each packet carries the
+    # time flight software was given. 2000-01-01T00:00:00Z is 0x386d4380 seconds.
+    sent = [json.loads(line) for line in recording.read_text().splitlines()]
+    packets = [m["data"] for m in sent if m.get("rec") == "bs_tx" and m.get("endpoint") == "hubDriver"]
+    stamped = [p for p in packets if "386d43" in p]
+    assert len(stamped) > 50 and len(stamped) > 0.9 * len(packets)
+    assert any("386d438a" in p for p in packets), "ten simulated seconds on"
 
 
 def test_stepping_a_whole_system_is_not_built_yet(request):

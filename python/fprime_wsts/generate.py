@@ -1450,6 +1450,8 @@ def render_setup(plan: Plan, manifest: Manifest, topology_header: str) -> str:
         "    Wsts::RuntimeConfig config;",
         f"    config.bridge = {_cpp_string(manifest.bridge)};",
         f"    config.internalTickHz = {manifest.tick_hz};",
+        *([f"    config.epoch = {manifest.time_epoch}ull;  // time.epoch in the manifest"]
+          if manifest.time_epoch else []),
         *(["    config.stepped = true;  // time.mode in the manifest; WSTS_STEPPED=0 runs it in real time"]
           if manifest.time_mode == "stepped" else []),
         "    Wsts::Runtime::start(config);",
@@ -1649,7 +1651,8 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
         "topology": plan.topology.name,
         "flight_toolchain": settings.default_toolchain,
         "sim_toolchain": "native (Linux)",
-        "time": {"mode": manifest.time_mode, "tick_source": next(
+        "time": {"mode": manifest.time_mode, **({"epoch": manifest.time_epoch} if manifest.time_epoch else {}),
+                 "tick_source": next(
             (s.instance.name for s in plan.substitutions if s.surrogate.name == "Wsts.SimTick"), "internal ticker")},
         "substitutions": substitutions,
         "kept_hardware_instances": plan.kept_hardware,
@@ -2782,6 +2785,8 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         "    # simulation knows that flight software has finished what a tick caused",
         "    CHOOSES_IMPLEMENTATIONS",
         "        Wsts_Os_Queue",
+        "        Wsts_Os_RawTime",
+        "        Wsts_Os_Task",
         ")",
         "",
     ]

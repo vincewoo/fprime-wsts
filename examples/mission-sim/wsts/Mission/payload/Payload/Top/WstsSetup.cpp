@@ -30,6 +30,7 @@ namespace WstsGenerated {
 
 void setup() {
     // Surrogates: one bus endpoint each
+    // ::Payload::posixTime: Wsts.SimTime does not use the bus
     ::Payload::linuxTimer.wstsBind("linuxTimer", "mode=block");
     ::Payload::hubDriver.wstsBind("hubDriver", "");
     ::Payload::i2cBus.wstsBind("i2cBus", "");
