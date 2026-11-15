@@ -421,6 +421,7 @@
         "Cdh.wstsControl.SIM_PAUSE",
         "Cdh.wstsControl.SIM_RESUME",
         "Cdh.wstsControl.SIM_SET_RATE",
+        "Cdh.wstsControl.SIM_SET_STEPPED",
         "Cdh.wstsControl.SIM_STEP"
       ],
       "events": [
@@ -771,7 +772,7 @@
       "constant": "CmdDispatcherComponentCommandPorts"
     },
     "command_table": {
-      "used": 43,
+      "used": 44,
       "size": 80,
       "source": "../../../config/CommandDispatcherImplCfg.hpp"
     },

@@ -247,7 +247,15 @@ class WstsBridge:
         self.request("resume")
 
     def set_rate(self, rate: float) -> None:
+        """Simulated time per wall-clock time. In stepped time it is a limit, and 0 takes
+        the limit away: as fast as the host computes."""
         self.request("set_rate", rate=rate)
+
+    def set_stepped(self, stepped: bool = True) -> None:
+        """Stepped time: a tick is taken when flight software has finished the last one,
+        not when the wall clock says so, and what this client sends is applied between two
+        ticks. False returns to real time."""
+        self.request("set_stepped", stepped=bool(stepped))
 
     def step(self, ticks: int = 1, wait: bool = True, timeout: float = 30.0) -> int:
         """Run the simulation for `ticks` ticks, then pause it. From a paused simulation the

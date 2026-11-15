@@ -16,7 +16,7 @@ Start with [README.md](README.md); the design is in [docs/design.md](docs/design
 | `examples/mission/` | The example's flight project: `Cdh` (VxWorks, no `main()`, UART inside the `SensorLink` subtopology of `lib/sensor-lib`, `CONFIGURATION_OVERRIDES`, `system.fpp`) and `Payload` (Linux: I2C, SPI, UART, GPIO, an FPGA driver on the register interface component of `lib/sensor-lib`, and `Components/Imager`, which links a camera SDK and has a stub under `if (BUILD_TESTING)`), joined by a `GenericHub`. Only read by the toolkit |
 | `examples/mission-sim/` | The example's simulation project: `wsts-system.yaml`, `cdh.yaml`, `payload.yaml`, simulators written as F´ components, a 125 Hz clock, a bus-less surrogate, mirror surrogates, a device model, a register block with an interrupt, a vendored library, configuration overrides. Its `wsts/Mission/` is **generated** and checked in. `examples/README.md` maps each feature to where it is |
 | `mkdocs.yml`, `docs/`, `docs-site/` | The documentation site (GitHub Pages, `.github/workflows/docs.yml`): the user guide in `docs/getting-started/` and `docs/user-guide/`, the reference documents at the top of `docs/`. `docs-site/hooks.py` points links to files outside `docs/` at GitHub. Build with `pip install -r docs-site/requirements.txt && mkdocs build --strict` |
-| `tests/e2e/` | End-to-end tests against the running Mission system and a GDS (`test_system.py`, `test_cdh.py`, `test_payload.py`) |
+| `tests/e2e/` | End-to-end tests against the running Mission system and a GDS (`test_system.py`, `test_cdh.py`, `test_payload.py`, `test_stepped.py`) |
 | `lib/` | Pinned submodules: `fprime` (v4.4.2), `fprime-vxworks` |
 | `.claude/skills/` | Agent skills: `wsts-configure` (configure, build and run a simulation of a flight project checked out beside this one, one deployment or a system), `wsts-device-model` (a device model from a datasheet and the real device). Each has scripts, references and evals |
 
@@ -118,6 +118,13 @@ version, unset `JAVA_HOME` so the bundled JRE is used.
   a task's queue counts from send until its handler returns; one on a polled queue (a
   queued component) only while it is handled. A thread of the simulation that runs flight
   handlers itself holds an `Activity::Scope` meanwhile.
+- Stepped time (`run --stepped`, `time.mode`, `set_stepped`; experimental, `docs/stepped-time.md`):
+  a tick source brackets each tick with `Control::awaitTick()` and `finishTick()`, which in
+  stepped time wait for the last tick's work instead of the wall clock. The bridge holds a
+  `Control::ActionGate` around an action, so it falls between two ticks. A tick that does not
+  finish within `WSTS_STEP_LIMIT_MS` pauses the simulation and sets `stuck` in `status`.
+  Time stamps and `wstsControl` telemetry still follow the host clock, and a system is not
+  stepped as a whole.
 - A new action goes in `Control::dispatch`, then `SimControl.fpp`/`.cpp`, `bridge.py`,
   `docs/reference.md`, and a test at each level.
 

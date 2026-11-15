@@ -60,7 +60,7 @@ F´ components that the simulation adds to the topology. They are not in the fli
 **Capacity used by the simulated topology:**
 
 - Command registration ports: 10 of 30 (`CmdDispatcherComponentCommandPorts`)
-- Opcodes: 43 of 80 (`CMD_DISPATCHER_DISPATCH_TABLE_SIZE` in `../../../config/CommandDispatcherImplCfg.hpp`)
+- Opcodes: 44 of 80 (`CMD_DISPATCHER_DISPATCH_TABLE_SIZE` in `../../../config/CommandDispatcherImplCfg.hpp`)
 - Parameters: 1 of 25 (`PRMDB_NUM_DB_ENTRIES` in `../../../../../lib/fprime/default/config/PrmDbImplCfg.hpp`)
 
 ## Device models
@@ -80,7 +80,7 @@ F´ components that the simulation adds to the topology. They are not in the fli
 - `SensorLink.uart.BytesRecv`
 - `SensorLink.uart.BytesSent`
 
-**Added (WSTS):** 47
+**Added (WSTS):** 48
 - `Cdh.wstsControl.FAULT_CLEAR`
 - `Cdh.wstsControl.FAULT_SET`
 - `Cdh.wstsControl.GPIO_FORCE`
@@ -98,6 +98,7 @@ F´ components that the simulation adds to the topology. They are not in the fli
 - `Cdh.wstsControl.SIM_PAUSE`
 - `Cdh.wstsControl.SIM_RESUME`
 - `Cdh.wstsControl.SIM_SET_RATE`
+- `Cdh.wstsControl.SIM_SET_STEPPED`
 - `Cdh.wstsControl.SIM_STEP`
 - `Cdh.wstsControl.ActionFailed`
 - `Cdh.wstsControl.FaultArmed`

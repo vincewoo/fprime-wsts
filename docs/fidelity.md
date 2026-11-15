@@ -23,6 +23,7 @@ the concrete list for that deployment.
 | Device behaviour | Supplied by models | Only as good as the model. Timing inside a transaction is not modelled |
 | Operating system | Linux/POSIX OSAL instead of the target's | Priorities are advisory; no priority inheritance or preemption guarantees; stack sizes are not enforced the same way |
 | Time | Host wall clock, optionally scaled | Not cycle-exact. A loaded host stretches ticks; the tick source does not burst to catch up |
+| Stepped time (`--stepped`, experimental) | A tick is taken when flight software has finished the last one | A rate group that would overrun into the next cycle on the target does not: the overlap is removed, not reproduced, and a queue that overflows in flight because a consumer is slow may not overflow here. Code that waits on the host cannot be stepped |
 | Interrupts | Delivered on ordinary threads: a register block's on the thread that raises it (the tick thread for a model), one at a time | Code that relies on interrupt context (no blocking, masking) is not checked. Priorities, masking and nesting of the target's interrupts are not reproduced |
 | Word size, byte order | Host's (64-bit little-endian on x86-64) | Code that depends on the target's representation behaves differently |
 | Dictionary | Entries of replaced drivers are missing unless a mirror surrogate is used; WSTS entries are added | Ground procedures that use a replaced driver's telemetry need a mirror surrogate |

@@ -235,7 +235,7 @@ fprime-wsts ctl examples/mission-sim/wsts/Mission --element payload fault_set en
 ```
 
 From the ground system, with the commands on the `wstsControl` instance: `SIM_PAUSE`,
-`SIM_RESUME`, `SIM_STEP`, `SIM_SET_RATE`, `FAULT_SET`, `FAULT_CLEAR`, `INJECT_BYTES`, `INJECT_TEXT`,
+`SIM_RESUME`, `SIM_STEP`, `SIM_SET_STEPPED`, `SIM_SET_RATE`, `FAULT_SET`, `FAULT_CLEAR`, `INJECT_BYTES`, `INJECT_TEXT`,
 `GPIO_FORCE`, `I2C_REG_SET`, `REG_SET`, `IRQ_RAISE`, `MODEL_SET`, `SCENARIO_LOAD`, `SCENARIO_START`,
 `SCENARIO_STOP`, `RECORD_START`, `RECORD_STOP`.
 
@@ -305,7 +305,9 @@ D=examples/mission-sim/wsts/Mission; pytest tests/e2e -p fprime_wsts.pytest_plug
 Built against F´ v4.4.2. Working today: the surrogates and transform above, real-time and
 scaled simulation time, faults, scenarios, record/replay, the bridge, multi-element systems
 with byte stream links, substituting instances defined inside subtopologies, the example.
-Designed but not built yet: deterministic stepped time (and with it lockstep across the
-elements of a system), GPIO links between elements, a POSIX-backed VxWorks API shim,
+Experimental: stepped time for a single deployment (`run --stepped`: ticks are taken as fast
+as flight software finishes them). Designed but not built yet: the rest of stepped time
+(simulated time stamps, byte-for-byte repeatable runs, lockstep across the elements of a
+system), GPIO links between elements, a POSIX-backed VxWorks API shim,
 file-system path remapping. See
 [docs/design.md](docs/design.md#roadmap).

@@ -127,3 +127,13 @@ def test_a_warning_with_ways_out_is_laid_out_for_a_terminal():
 def test_an_unknown_key_names_the_one_that_was_meant(data, message):
     with pytest.raises(WstsError, match=message):
         parse_manifest(data)
+
+
+def test_time_mode_of_a_manifest():
+    assert parse_manifest({"deployment": "D"}).time_mode == "real-time"
+    assert parse_manifest({"deployment": "D", "time": {"mode": "stepped"}}).time_mode == "stepped"
+    assert parse_manifest({"deployment": "D", "time": {"mode": "realtime"}}).time_mode == "real-time"
+    with pytest.raises(WstsError, match="time.mode must be 'realtime' or 'stepped', not 'fast'"):
+        parse_manifest({"deployment": "D", "time": {"mode": "fast"}})
+    with pytest.raises(WstsError, match=r"time: unknown key\(s\): modes \(did you mean 'mode'\?\)"):
+        parse_manifest({"deployment": "D", "time": {"modes": "stepped"}})

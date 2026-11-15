@@ -21,6 +21,7 @@ namespace Wsts {
 struct RuntimeConfig {
     std::string bridge = "none";   //!< Default bridge address
     unsigned internalTickHz = 10;  //!< Ticker rate used when no surrogate tick source exists
+    bool stepped = false;          //!< Stepped time unless WSTS_STEPPED says otherwise (docs/stepped-time.md)
 };
 
 class Runtime {

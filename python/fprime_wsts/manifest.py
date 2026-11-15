@@ -255,6 +255,9 @@ class Manifest:
     control_enabled: bool = True
     control_base_id: Optional[int] = None
     bridge: str = "none"
+    # How simulated time advances unless a run says otherwise: "real-time" (ticks follow the
+    # wall clock) or "stepped" (a tick is taken when the last one is finished)
+    time_mode: str = "real-time"
     tick_hz: int = 10
     catalogs: List[str] = field(default_factory=list)
     topology_fpp: Optional[List[str]] = None
@@ -321,8 +324,11 @@ class Manifest:
 KNOWN_KEYS = {
     "project", "deployment", "topology", "output", "substitute", "keep", "models", "control", "bridge", "tick_hz",
     "catalogs", "sources", "main", "cmake", "libraries", "fpp_exclude", "defines", "simulators", "devices",
-    "clocks", "run", "host", "setup",
+    "clocks", "run", "host", "setup", "time",
 }
+TIME_KEYS = {"mode"}
+#: How a manifest may write the two ways simulated time advances, and how the report does
+TIME_MODES = {"realtime": "real-time", "real-time": "real-time", "stepped": "stepped"}
 SETUP_KEYS = {"code", "headers"}
 HOST_KEYS = {"ignore"}
 #: Key of `Manifest.cxx_flags` for flags that apply to every module
@@ -424,6 +430,14 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
     manifest.output = data.get("output")
     manifest.keep = [str(k) for k in data.get("keep", [])]
     manifest.bridge = str(data.get("bridge", "none"))
+    time = data.get("time") or {}
+    unknown = set(time) - TIME_KEYS if isinstance(time, dict) else {"(not a mapping)"}
+    if unknown:
+        raise WstsError(f"{where}: time: unknown key(s): {unknown_keys(unknown, TIME_KEYS)}")
+    mode = str(time.get("mode", "realtime")).lower()
+    if mode not in TIME_MODES:
+        raise WstsError(f"{where}: time.mode must be 'realtime' or 'stepped', not '{time.get('mode')}'")
+    manifest.time_mode = TIME_MODES[mode]
     manifest.tick_hz = _int(data.get("tick_hz", 10), f"{where}: tick_hz")
     manifest.catalogs = [str(c) for c in data.get("catalogs", [])]
     manifest.fpp_exclude = [str(g) for g in data.get("fpp_exclude", [])]

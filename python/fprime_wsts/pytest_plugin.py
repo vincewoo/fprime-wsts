@@ -24,6 +24,9 @@ def pytest_addoption(parser):
     group.addoption("--wsts-system", help="generated system directory to start for the session (several elements)")
     group.addoption("--wsts-auto-ports", action="store_true",
                     help="start the simulation and its GDS on free ports, so that several test sessions fit on one machine")
+    group.addoption("--wsts-stepped", action="store_true",
+                    help="run the deployment in stepped time (--wsts-deployment only): a tick is taken when flight "
+                         "software has finished the last one")
     group.addoption("--wsts-env", action="append", metavar="NAME=VALUE",
                     help="environment variable for the simulated deployment (repeatable), as for `fprime-wsts run --env`")
 
@@ -60,7 +63,8 @@ def wsts_simulation(request):
                             bridge=request.config.getoption("--wsts-bridge"),
                             env=parse_env(request.config.getoption("--wsts-env")).get(None, {}),
                             auto_ports=request.config.getoption("--wsts-auto-ports"),
-                            zmq_transport=request.config._wsts_zmq)
+                            zmq_transport=request.config._wsts_zmq,
+                            stepped=True if request.config.getoption("--wsts-stepped") else None)
     simulation.start()
     yield simulation
     simulation.stop()

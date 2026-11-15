@@ -1,9 +1,11 @@
 # Stepped Time (design draft)
 
-**Status: phase 0 is built, the rest is a proposal.** It is item 1 of the
+**Status: phases 0 and 1 are built (stepped time is experimental), the rest is a proposal.** It is item 1 of the
 [roadmap](design.md#roadmap). The choices under [What to decide](#what-to-decide) were
 settled as recommended. [Phase 0: what it showed](#phase-0-what-it-showed) has the results
-of the spike, and one correction to the design that came out of it.
+of the spike, and one correction to the design that came out of it;
+[Phase 1: what is built](#phase-1-what-is-built) says what stepped time does today and
+what it leaves to the later phases.
 
 ## The problem
 
@@ -267,6 +269,40 @@ link belong to neither element's count: phase 4).
 
 The end-to-end tests now hold this: Payload and Cdh are stepped tick by tick and must be
 quiescent after each.
+
+## Phase 1: what is built
+
+The stepper. `fprime-wsts run --stepped` (or `time: {mode: stepped}` in the manifest, or
+`set_stepped` on a running simulation) takes each tick when flight software has finished
+the last one.
+
+| | |
+|---|---|
+| Tick sources | `Wsts.SimTick` and the built-in ticker bracket each tick with `Control::awaitTick()` and `finishTick()`. A project's own tick surrogate that only calls `onTick()` is not stepped until it does the same |
+| A run of a set duration | `--duration` counts simulated seconds: the deployment starts paused and is given one `step` of that many ticks, so it ends at exactly that time |
+| Actions from a client | Held by `Control::ActionGate` in the bridge: applied between two ticks, and finished (the bytes an injection delivers are handled) before the next tick starts. A waiting action goes before the next tick, so a pause reaches a simulation that runs flat out |
+| A pace | `set_rate` in stepped time is a limit (1 is real time); 0, the default, is none |
+| A tick that does not finish | After `WSTS_STEP_LIMIT_MS` of wall time (10 s) the simulation pauses, `status` has `stuck` with the queues that hold work, the log says so, and `run` ends with exit status 1 |
+| Clocks (`Wsts.SimCycle`) | Cycles a tick grants count as its work and are issued at once, in order, also when the step ends in a pause |
+| Systems | `run --stepped` on a system is refused: the elements would drift apart. One element can be stepped through its bridge |
+
+Measured on the example's Payload by itself: 600 simulated seconds (12,000 ticks at
+20 Hz) in 0.7 to 1.2 s of wall time, ending at exactly tick 12,000, with the same number
+of pieces of flight work and the same number of I2C, SPI and register transactions in two
+runs.
+
+Not yet, and why two such runs still differ byte for byte:
+
+- **Time stamps are the host's.** Events and telemetry carry the wall clock (phase 2:
+  `Wsts_Os_RawTime`, `Wsts.SimTime`).
+- **`Wsts.SimControl` publishes telemetry once a wall-clock second**, so how many
+  telemetry packets a run sends depends on how long it took (phase 2).
+- **Tasks run at once within a tick**, as the host schedules them. Decision 2 (one task
+  at a time) needs `Wsts_Os_Task` and comes with phase 2, as does the serialised bus.
+- **`delay` faults and `Os::Task::delay` sleep on the wall clock** (phase 2).
+- **What arrives from outside is not placed.** A ground command or bytes from another
+  element land in whichever tick is being taken (ground link: by design; links: phase 4).
+  `busy_ticks` counts the ticks that started while such a delivery was under way.
 
 ## Risks
 

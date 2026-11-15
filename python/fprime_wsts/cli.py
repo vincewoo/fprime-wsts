@@ -398,6 +398,13 @@ def main(argv=None) -> int:
                      help="use free ports for the bridge(s), the GDS link and the GDS browser GUI in place of the fixed "
                           "ones, so that several runs fit on one machine; the addresses are printed, are in --json, and "
                           "are in <log directory>/wsts-run.json while the run is up")
+    mode = run.add_mutually_exclusive_group()
+    mode.add_argument("--stepped", dest="stepped", action="store_true", default=None,
+                      help="stepped time (experimental): a tick is taken when flight software has finished the last "
+                           "one, as fast as the host computes; --duration then counts simulated seconds. Single "
+                           "deployments only. Default: time.mode of the manifest")
+    mode.add_argument("--realtime", dest="stepped", action="store_false",
+                      help="real time, whatever the manifest says: ticks follow the wall clock")
     run.add_argument("--bridge", help="bridge address override, e.g. tcp:50100")
     run.add_argument("--scenario", action="append", metavar="[ELEMENT=]FILE",
                      help="scenario file to play from start-up; for a system, <element>=<file>, once per element")

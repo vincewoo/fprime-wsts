@@ -11,8 +11,9 @@ thread_local std::uint64_t t_scopes = 0;  // scopes this thread holds
 }
 
 Activity& Activity::get() {
-    static Activity instance;
-    return instance;
+    // Never destroyed: queues and threads report to it until the process is gone
+    static Activity* instance = new Activity;
+    return *instance;
 }
 
 void Activity::begin() {

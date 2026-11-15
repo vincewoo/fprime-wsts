@@ -95,3 +95,16 @@ def test_model_files_reach_the_report_relative_to_the_overlay(tmp_path):
         generate(MISSION, parse_manifest({**data, "run": {"models": ["nope.py"]}}, project / "payload.yaml"), tmp_path / "out2")
     with pytest.raises(WstsError, match="run.models needs the bridge"):
         generate(MISSION, parse_manifest({**data, "bridge": "none"}, project / "payload.yaml"), tmp_path / "out3")
+
+
+@needs_fpp
+def test_stepped_time_as_the_default_of_a_manifest(tmp_path):
+    project = copy_sim(tmp_path)
+    data = {**element_data("payload"), "project": str(MISSION), "time": {"mode": "stepped"}}
+    result = generate(MISSION, parse_manifest(data, project / "payload.yaml"), tmp_path / "out")
+    assert result.report["time"]["mode"] == "stepped"
+    setup = (tmp_path / "out" / "Payload" / "Top" / "WstsSetup.cpp").read_text()
+    assert "config.stepped = true;" in setup
+    plain = generate(MISSION, parse_manifest({**data, "time": None}, project / "payload.yaml"), tmp_path / "plain")
+    assert plain.report["time"]["mode"] == "real-time"
+    assert "config.stepped" not in (tmp_path / "plain" / "Payload" / "Top" / "WstsSetup.cpp").read_text()

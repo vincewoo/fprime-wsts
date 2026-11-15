@@ -181,6 +181,15 @@ def test_wait_quiescent_names_what_holds_work_up(sim, bridge):
         bridge.wait_quiescent(timeout=0.05)
 
 
+def test_stepped_time_is_asked_for_by_name(sim, bridge):
+    bridge.set_stepped()
+    assert sim.requests[-1] == {"id": 1, "op": "set_stepped", "stepped": True}
+    bridge.set_stepped(False)
+    assert sim.requests[-1]["stepped"] is False
+    bridge.set_rate(0)  # in stepped time: no limit
+    assert sim.requests[-1] == {"id": 3, "op": "set_rate", "rate": 0}
+
+
 def generated(directory, sim):
     directory.mkdir()
     (directory / "wsts-report.json").write_text(json.dumps({"bridge": f"tcp:{sim.port}"}))

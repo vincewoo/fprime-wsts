@@ -325,6 +325,176 @@ TEST_F(CoreTest, ATickTakenWhileWorkIsOutstandingIsCounted) {
     EXPECT_EQ(control.status().busyTicks, 2u) << "the tick source's own scope does not make a tick busy";
 }
 
+// ----------------------------------------------------------------------
+// Stepped time: the built-in ticker stands for a tick source (Wsts.SimTick brackets its
+// ticks with the same two calls)
+// ----------------------------------------------------------------------
+
+namespace {
+struct Ticker {
+    explicit Ticker(std::uint32_t hz) { Control::get().startInternalTicker(hz); }
+    ~Ticker() { Control::get().stopInternalTicker(); }
+};
+}  // namespace
+
+TEST_F(CoreTest, SteppedTimeDoesNotWaitForTheWallClock) {
+    Control& control = Control::get();
+    ASSERT_TRUE(run(R"({"op": "pause"})"));
+    ASSERT_TRUE(run(R"({"op": "set_stepped", "stepped": true})"));
+    EXPECT_TRUE(control.status().stepped);
+    Ticker ticker(10);  // ten ticks a second, were this real time
+    const auto started = std::chrono::steady_clock::now();
+    ASSERT_TRUE(run(R"({"op": "step", "ticks": 600})"));
+    ASSERT_TRUE(eventually([&control]() { return control.paused(); }));
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(5)) << "a minute of simulated time";
+    const Wsts::SimStatus status = control.status();
+    EXPECT_EQ(status.tick, 600u) << "exactly the ticks asked for";
+    EXPECT_DOUBLE_EQ(status.simSeconds, 60.0);
+    EXPECT_EQ(status.tickPeriodNs, 100000000u);
+    EXPECT_DOUBLE_EQ(status.rate, 0.0) << "no limit unless one is set";
+    EXPECT_TRUE(status.toJson().flag("stepped"));
+    // Back in real time the same ticker follows the clock again
+    ASSERT_TRUE(run(R"({"op": "set_stepped", "stepped": false})"));
+    ASSERT_TRUE(run(R"({"op": "resume"})"));
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    EXPECT_LE(control.tick(), 604u);
+    EXPECT_GE(control.tick(), 601u);
+}
+
+TEST_F(CoreTest, ATickIsTakenWhenTheLastOneIsFinished) {
+    Control& control = Control::get();
+    control.setStepped(true);
+    // Flight software: every tick gives it one piece of work
+    control.addTickListener([](std::uint64_t, bool paused) {
+        if (!paused) {
+            Wsts::Activity::get().begin();
+        }
+    });
+    Ticker ticker(1000);
+    ASSERT_TRUE(eventually([&control]() { return control.tick() == 1; }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(60));
+    EXPECT_EQ(control.tick(), 1u) << "sixty tick periods of wall time: no second tick while the first is unfinished";
+    for (std::uint64_t tick = 2; tick <= 5; tick++) {
+        Wsts::Activity::get().end();  // the handler returns
+        ASSERT_TRUE(eventually([&control, tick]() { return control.tick() == tick; }));
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        EXPECT_EQ(control.tick(), tick);
+    }
+    EXPECT_EQ(control.status().busyTicks, 0u);
+    control.setStepped(false);  // lets the last tick go
+    Wsts::Activity::get().end();
+}
+
+TEST_F(CoreTest, ALimitPacesSteppedTime) {
+    Control& control = Control::get();
+    control.setStepped(true);
+    std::string error;
+    EXPECT_FALSE(run(R"({"op": "set_rate", "rate": 5000})", &error));
+    EXPECT_NE(error.find("0 (as fast as it goes)"), std::string::npos);
+    ASSERT_TRUE(run(R"({"op": "set_rate", "rate": 2})"));
+    EXPECT_DOUBLE_EQ(control.status().rate, 2.0);
+    Ticker ticker(100);
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    const std::uint64_t paced = control.tick();
+    EXPECT_GE(paced, 30u);
+    EXPECT_LE(paced, 75u) << "about sixty: 100 Hz at twice real time for 0.3 s";
+    ASSERT_TRUE(run(R"({"op": "set_rate", "rate": 0})"));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    EXPECT_GT(control.tick(), paced + 200) << "the limit is gone";
+    control.setStepped(false);
+    EXPECT_FALSE(run(R"({"op": "set_rate", "rate": 0})")) << "real time has no 'as fast as it goes'";
+}
+
+TEST_F(CoreTest, AnActionFromOutsideFallsBetweenTwoTicks) {
+    Control& control = Control::get();
+    control.setStepped(true);
+    std::atomic<bool> hold{true};
+    std::atomic<bool> inTick{false};
+    // A tick whose work takes a while
+    control.addTickListener([&](std::uint64_t, bool paused) {
+        if (!paused) {
+            inTick.store(true);
+            Wsts::Activity::get().begin();
+        }
+    });
+    std::thread flight([&]() {
+        while (hold.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        inTick.store(false);
+        Wsts::Activity::get().end();
+    });
+    Ticker ticker(1000);
+    ASSERT_TRUE(eventually([&]() { return inTick.load(); }));
+    std::atomic<int> applied{0};
+    std::atomic<std::uint64_t> appliedAt{0};
+    std::thread client([&]() {
+        Control::ActionGate gate;  // what the bridge holds around an action
+        EXPECT_FALSE(inTick.load()) << "not inside a tick";
+        appliedAt.store(control.tick());
+        applied.store(1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+        EXPECT_EQ(control.tick(), appliedAt.load()) << "and no tick starts while it is being applied";
+        applied.store(2);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    EXPECT_EQ(applied.load(), 0) << "the tick is not finished: the action waits";
+    hold.store(false);
+    flight.join();
+    client.join();
+    EXPECT_EQ(applied.load(), 2);
+    EXPECT_EQ(appliedAt.load(), 1u);
+    control.setStepped(false);
+    Wsts::Activity::get().reset();
+}
+
+TEST_F(CoreTest, ATickThatDoesNotFinishIsReportedAndPauses) {
+    Control& control = Control::get();
+    control.setStepped(true);
+    control.setStepLimit(40);
+    Wsts::Activity::get().setReporter([]() { return std::string("Payload.camera: 1"); });
+    control.addTickListener([](std::uint64_t tick, bool paused) {
+        if (!paused && tick == 3) {
+            Wsts::Activity::get().begin();  // a handler that never returns
+        }
+    });
+    Ticker ticker(1000);
+    ASSERT_TRUE(eventually([&control]() { return control.paused(); }));
+    EXPECT_EQ(control.tick(), 3u);
+    EXPECT_EQ(control.stuck(), "Payload.camera: 1");
+    EXPECT_EQ(control.status().toJson().str("stuck"), "Payload.camera: 1");
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    EXPECT_EQ(control.tick(), 3u) << "it does not run on";
+    Wsts::Activity::get().end();
+    ASSERT_TRUE(run(R"({"op": "resume"})"));
+    EXPECT_EQ(control.stuck(), "") << "a resume starts afresh";
+    ASSERT_TRUE(eventually([&control]() { return control.tick() > 10; }));
+    Wsts::Activity::get().setReporter(nullptr);
+    control.setStepped(false);
+}
+
+TEST_F(CoreTest, ClockCyclesBelongToTheirTickInSteppedTime) {
+    Control& control = Control::get();
+    ASSERT_TRUE(run(R"({"op": "pause"})"));
+    control.setStepped(true);
+    std::atomic<std::uint64_t> count{0};
+    Wsts::CycleClock clock;
+    ASSERT_TRUE(clock.configure(1000.0, [&count]() { count++; }));
+    clock.start();
+    Ticker ticker(10);
+    // Five ticks of 100 ms: 500 cycles of a 1 kHz clock, all issued before the step is
+    // finished, although the step ends in a pause and no wall time is waited for
+    const auto started = std::chrono::steady_clock::now();
+    ASSERT_TRUE(run(R"({"op": "step", "ticks": 5})"));
+    ASSERT_TRUE(eventually([&control]() { return control.paused(); }));
+    ASSERT_TRUE(Wsts::Activity::get().waitQuiescent(std::chrono::milliseconds(2000)));
+    EXPECT_EQ(count.load(), 500u);
+    EXPECT_EQ(clock.overruns(), 0u);
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::milliseconds(400)) << "half a second, simulated";
+    clock.stop();
+    control.setStepped(false);
+}
+
 TEST_F(CoreTest, StepRunsForSomeTicksAndPauses) {
     Control& control = Control::get();
     // A tick source takes a tick only while the simulation is not paused

@@ -28,6 +28,7 @@ class SimControl final : public SimControlComponentBase {
     void SIM_RESUME_cmdHandler(FwOpcodeType opCode, U32 cmdSeq) override;
     void SIM_SET_RATE_cmdHandler(FwOpcodeType opCode, U32 cmdSeq, F32 rate) override;
     void SIM_STEP_cmdHandler(FwOpcodeType opCode, U32 cmdSeq, U32 ticks) override;
+    void SIM_SET_STEPPED_cmdHandler(FwOpcodeType opCode, U32 cmdSeq, bool stepped) override;
     void FAULT_SET_cmdHandler(FwOpcodeType opCode,
                               U32 cmdSeq,
                               const Fw::CmdStringArg& endpoint,
