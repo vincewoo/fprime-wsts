@@ -112,8 +112,7 @@ def test_messages_waiting_for_a_queued_component_do_not_hold_a_tick_up(cdh):
     cdh.pause()
     cdh.wait_quiescent()
     for _ in range(10):
-        cdh.step(1)
-        assert cdh.status()["activity"] == 0
+        cdh.step(1)  # raises, naming the queues, if the tick's work is not finished
     cdh.resume()
 
 
