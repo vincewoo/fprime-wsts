@@ -36,14 +36,17 @@ module SensorSim {
   instance sensorPort: Wsts.BusByteStreamDevice base id 0x18002000
 
   @ Parameter database for the simulator. The flight deployment has none, and a component
-  @ with parameters needs one to load them from.
+  @ with parameters needs one to load them from. Its file is named as it would be on a
+  @ target (under /ram0), so it lands in the sandbox of the run: PrmDb opens its files
+  @ through an Os::SandboxedFile of its own, restricted to /ram0 here.
   instance prmDb: Svc.PrmDb base id 0x18003000 \
     queue size 10 \
     stack size 64 * 1024 \
     priority 20 \
   {
     phase Fpp.ToCpp.Phases.configComponents """
-    SensorSim::prmDb.configure("SensorSimPrmDb.dat");
+    SensorSim::prmDb.configure("/ram0/SensorSimPrmDb.dat");
+    SensorSim::prmDb.configureSandbox("/ram0");
     """
     phase Fpp.ToCpp.Phases.readParameters """
     SensorSim::prmDb.readParamFile();

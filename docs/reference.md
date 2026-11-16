@@ -158,6 +158,9 @@ defines: [MY_SIM_FLAG]               # compile definitions, in addition to WSTS_
 host:
   ignore: [vendor/gen.h, -lcodec]    # names the host check does not report (header, -l<library>, package, SDK entry)
 shims: [vxworks]                     # operating system APIs the toolkit implements for project code (see "Shims")
+files:
+  sandbox: ./wsts-files              # where the files of flight software land on the host (see "Files");
+                                     # default: the files directory of the run
 ```
 
 ### Instance names
@@ -486,6 +489,29 @@ are left out of the report's "Code that waits on the host". Report: `shims`, and
 "Operating system shims". Without it, a module that includes one of its headers without a
 guard is a warning that names the key, and `check-host` gives the key as the first remedy.
 
+### Files
+
+Every simulated deployment maps the file system of flight software into one **sandbox**
+directory on the host: `Os::File`, `Os::FileSystem` and `Os::Directory` of the deployment
+(the overlay chooses `Wsts_Os_File` for all three) hand what flight software names — a
+target path such as `/ram0/logs/events.log` or `/tffs0/data.bin`, or a relative name such
+as `PrmDb.dat` — to the host under that directory, with the same path under it. What the
+target had as mounts is a directory tree the sandbox makes when a write needs it;
+climbing above the root of the flight file system stays at its root. A path cannot name
+anything outside the sandbox, and the raw I/O API of the VxWorks shim (`open()`,
+`read()`, `write()` of `ioLib`) does not go through it.
+
+Relative names resolve against the working directory of flight software, which starts at
+the root of the sandbox: what `Os::FileSystem::getWorkingDirectory` reports, and what
+`changeWorkingDirectory` changes.
+
+`files.sandbox` is where the sandbox is. `./` and `../` are relative to the manifest's
+directory; anything else absolute is used as it is. The default is the files directory of
+the run (`WSTS_DIR`, the log directory unless `run --files-dir` says otherwise), so that
+the files of flight software land where they always did. A sandbox of its own —
+`./wsts-files`, say — survives the clearing of the log directory between runs. Report:
+`files`, and a line under "Simulation build and run inputs".
+
 ### Surrogates of another kind, or with other port names
 
 A `substitute` entry, or a catalog entry, may say how a surrogate differs in shape:
@@ -722,7 +748,8 @@ lines starting with `#` are skipped.
 | `WSTS_BRIDGE` | Bridge address, overriding the manifest |
 | `WSTS_SCENARIO`, `WSTS_SCENARIO_MODE` | Scenario to load and start at start-up |
 | `WSTS_RECORD` | File to record to from start-up |
-| `WSTS_DIR` | Base directory for relative scenario and recording paths |
+| `WSTS_DIR` | Base directory for relative scenario and recording paths; also the sandbox of the files of flight software when `WSTS_FILES_DIR` is not set |
+| `WSTS_FILES_DIR` | The sandbox of the files of flight software (see "Files"), over `WSTS_DIR`. Set by `fprime-wsts run` from the manifest's `files.sandbox` |
 | `WSTS_STEPPED` | `1`: stepped time; `0`: real time, whatever the manifest's `time.mode`. Set by `fprime-wsts run --stepped` / `--realtime` |
 | `WSTS_LOCKSTEP` | `1`: an element of a system stepped as a whole (implies stepped time): its ticks are granted by the conductor. Set by `fprime-wsts run <system> --stepped` |
 | `WSTS_EPOCH` | Where simulated time starts, seconds since 1970, over the manifest's `time.epoch` |

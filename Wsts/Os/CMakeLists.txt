@@ -73,6 +73,37 @@ register_fprime_implementation(
         Wsts_Os_SimTask
 )
 
+# Wsts_Os_File is the POSIX file system of the framework, with every path of flight
+# software mapped into the sandbox of the run (SimPath). One implementation covers
+# Os::File, Os::FileSystem and Os::Directory, as the framework's own DefaultFile.cpp does
+register_fprime_module(
+        Wsts_Os_SimFile
+    SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/SimPath.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/SimFile.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/SimFileSystem.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/SimDirectory.cpp"
+    HEADERS
+        "${CMAKE_CURRENT_LIST_DIR}/SimPath.hpp"
+        "${CMAKE_CURRENT_LIST_DIR}/SimFile.hpp"
+        "${CMAKE_CURRENT_LIST_DIR}/SimFileSystem.hpp"
+        "${CMAKE_CURRENT_LIST_DIR}/SimDirectory.hpp"
+    DEPENDS
+        Fw_Types
+        Os
+        Os_File_Posix_Implementation
+)
+register_fprime_implementation(
+        Wsts_Os_File
+    SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/DefaultSimFile.cpp"
+    IMPLEMENTS
+        Os_File
+    DEPENDS
+        Fw_Types
+        Wsts_Os_SimFile
+)
+
 # The framework's own tests of an Os::Queue, and the counting, against this implementation
 register_fprime_ut(
         Wsts_Os_CountedQueue_ut
@@ -145,3 +176,61 @@ register_fprime_ut(
 if (TARGET Wsts_Os_SimRawTime_ut)
     target_compile_options(Wsts_Os_SimRawTime_ut PRIVATE -Wno-conversion)
 endif()
+
+# The framework's own tests of an Os::File (with its POSIX tests, which bring main()), against this
+# implementation. The suite names files of the host directly: SuiteSandboxRoot.cpp pins the sandbox
+# to the root, where the mapping is one-to-one
+register_fprime_ut(
+        Wsts_Os_SimFile_ut
+    SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/SuiteSandboxRoot.cpp"
+        "${FPRIME_FRAMEWORK_PATH}/Os/test/ut/file/CommonTests.cpp"
+        "${FPRIME_FRAMEWORK_PATH}/Os/test/ut/file/FileRules.cpp"
+        "${FPRIME_FRAMEWORK_PATH}/Os/Posix/test/ut/PosixFileTests.cpp"
+    DEPENDS
+        Fw_Types
+        Os_Test_File_SyntheticFileSystem
+        STest
+        Utils
+        Wsts_Os_SimFile
+    CHOOSES_IMPLEMENTATIONS
+        Wsts_Os_File
+)
+if (TARGET Wsts_Os_SimFile_ut)
+    target_compile_options(Wsts_Os_SimFile_ut PRIVATE -Wno-conversion)
+endif()
+
+# The framework's own tests of an Os::Directory, in a sandbox at the working directory, where its
+# files relative to it are the same place to the calls of the host it makes them with. The
+# framework's tests of an Os::FileSystem are not run against this implementation: their rule of
+# the working directory expects the strings of the host, which a sandbox at the root cannot give
+register_fprime_ut(
+        Wsts_Os_SimDirectory_ut
+    SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/SuiteSandboxCwd.cpp"
+        "${FPRIME_FRAMEWORK_PATH}/Os/test/ut/directory/CommonTests.cpp"
+        "${FPRIME_FRAMEWORK_PATH}/Os/test/ut/directory/DirectoryRules.cpp"
+        "${FPRIME_FRAMEWORK_PATH}/Os/Posix/test/ut/PosixDirectoryTests.cpp"
+    DEPENDS
+        Fw_Types
+        STest
+        Wsts_Os_SimFile
+    CHOOSES_IMPLEMENTATIONS
+        Wsts_Os_File
+)
+if (TARGET Wsts_Os_SimDirectory_ut)
+    target_compile_options(Wsts_Os_SimDirectory_ut PRIVATE -Wno-conversion)
+endif()
+
+# The sandbox itself: where the paths of flight software land, and what is refused
+register_fprime_ut(
+        Wsts_Os_SimFileTests_ut
+    SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/test/ut/SimFileTests.cpp"
+    DEPENDS
+        Fw_Types
+        STest
+        Wsts_Os_SimFile
+    CHOOSES_IMPLEMENTATIONS
+        Wsts_Os_File
+)

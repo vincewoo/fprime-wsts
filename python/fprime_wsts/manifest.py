@@ -294,6 +294,9 @@ class Manifest:
     defines: List[str] = field(default_factory=list)
     # Operating system APIs implemented for project code (SHIMS): "vxworks"
     shims: List[str] = field(default_factory=list)
+    # Where the files of flight software land on the host (`files.sandbox`), relative to the
+    # manifest when it starts ./ or ../; None is the files directory of the run (WSTS_DIR)
+    files_sandbox: Optional[str] = None
     # Set when the deployment is generated as one element of a system (see system.py)
     system: Optional[str] = None
     element: Optional[str] = None
@@ -328,7 +331,7 @@ class Manifest:
 KNOWN_KEYS = {
     "project", "deployment", "topology", "output", "substitute", "keep", "models", "control", "bridge", "tick_hz",
     "catalogs", "sources", "main", "cmake", "libraries", "fpp_exclude", "defines", "simulators", "devices",
-    "clocks", "run", "host", "setup", "time", "shims",
+    "clocks", "run", "host", "setup", "time", "shims", "files",
 }
 #: Operating system APIs the toolkit implements for project code that calls them (`shims`)
 SHIMS = {"vxworks": "Wsts/VxWorks"}
@@ -342,6 +345,8 @@ ALL_MODULES = ""
 CLOCK_KEYS = {"instance", "hz", "options"}
 LIBRARY_KEYS = {"keep", "drop", "sim"}
 RUN_KEYS = {"env", "models"}
+#: Keys of the sandbox of the files of flight software (`files`)
+FILES_KEYS = {"sandbox"}
 MAX_CLOCK_HZ = 100000.0  # Wsts::CycleClock::MAX_HZ
 ENV_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
 SUBSTITUTE_KEYS = {"instance", "component", "with", "endpoint", "options", "ports", *ATTRIBUTE_KEYS}
@@ -356,7 +361,7 @@ CACHE_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
 #: Keys that belong in a section of the manifest, for a key written at the top instead
 NESTED_KEYS = {key: section for section, keys in (
     ("cmake", CMAKE_KEYS), ("libraries", LIBRARY_KEYS), ("simulators", SIMULATOR_KEYS), ("run", RUN_KEYS),
-    ("host", HOST_KEYS)) for key in keys}
+    ("host", HOST_KEYS), ("files", FILES_KEYS)) for key in keys}
 
 
 def unknown_keys(unknown, known, nested: Optional[Dict[str, str]] = None) -> str:
@@ -612,6 +617,16 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
         raise WstsError(f"{where}: run.models must be a list of Python files (each defines serve(sim)), relative to "
                         "the manifest")
     manifest.run_models = [str(entry) for entry in models]
+
+    files = data.get("files") or {}
+    unknown = set(files) - FILES_KEYS if isinstance(files, dict) else {"(not a mapping)"}
+    if unknown:
+        raise WstsError(f"{where}: files: unknown key(s): {unknown_keys(unknown, FILES_KEYS)}")
+    sandbox = files.get("sandbox")
+    if sandbox is not None and (not isinstance(sandbox, str) or not sandbox.strip()):
+        raise WstsError(f"{where}: files.sandbox must be a directory for the files of flight software, relative to "
+                        "the manifest (./wsts-files) or on the host")
+    manifest.files_sandbox = None if sandbox is None else str(sandbox)
 
     cmake = data.get("cmake") or {}
     unknown = set(cmake) - CMAKE_KEYS

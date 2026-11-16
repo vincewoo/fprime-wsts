@@ -33,6 +33,7 @@ def test_the_deployment_schema_has_the_keys_the_parser_accepts():
     assert keys(properties["cmake"]) == manifest.CMAKE_KEYS
     assert keys(properties["libraries"]) == manifest.LIBRARY_KEYS
     assert keys(properties["run"]) == manifest.RUN_KEYS
+    assert keys(properties["files"]) == manifest.FILES_KEYS
     assert keys(properties["host"]) == manifest.HOST_KEYS
     assert keys(properties["time"]) == manifest.TIME_KEYS
     assert set(properties["time"]["properties"]["mode"]["enum"]) <= set(manifest.TIME_MODES)

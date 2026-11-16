@@ -2084,6 +2084,10 @@ def render_report(report: dict) -> str:
                          + (" (a path relative to this directory)" if name in report["run"]["env_paths"] else ""))
         for file in report.get("run", {}).get("models", []):
             lines.append(f"- Python device models started with the run: `{file}`")
+        if report.get("files"):
+            sandbox = report["files"]["sandbox"]
+            relative = "" if sandbox.startswith(("/", "~")) else " (a path relative to this directory)"
+            lines.append(f"- Sandbox of the files of flight software: `{sandbox}`{relative}")
     if report.get("testing_variants"):
         lines += ["", "## Modules that change under BUILD_TESTING", "",
                   "Modules of this build whose `CMakeLists.txt` does something else when `BUILD_TESTING` is set. "
@@ -2881,6 +2885,9 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         "        Wsts_Os_Queue",
         "        Wsts_Os_RawTime",
         "        Wsts_Os_Task",
+        "    # The file system of the framework, with every path of flight software mapped into the",
+        "    # sandbox of the run: `files.sandbox` in the manifest, or the files directory of the run",
+        "        Wsts_Os_File",
         ")",
         *(["# The VxWorks API shim (`shims` in the manifest), whole: any module may call it, whatever the",
            "# order in which the static libraries are linked",
@@ -3254,6 +3261,8 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
                 f"to the manifest (docs/vxworks-shim.md), or guard the include with #ifndef WSTS_SIM.")
     if manifest.shims:
         report["shims"] = manifest.shims
+    if manifest.files_sandbox:
+        report["files"] = {"sandbox": manifest.files_sandbox}
     report["warnings"] = plan.warnings
     report["dropped_cmake_options"] = dropped_options
     if sim_root is not None:

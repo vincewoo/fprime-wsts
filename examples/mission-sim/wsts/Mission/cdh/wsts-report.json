@@ -781,6 +781,9 @@
   "shims": [
     "vxworks"
   ],
+  "files": {
+    "sandbox": "./wsts-files"
+  },
   "dropped_cmake_options": [
     "VX_TARGET_TYPE=DKM",
     "FPRIME_PLATFORM=VxWorks"

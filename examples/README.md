@@ -89,6 +89,7 @@ runs the end-to-end tests against it.
 | A header of the target's sysroot | `Imager.cpp` includes `<board/revision.h>`; `mission-sim/host.cmake` (`cmake.include_early`) adds `mission-sim/host/include` | the build; `test_payload.py::test_stub_variant_of_the_camera_runs` |
 | A host check before the build | `fprime-wsts check-host mission-sim/wsts-system.yaml`: clean as checked in; without `stub_variants` it lists the camera SDK's headers, library, package and file | Python tests (`test_host_bridges.py`); CI |
 | Environment of the simulated deployment | `SENSOR_SIM_PROFILE` (`run.env` in `cdh.yaml`) | `test_cdh.py::test_environment_variable_reaches_the_simulator` |
+| The sandbox of the files of flight software | `SensorSim.prmDb` saves `/ram0/SensorSimPrmDb.dat`; `files.sandbox: ./wsts-files` in `cdh.yaml` puts it at `wsts-files/ram0/`, not in the log directory | `test_files.py::test_a_saved_parameter_database_lands_in_the_sandbox` |
 | A system of several elements | `wsts-system.yaml`: two elements, their ID windows, the `hub` link | `test_system.py` |
 | Faults on a link and on an element's endpoint | the `hub` link; `payload.hubDriver` | `test_system.py` |
 | Pause, resume and time scale | each element, and the whole system | `test_system.py`, `test_cdh.py`, `test_payload.py` |

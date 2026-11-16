@@ -244,6 +244,7 @@ Configuration the simulated build replaces and flight does not. These modules ar
 - Library of the simulation: `../../../lib/sim-common`
 - CMake included after all modules are added: `../../../sim.cmake`
 - Environment: `SENSOR_SIM_PROFILE=../../../profiles/calm.txt` (a path relative to this directory)
+- Sandbox of the files of flight software: `./wsts-files` (a path relative to this directory)
 
 ## Modules that change under BUILD_TESTING
 

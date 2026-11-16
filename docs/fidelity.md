@@ -30,7 +30,7 @@ the concrete list for that deployment.
 | Interrupts | Delivered on ordinary threads: a register block's on the thread that raises it (the tick thread for a model), one at a time | Code that relies on interrupt context (no blocking, masking) is not checked. Priorities, masking and nesting of the target's interrupts are not reproduced |
 | Word size, byte order | Host's (64-bit little-endian on x86-64) | Code that depends on the target's representation behaves differently |
 | Dictionary | Entries of replaced drivers are missing unless a mirror surrogate is used; WSTS entries are added | Ground procedures that use a replaced driver's telemetry need a mirror surrogate |
-| File system | Host paths | Target-specific paths need to exist or be changed until path remapping is built |
+| File system | Mapped into a sandbox of the run (`Os::File`, `Os::FileSystem`, `Os::Directory`; see "Files" in the reference) | What the target had as mounts is a directory tree made on demand; a path cannot name anything outside the sandbox. The raw I/O API of the VxWorks shim is the host's, as written |
 | Links between computers ([systems](systems.md)) | Each send delivered whole and immediately to the other element | Framing errors, partial reads, line rate and latency are not reproduced unless injected as faults. Connection set-up and loss of a socket link are not modelled |
 | Time across computers | Each element has its own tick, paced by the host clock | Elements are not synchronised to each other; pause and rate changes reach them one after another |
 
