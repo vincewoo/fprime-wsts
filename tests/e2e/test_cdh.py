@@ -276,15 +276,23 @@ def test_in_stepped_time_every_beat_is_counted_in_its_tick(gds, cdh):
     cdh.set_stepped(True)
     try:
         time.sleep(0.5)  # what real time had sent is in
+        cdh.step(100)  # ten simulated seconds through the seam into stepped time: the hand
+        #over from the real-time system clock leaves it with time to catch up, which it
+        # pays in the first seconds of stepped time
         gds.clear_histories()
         cdh.step(100)  # ten simulated seconds: ten reports, the last still on its way down
-        samples = heartbeat_samples(gds, 7)
+        samples = heartbeat_samples(gds, 9)
     finally:
         cdh.set_stepped(False)
         cdh.resume()
-    # In the order they were written (the history is in the order of time tags: simulated
-    # time in stepped time, the host's clock in real time), from the second on: the first
-    # may have been written in real time, before the pause
+    # Reports that were on their way down from real time may land after the clear and lead
+    # the window off the cadence. Sorted by the counts, they are trimmed from the front: the
+    # invariant is the run of reports once the window is inside stepped time. A report lost
+    # or a tick short in the middle of it is not trimmed, and fails.
+    def steps(samples):
+        return [(b[0] - a[0], b[1] - a[1]) for a, b in zip(samples, samples[1:])]
+
     samples = sorted(samples)
-    steps = [(b[0] - a[0], b[1] - a[1]) for a, b in zip(samples[1:], samples[2:])]
-    assert len(steps) >= 5 and all(step == (60, 10) for step in steps), f"{samples}"
+    while len(samples) > 6 and steps(samples)[0] != (60, 10):
+        samples = samples[1:]
+    assert len(samples) > 6 and all(step == (60, 10) for step in steps(samples)), f"{samples}"
