@@ -24,6 +24,7 @@ surrogates:
     replaces:
       - Svc.PosixTime
       - Svc.ChronoTime
+      - Svc.OsTime
 
   - surrogate: Wsts.SimI2c
     replaces:

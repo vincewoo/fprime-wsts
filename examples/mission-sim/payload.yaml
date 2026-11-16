@@ -35,16 +35,6 @@ models:
     kind: i2c
     address: 0x68
 
-  # Power monitor on the same bus at 0x40: the toolkit's register map, 14.0 V and 500 mA
-  - name: power
-    class: Wsts::RegisterMapI2c
-    endpoint: i2cBus
-    kind: i2c
-    address: 0x40
-    params:
-      "0x02": "0x6D 0x60"
-      "0x04": "0x01 0xF4"
-
   # The instrument's converter on SPI: the toolkit's loopback model shifts back what it
   # is sent, which the flight component reads as a conversion of 0
   - name: adc
@@ -81,6 +71,23 @@ models:
       text: "$TEMP,21.5\n"
       period: "20"
 
+# The power monitor is an F Prime component of this project (PowerSim/), not a C++ model:
+# it is commanded and observed through the ground system, and answers the flight driver
+# through the adapter, which is the device on the flight I2C bus at 0x40. The IMU model
+# above stays on the same bus at 0x68: one device per address.
+simulators:
+  instances:
+    - PayloadSim.powerDevice
+    - PayloadSim.powerSim
+  connections:
+    - PayloadSim.powerDevice.transact -> PayloadSim.powerSim.transaction
+    - PayloadSim.powerDevice.poke -> PayloadSim.powerSim.poke
+
+devices:
+  - instance: PayloadSim.powerDevice
+    endpoint: i2cBus
+    options: "addr=0x40"
+
 cmake:
   # The camera's SDK exists for the flight board only. Components/Imager has a stub of the
   # camera for its unit tests, under if (BUILD_TESTING): that module alone is read with
@@ -95,7 +102,7 @@ cmake:
   include_early: [host.cmake]
   # This project's library.cmake builds only the modules this element uses
   cache:
-    MISSION_SIM_MODULES: [Models, Surrogates/SimLinuxGpio, Surrogates/SimRegisterInterface]
+    MISSION_SIM_MODULES: [Models, PowerSim, Surrogates/SimLinuxGpio, Surrogates/SimRegisterInterface]
   # The model's module, for the generated set-up that creates it
   depends: [Models]
 

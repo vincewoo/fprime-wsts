@@ -1,0 +1,10 @@
+register_fprime_library(
+    AUTOCODER_INPUTS
+        "${CMAKE_CURRENT_LIST_DIR}/BusSpiDevice.fpp"
+    SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/BusSpiDevice.cpp"
+    HEADERS
+        "${CMAKE_CURRENT_LIST_DIR}/BusSpiDevice.hpp"
+    DEPENDS
+        Wsts_Core
+)

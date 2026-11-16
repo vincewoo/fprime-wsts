@@ -125,6 +125,16 @@ module Payload {
       fpgaRegs.interrupt -> fpga.interruptIn
     }
 
+
+    # Simulator instances and their connections (generated from `simulators` in the manifest)
+    instance PayloadSim.powerDevice
+    instance PayloadSim.powerSim
+
+    connections WstsSimulators {
+      PayloadSim.powerDevice.transact -> PayloadSim.powerSim.transaction
+      PayloadSim.powerDevice.poke -> PayloadSim.powerSim.poke
+    }
+
   }
 
 }

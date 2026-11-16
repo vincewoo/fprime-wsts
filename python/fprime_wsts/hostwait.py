@@ -115,6 +115,7 @@ FRAMEWORK: Dict[str, Tuple[str, str]] = {
     "Drv.LinuxGpioDriver": ("waits_on_io", "a GPIO driver: its interrupt task waits in poll() on the line"),
     "Svc.PosixTime": ("host_clock", "time stamps from clock_gettime(), in either mode"),
     "Svc.ChronoTime": ("host_clock", "time stamps from std::chrono::system_clock, in either mode"),
+    "Svc.OsTime": ("host_clock", "time stamps from OSAL RawTime, the host's clock, in either mode"),
     "Svc.LinuxTimer": ("sleeps", "ticks by the wall clock, and does not take its ticks from the stepper"),
     "Svc.SystemResources": ("host_state", "processor and memory use, read from the host"),
 }

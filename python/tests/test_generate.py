@@ -162,8 +162,10 @@ def test_standalone_simulation_project(tmp_path):
     assert "#include <Surrogates/SimLinuxGpio/SimLinuxGpio.hpp>" in compat
     setup = (result.output / "Payload" / "Top" / "WstsSetup.cpp").read_text()
     assert "#include <Models/ImuModel.hpp>" in setup and "Sim::ImuModel model_imu;" in setup
-    # Two models on one I2C endpoint, at their own addresses
-    assert 'attachI2c("i2cBus", 0x68, &model_imu)' in setup and 'attachI2c("i2cBus", 0x40, &model_power)' in setup
+    # Two devices on one I2C endpoint: the IMU model at its address, the power monitor as
+    # an F Prime component behind the adapter at 0x40
+    assert 'attachI2c("i2cBus", 0x68, &model_imu)' in setup
+    assert '::PayloadSim::powerDevice.wstsServe("i2cBus", "addr=0x40");' in setup
 
 
 def test_simulation_project_needs_a_library_cmake_for_its_modules(tmp_path):

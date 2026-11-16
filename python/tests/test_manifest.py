@@ -53,7 +53,8 @@ def test_default_catalog_covers_the_standard_drivers():
     catalog = {s.name: s for s in load_catalog(DEFAULT_CATALOG)}
     replaced = {component for s in catalog.values() for component in s.replaces}
     assert {"Drv.LinuxI2cDriver", "Drv.LinuxSpiDriver", "Drv.LinuxGpioDriver", "Drv.PosixUartDriver",
-            "Svc.LinuxTimer", "VxWorksDrv.VxWorksUartDriver", "VxWorksSvc.VxWatchDogTimer"} <= replaced
+            "Svc.LinuxTimer", "Svc.PosixTime", "Svc.ChronoTime", "Svc.OsTime",
+            "VxWorksDrv.VxWorksUartDriver", "VxWorksSvc.VxWatchDogTimer"} <= replaced
     tick = catalog["Wsts.SimTick"]
     assert "mode=thread" in tick.options_when_replacing("VxWorksSvc.VxWatchDogTimer")
     assert tick.options_when_replacing("Svc.LinuxTimer") == "mode=block"

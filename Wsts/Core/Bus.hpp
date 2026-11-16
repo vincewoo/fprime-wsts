@@ -245,6 +245,13 @@ class Bus {
     void detach(const std::string& endpoint);
     //! Remove `device` from an endpoint if it is still the byte stream device there
     void detachByteStream(const std::string& endpoint, ByteStreamDevice* device);
+    //! Remove `device` from an endpoint if it is still the device at `addr` there. The other
+    //! addresses of the bus keep their devices, as do the other kinds on the endpoint
+    void detachI2c(const std::string& endpoint, std::uint32_t addr, I2cDevice* device);
+    //! Remove `device` from an endpoint if it is still the SPI device there
+    void detachSpi(const std::string& endpoint, SpiDevice* device);
+    //! Remove `device` from an endpoint if it is still the GPIO device there
+    void detachGpio(const std::string& endpoint, GpioDevice* device);
     //! Whether a surrogate is bound to the flight side of a byte stream endpoint
     bool byteStreamBound(const std::string& endpoint);
 

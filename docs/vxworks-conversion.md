@@ -163,8 +163,9 @@ C++ expression, so other arguments of the entry point are written into it.
 - **A simulator that must see a flight output port that is already connected.** An output
   port drives one input; there is no tap. Feed the simulator from another port, or
   substitute the receiving component.
-- **I2C, SPI and GPIO simulators written as components.** Only the byte stream adapter
-  exists; use a C++ model on those endpoints.
+- **I2C, SPI and GPIO simulators written as components.** Every bus kind has an adapter
+  (`Wsts.BusI2cDevice`, `Wsts.BusSpiDevice`, `Wsts.BusGpioDevice` alongside the byte stream
+  one); see [Simulators](user-guide/simulators.md#notes).
 - **Simulator rates across the elements of a system.** Each element has its own tick and
   its own clocks; nothing aligns them between processes.
 - **A project tick surrogate that does not declare its period** makes the simulation's

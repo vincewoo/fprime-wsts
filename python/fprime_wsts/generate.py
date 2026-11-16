@@ -638,7 +638,7 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
                             f"{no_endpoint_hint(device.endpoint)}")
     sims.plan_devices(
         plan.sim, model, manifest, topology,
-        {sub.endpoint: (sub.instance.name, {"send", "recv"} <= set(sub.surrogate.ports))
+        {sub.endpoint: (sub.instance.name, sims.endpoint_kind(sub.surrogate.ports))
          for sub in plan.substitutions if sub.bind},
         {link.endpoint: link.end.link for link in plan.links},
     )

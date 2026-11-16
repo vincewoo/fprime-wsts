@@ -72,14 +72,14 @@ runs the end-to-end tests against it.
 | A standalone simulation project | `mission-sim/`, with `project: ../mission` in each element manifest | all |
 | Project surrogates in a catalog of their own | `Sim.SimLinuxGpio`, a mirror of `Drv.LinuxGpioDriver` (`wsts-catalog.yaml`) | `test_payload.py::test_mirror_surrogate_keeps_the_flight_dictionary` and the GPIO tests |
 | A surrogate with no bus endpoint | Cdh's time source replaced by `SensorSim.SimTime` (`endpoint: none`) | `test_cdh.py::test_time_comes_from_the_surrogate_without_an_endpoint` |
-| Stock device models | `Wsts::RegisterMapI2c` (power monitor), `Wsts::ScriptedByteStream` (Payload's sensor) | `test_payload.py::test_flight_telemetry_comes_from_models` |
+| Stock device models | `Wsts::ScriptedByteStream` (Payload's sensor) | `test_payload.py::test_flight_telemetry_comes_from_models` |
 | A project device model | `Sim::ImuModel` in `mission-sim/Models`, set in g | `test_payload.py::test_project_model_takes_engineering_units` |
 | A register interface component replaced, its driver kept | `fpgaRegs` (`SensorLib.RegisterInterface`, named in `payload.yaml`) becomes `Wsts.SimRegister`, written with that component's ports; `Components.FpgaMonitor` above it is flight code | `test_payload.py::test_flight_driver_reads_and_writes_the_register_block` |
 | A register block with an interrupt | `Wsts::RegisterFile` on `fpgaRegs`: identity, write-1-to-clear status, a frame interrupt once a second | `test_payload.py::test_register_interrupt_is_serviced_by_flight_software`, `test_lost_and_duplicated_interrupts` |
 | Register faults, `REG_SET` and `IRQ_RAISE`, recording and replay, a register block in Python | on `fpgaRegs` and `fpgaRegs:irq` | `test_payload.py` (the register tests) |
 | A mirror of the register interface | `mission-sim/Surrogates/SimRegisterInterface`, on `Wsts::RegisterSurrogate`: built, and used when `payload.yaml` names it | Python tests (`test_registers.py`); the build |
 | Two devices on one bus | IMU at 0x68 and power monitor at 0x40 on `i2cBus` | `test_payload.py::test_two_devices_answer_on_one_i2c_bus` |
-| Device simulators written as F´ components | `SensorSim.SerialSensorSim` behind Cdh's UART through `Wsts.BusByteStreamDevice` (`simulators`, `devices`), with its own command, parameter, events and telemetry | `test_cdh.py` |
+| Device simulators written as F´ components | `SensorSim.SerialSensorSim` behind Cdh's UART through `Wsts.BusByteStreamDevice` (`simulators`, `devices`), with its own command, parameter, events and telemetry; `PowerSim` behind Payload's I2C bus through `Wsts.BusI2cDevice` (`addr=0x40`), commanded from the GDS | `test_cdh.py`, `test_payload.py::test_component_device_takes_commands_from_the_gds` |
 | A cycle source with a rate of its own | `SensorSim.simClock` at 125 Hz stepping `SensorSim.gyroSim` (`clocks`) | `test_cdh.py::test_fast_simulator_runs_at_its_own_rate` and the clock tests |
 | A further library of the simulation | `mission-sim/lib/sim-common` (`libraries.sim`) | Python tests |
 | CMake around the flight modules | `cmake.cache` (each element builds only its modules), `cmake.include` (`sim.cmake`), `cmake.depends` | Python tests; the build |

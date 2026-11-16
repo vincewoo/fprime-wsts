@@ -109,8 +109,8 @@ What to know:
   whatever their priorities, and none preempts another.
 - A project's own time component still gives the host's clock unless its surrogate asks
   the simulation (`Wsts::Control::flightTime`, as the example's
-  `SensorSim/SimTime/SimTime.cpp` does); `Svc.PosixTime` and `Svc.ChronoTime` are
-  replaced for you. The report flags a surrogate that reads the host's clock.
+  `SensorSim/SimTime/SimTime.cpp` does); `Svc.PosixTime`, `Svc.ChronoTime` and
+  `Svc.OsTime` are replaced for you. The report flags a surrogate that reads the host's clock.
 - A whole system is not stepped yet (`run --stepped` refuses one): step one element
   through its bridge.
 

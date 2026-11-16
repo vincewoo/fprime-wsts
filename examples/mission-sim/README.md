@@ -8,7 +8,7 @@ See [the example's README](../README.md) for what it shows and how to run it.
 |---|---|
 | `wsts-system.yaml` | The system: elements `cdh` and `payload`, their ID windows, the `hub` link, the ground element |
 | `cdh.yaml` | Manifest of Cdh: `keep`, a generated `main`, `substitute` (with `endpoint: none`), `simulators`, `devices`, `clocks`, `libraries.sim`, `cmake.cache`, `cmake.include`, `run.env` |
-| `payload.yaml` | Manifest of Payload: `catalogs`, `substitute` (the register interface component, with `Wsts.SimRegister`), `models` (two on one I2C bus, a register block with an interrupt), `cmake.cache`, `cmake.depends` |
+| `payload.yaml` | Manifest of Payload: `catalogs`, `substitute` (the register interface component, with `Wsts.SimRegister`), `models` (two devices on one I2C bus, a register block with an interrupt), `simulators` with `devices` (the power monitor is an F´ component behind the `Wsts.BusI2cDevice` adapter), `cmake.cache`, `cmake.depends` |
 | `wsts-catalog.yaml` | This project's surrogates, searched before the toolkit's catalog |
 | `library.cmake` | Builds the modules named in the cache variable `MISSION_SIM_MODULES`, and `config/` |
 | `SensorSim/SerialSensorSim/` | A queued simulator behind Cdh's UART, with a command, a parameter, events and telemetry |
@@ -18,6 +18,7 @@ See [the example's README](../README.md) for what it shows and how to run it.
 | `Surrogates/SimLinuxGpio/` | Mirror surrogate for `Drv.LinuxGpioDriver`: the flight driver's events stay in the dictionary |
 | `Surrogates/SimRegisterInterface/` | Mirror surrogate for sensor-lib's `SensorLib.RegisterInterface`, on `Wsts::RegisterSurrogate`: its debug commands read and write through the bus. Built with Payload; `payload.yaml` says how to select it |
 | `Models/` | `Sim::ImuModel`, an IMU whose acceleration is set in g |
+| `PowerSim/` | The power monitor as an F´ component: it answers I2C transactions through the `Wsts.BusI2cDevice` adapter at 0x40, and is commanded and observed through the ground system |
 | `lib/sim-common/` | A library vendored here, with module names of its own (`SimCommon_Types`) |
 | `config/` | Configuration overrides for the simulated build: more rate group ports and a larger opcode table than the flight project sets |
 | `sim.cmake` | CMake included in the overlay: an alias for a flight module |

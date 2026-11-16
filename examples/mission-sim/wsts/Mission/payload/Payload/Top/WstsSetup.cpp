@@ -12,7 +12,6 @@
 namespace {
 
 Sim::ImuModel model_imu;
-Wsts::RegisterMapI2c model_power;
 Wsts::LoopbackSpi model_adc;
 Wsts::RegisterFile model_fpga;
 Wsts::ScriptedByteStream model_tempSensor;
@@ -40,15 +39,13 @@ void setup() {
     ::Payload::spiBus.wstsBind("spiBus", "");
     ::Payload::fpgaRegs.wstsBind("fpgaRegs", "");
 
+    // Simulator components: each adapter is the device on its endpoint
+    ::PayloadSim::powerDevice.wstsServe("i2cBus", "addr=0x40");
+
     // Device models
     (void)Wsts::configureModel(&model_imu, "endpoint", "i2cBus");
     Wsts::Bus::get().attachI2c("i2cBus", 0x68, &model_imu);
     Wsts::registerModel("imu", &model_imu);
-    (void)Wsts::configureModel(&model_power, "endpoint", "i2cBus");
-    configure("power", Wsts::configureModel(&model_power, "0x02", "0x6D 0x60"), "0x02");
-    configure("power", Wsts::configureModel(&model_power, "0x04", "0x01 0xF4"), "0x04");
-    Wsts::Bus::get().attachI2c("i2cBus", 0x40, &model_power);
-    Wsts::registerModel("power", &model_power);
     (void)Wsts::configureModel(&model_adc, "endpoint", "spiBus");
     Wsts::Bus::get().attachSpi("spiBus", &model_adc);
     Wsts::registerModel("adc", &model_adc);
