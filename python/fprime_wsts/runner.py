@@ -417,6 +417,13 @@ class Simulation:
         if self.hold:
             env["WSTS_START_PAUSED"] = "1"
         env.setdefault("WSTS_DIR", str(self.files_dir))
+        # The sandbox of the files of flight software (`files.sandbox` in the manifest): where
+        # target paths and relative names of flight software land on the host
+        sandbox = self.report.get("files", {}).get("sandbox")
+        if sandbox:
+            resolved = sandbox if os.path.isabs(sandbox) else str((self.directory / sandbox).resolve())
+            env["WSTS_FILES_DIR"] = resolved
+            Path(resolved).mkdir(parents=True, exist_ok=True)
         if self.scenario:
             env["WSTS_SCENARIO"] = str(Path(self.scenario).resolve())
             env["WSTS_SCENARIO_MODE"] = self.scenario_mode

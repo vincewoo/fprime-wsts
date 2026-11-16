@@ -91,7 +91,8 @@ manifest key, and `fprime-wsts check-host` lists them before you build
   ([Register blocks](registers.md)).
 - **DMA**: the flight libraries' virtual-to-physical translation has to mean something
   off the target ([details](../vxworks-conversion.md#what-you-still-have-to-deal-with)).
-- **Target file-system paths** are used as written; path remapping is on the roadmap.
+- **Target file-system paths** are mapped into a sandbox of the run; a path cannot name
+  anything outside it ([Files](../reference.md#files)).
 - **Word size, byte order and scheduling** are the host's ([Fidelity](../fidelity.md)).
 
 The complete list, with remedies, is in

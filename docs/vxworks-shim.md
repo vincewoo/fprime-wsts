@@ -131,8 +131,9 @@ holds this for the example, and `Wsts/VxWorks/test/ut` for the shim itself.
   `taskCpuAffinitySet` (code under `_WRS_CONFIG_SMP` stays out) or RTP calls.
   `sioLib` and the VxWorks `ioctl` codes (`FIOSETOPTIONS`, `SIO_*`) are not defined: a
   serial driver that uses them is replaced, as `VxWorksDrv.VxWorksUartDriver` is.
-- **Target paths** given to `open` are used as written (file-system remapping is on the
-  [roadmap](design.md#roadmap)).
+- **Target paths** given to `open` are used as written: the raw API of the kernel is below
+  F Prime's `Os::File`, and the sandbox of the run is [what `Os::File` and its file system
+  and directory do](reference.md#files), not this.
 - **A task of the shim that waits outside it** (on a POSIX semaphore, in `sleep`, on a
   socket) does what the report's [Time section](stepped-time.md) says of such code: in
   stepped time it keeps the work it was handed until it blocks in the shim again.

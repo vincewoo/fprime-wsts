@@ -899,8 +899,11 @@ Replay is repeatable to tick granularity. It is not cycle-exact: see
    `logLib` and `ioLib`, turned on with `shims: [vxworks]`, so that project code that
    calls the VxWorks kernel compiles and runs unchanged, in simulated time and in stepped
    time.
-3. **File-system remapping.** An `Os_File` implementation that maps target paths
-   (`/ram0`, `/tffs0`) into a sandbox directory.
+3. **File-system remapping.** *Built* (`Wsts_Os_File`, the `files` section of
+   [reference.md](reference.md#files)): the file system of the framework — `Os::File`,
+   `Os::FileSystem` and `Os::Directory` — with every path of flight software mapped into a
+   sandbox directory of the run, so that target paths (`/ram0`, `/tffs0`) and relative
+   names work unchanged and stay inside it.
 4. 32-bit and big-endian build options; adapters to external dynamics simulators.
 5. Systems: GPIO links, datagram and connection semantics for socket links, and merged
    recordings. (Lockstep time across elements and system scenarios are built: phase 4 of

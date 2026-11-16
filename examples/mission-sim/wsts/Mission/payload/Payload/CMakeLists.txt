@@ -12,4 +12,7 @@ register_fprime_deployment(
         Wsts_Os_Queue
         Wsts_Os_RawTime
         Wsts_Os_Task
+    # The file system of the framework, with every path of flight software mapped into the
+    # sandbox of the run: `files.sandbox` in the manifest, or the files directory of the run
+        Wsts_Os_File
 )

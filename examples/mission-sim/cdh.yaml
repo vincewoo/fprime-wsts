@@ -34,6 +34,13 @@ main:
 # and runs its task, watchdog and system clock in simulated time.
 shims: [vxworks]
 
+# Where the files of flight software land on the host. SensorSim.prmDb saves its parameter
+# database as /ram0/SensorSimPrmDb.dat; with the sandbox it lands at ./wsts-files/ram0/,
+# not in the log directory, and survives the clearing of one. Without the key the files
+# directory of the run (WSTS_DIR) is the sandbox.
+files:
+  sandbox: ./wsts-files
+
 # The flight time source is replaced by a component of this project that has the same
 # port and talks to nothing else: no bus endpoint.
 substitute:
