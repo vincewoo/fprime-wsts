@@ -214,16 +214,6 @@ Iterate until it passes. A failure means the model is wrong, the capture is unus
 
 If steps 3–4 cannot run here (no toolchain or time), say so. Do not claim the
 integration works without having run it.
-3. `fprime-wsts run <generated dir> --gds --duration 30 --json`. Check that the run shows
-   no assert, that the bus `errors` counter stayed at 0 for this endpoint, and that
-   `wsts-logs/sim.log` shows the flight device manager's events and telemetry with
-   plausible values (initialised, no timeouts, no checksum errors).
-4. If the project has e2e tests (`tests/e2e/`), add one that sets a model parameter and
-   sees the value in flight telemetry, as `test_payload.py::test_project_model_takes_engineering_units`
-   does.
-
-If steps 2–3 cannot run here (no toolchain or time), say so. Do not claim the
-integration works without having run it.
 
 ### 9. Report
 
