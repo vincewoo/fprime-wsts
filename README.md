@@ -124,7 +124,8 @@ device models. [docs/design.md](docs/design.md) has more detailed diagrams of ea
 
 - **Device simulators as F´ components**: simulators a project already has as components
   are added to the simulated topology from the manifest and put behind a bus endpoint with
-  the `Wsts.BusByteStreamDevice` adapter, with their own commands, telemetry and scheduling.
+  the adapter for its kind (`Wsts.BusByteStreamDevice`, `BusI2cDevice`, `BusSpiDevice`,
+  `BusGpioDevice`), with their own commands, telemetry and scheduling.
 - **Surrogate components** for the standard driver interfaces: `Wsts.SimByteStream` (UART),
   `Wsts.SimI2c`, `Wsts.SimSpi`, `Wsts.SimGpio`, `Wsts.SimTick`. They are ordinary F´ components,
   and projects write their own the same way.

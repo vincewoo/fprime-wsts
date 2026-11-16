@@ -1,0 +1,10 @@
+register_fprime_library(
+    AUTOCODER_INPUTS
+        "${CMAKE_CURRENT_LIST_DIR}/PowerSim.fpp"
+    SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/PowerSim.cpp"
+    HEADERS
+        "${CMAKE_CURRENT_LIST_DIR}/PowerSim.hpp"
+    DEPENDS
+        Wsts_Drv_BusI2cDevice
+)

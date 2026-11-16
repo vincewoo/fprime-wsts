@@ -173,9 +173,26 @@ earlier supplies.
   UART driver. A send copies, so the simulator keeps its buffer.
 - **Pause.** A simulator on a flight rate group stops with it. Injection from the bridge
   still reaches flight software while paused.
-- **Other buses.** Only the byte stream adapter exists. For I2C, SPI and GPIO, use a C++
-  model, which can forward to whatever you need.
+- **Other buses.** Every bus kind has an adapter: `Wsts.BusByteStreamDevice` for a byte
+  stream endpoint, `Wsts.BusI2cDevice`, `Wsts.BusSpiDevice` and `Wsts.BusGpioDevice` for the
+  others. The bus's device interface is synchronous on all of them, so the simulator's ports
+  to the adapter are synchronous and it answers from inside the call:
+  - **I2C** — `sync input port transaction: Wsts.I2cDeviceTransact`, which takes the address
+    and both buffers and returns the status; the simulator fills the read buffer in place.
+    Set the address the device answers with `options: addr=<n>` on the `devices` entry.
+    Several adapters may share one endpoint, each at its own address, and they coexist with
+    `i2c` models at other addresses. A `sync input port poke: Wsts.I2cDevicePoke` takes the
+    `i2c_reg_set` action; unconnected, the action reports that the device does not support it.
+  - **SPI** — `sync input port transfer: Wsts.SpiDeviceTransfer`. One adapter per endpoint:
+    the endpoint is the chip select.
+  - **GPIO** — the adapter imports `Drv.Gpio`, so the simulator connects to it as it would to
+    a real GPIO driver: `gpioWrite` drives the line towards flight software (whose interrupt
+    fires on an edge), `gpioRead` reads the level flight last drove. What flight writes
+    arrives on the adapter's `pinWrite` output port.
+  A register endpoint takes no adapter: its device is a register model under `models`.
 
 The example's Cdh computer has all of this: `examples/mission-sim/SensorSim/` and
-`cdh.yaml`. The [simulator keys](../reference.md#simulator-components) and
+`cdh.yaml`. Its Payload computer has an I2C device as an F Prime component:
+`examples/mission-sim/PowerSim/` and `payload.yaml`. The
+[simulator keys](../reference.md#simulator-components) and
 [clocks](../reference.md#clocks) are in the reference.

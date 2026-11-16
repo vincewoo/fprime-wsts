@@ -1,0 +1,10 @@
+register_fprime_library(
+    AUTOCODER_INPUTS
+        "${CMAKE_CURRENT_LIST_DIR}/BusI2cDevice.fpp"
+    SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/BusI2cDevice.cpp"
+    HEADERS
+        "${CMAKE_CURRENT_LIST_DIR}/BusI2cDevice.hpp"
+    DEPENDS
+        Wsts_Core
+)

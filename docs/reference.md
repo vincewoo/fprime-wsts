@@ -99,9 +99,11 @@ simulators:                      # F´ instances the simulation adds (see "Simul
   connections:                           # between added instances and flight ones
     - rateGroup1Hz.RateGroupMemberOut -> SensorSim.Simulator.schedIn
 devices:                         # adapter instances that are the device on a bus endpoint
-  - instance: SensorSim.sensorPort       # an instance of Wsts.BusByteStreamDevice
-    endpoint: uart
-    options: "chunk=256"         # passed to wstsServe()
+  - instance: SensorSim.sensorPort       # an instance of the adapter for that endpoint's kind:
+    endpoint: uart                       # BusByteStreamDevice, BusI2cDevice, BusSpiDevice or
+                                         # BusGpioDevice
+    options: "chunk=256"         # passed to wstsServe(): chunk=<bytes> on a byte stream
+                                 # endpoint, addr=<n> (required) on an I2C endpoint
 
 clocks:                          # rates of the simulation's own cycle sources
   - instance: SensorSim.simClock         # an instance of Wsts.SimCycle, added by `simulators`
@@ -343,11 +345,17 @@ What the generator checks, and what it does to keep flight as it is:
   the flight parameter database. If it has none, an added instance with parameters must be
   connected to a `Svc.PrmDb` in the simulation's own FPP.
 
-`devices` names adapter instances. `Wsts.BusByteStreamDevice` offers `Drv.ByteStreamDriver`
-(with `allocate` and `deallocate`) to a simulator and is the device on a byte stream
-endpoint. The endpoint must be bound by a surrogate and be a byte stream, and cannot also
-have a `bytestream` model, another device or a system link. `wstsServe` options:
-`chunk=<bytes>`, the largest buffer per `recv` (default 1024).
+`devices` names adapter instances, one per kind of bus endpoint. `Wsts.BusByteStreamDevice`
+offers `Drv.ByteStreamDriver` (with `allocate` and `deallocate`) to a simulator and is the
+device on a byte stream endpoint. `Wsts.BusI2cDevice`, `Wsts.BusSpiDevice` and
+`Wsts.BusGpioDevice` are the same for I2C, SPI and GPIO endpoints: they offer the driver
+interface their simulator plays the device behind, and answer the bus's transactions
+synchronously from it. The endpoint must be bound by a surrogate of the same kind, and for
+byte stream, SPI and GPIO cannot also have a model, another device or a system link; on an
+I2C endpoint each address has one device, and a model at another address coexists.
+`wstsServe` options: `chunk=<bytes>`, the largest buffer per `recv` (default 1024), on a
+byte stream endpoint; `addr=<n>`, required, the address the device answers, on an I2C
+endpoint.
 
 ### Clocks
 
@@ -571,11 +579,12 @@ Built-in surrogates (`catalog/wsts-catalog.yaml`):
 | `Wsts.SimGpio` | `Drv.Gpio` (one pin per instance) | `Drv.LinuxGpioDriver` | |
 | `Wsts.SimRegister` | 32-bit and 64-bit register reads and writes, an interrupt output ([Register blocks](#register-blocks)) | nothing by itself: the manifest names a project's register interface component | `irq=serial\|direct\|off` |
 | `Wsts.SimTick` | `Drv.Tick` | `Svc.LinuxTimer`, `VxWorksSvc.VxWatchDogTimer` | `mode=block\|thread`, `tick_hz=<n>` |
-| `Wsts.SimTime` | `Svc.Time` (the time port; no bus endpoint) | `Svc.PosixTime`, `Svc.ChronoTime` | |
+| `Wsts.SimTime` | `Svc.Time` (the time port; no bus endpoint) | `Svc.PosixTime`, `Svc.ChronoTime`, `Svc.OsTime` | |
 
 Stock components that are not surrogates, for instances the simulation adds:
-`Wsts.BusByteStreamDevice` (the device on a byte stream endpoint, see `devices`) and
-`Wsts.SimCycle` (a cycle source with its own rate, see `clocks`).
+`Wsts.BusByteStreamDevice`, `Wsts.BusI2cDevice`, `Wsts.BusSpiDevice` and
+`Wsts.BusGpioDevice` (the device on a byte stream, I2C, SPI or GPIO endpoint, see
+`devices`) and `Wsts.SimCycle` (a cycle source with its own rate, see `clocks`).
 
 ## Actions
 

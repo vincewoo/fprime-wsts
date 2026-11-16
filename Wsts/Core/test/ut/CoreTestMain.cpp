@@ -189,6 +189,110 @@ TEST_F(CoreTest, GpioLoopbackInputAndEdges) {
     EXPECT_EQ(edges, (std::vector<bool>{false, true})) << "one callback per level change";
 }
 
+// What a device adapter (Wsts.BusI2cDevice, Wsts.BusSpiDevice, Wsts.BusGpioDevice) needs from
+// the bus: it implements the device interface and attaches and detaches itself
+
+class TestI2cDevice : public Wsts::I2cDevice {
+  public:
+    int transact(std::uint32_t addr, const Bytes& write, Bytes& read) override {
+        calls++;
+        this->addr = addr;
+        lastWrite = write;
+        read = reply;
+        return 0;
+    }
+    int calls = 0;
+    std::uint32_t addr = 0;
+    Bytes lastWrite;
+    Bytes reply;
+};
+
+class TestSpiDevice : public Wsts::SpiDevice {
+  public:
+    int transfer(const Bytes& write, Bytes& read) override {
+        calls++;
+        lastWrite = write;
+        for (std::size_t i = 0; i < read.size(); i++) {
+            read[i] = static_cast<std::uint8_t>(i + 1);
+        }
+        return 0;
+    }
+    int calls = 0;
+    Bytes lastWrite;
+};
+
+class TestGpioDevice : public Wsts::GpioDevice {
+  public:
+    void onWrite(bool level) override {
+        calls++;
+        levels.push_back(level);
+    }
+    int calls = 0;
+    std::vector<bool> levels;
+};
+
+TEST_F(CoreTest, TwoI2cDevicesShareABusAndDetachByAddress) {
+    TestI2cDevice power;
+    TestI2cDevice other;
+    power.reply = text("P");
+    other.reply = text("O");
+    Bus::get().attachI2c("bus", 0x40, &power);
+    Bus::get().attachI2c("bus", 0x41, &other);
+    Bytes read(1, 0);
+    EXPECT_EQ(Bus::get().i2cTransact("bus", 0x40, Bytes{2}, read), 0);
+    EXPECT_EQ(read, text("P"));
+    EXPECT_EQ(Bus::get().i2cTransact("bus", 0x41, Bytes{3}, read), 0);
+    EXPECT_EQ(read, text("O"));
+    EXPECT_EQ(power.addr, 0x40);
+    EXPECT_EQ(power.lastWrite, Bytes{2});
+    // A detach that is not the device at the address leaves it alone
+    Bus::get().detachI2c("bus", 0x40, &other);
+    EXPECT_EQ(Bus::get().i2cTransact("bus", 0x40, Bytes{2}, read), 0);
+    // Its own detach takes the address off the bus; the other address keeps answering
+    Bus::get().detachI2c("bus", 0x40, &power);
+    EXPECT_EQ(Bus::get().i2cTransact("bus", 0x40, Bytes{2}, read), 1);
+    EXPECT_EQ(Bus::get().i2cTransact("bus", 0x41, Bytes{3}, read), 0);
+    EXPECT_EQ(read, text("O"));
+}
+
+TEST_F(CoreTest, SpiDeviceAnswersAndDetachesItself) {
+    TestSpiDevice device;
+    TestSpiDevice other;
+    Bus::get().attachSpi("cs", &device);
+    Bytes write{text("hello")};
+    Bytes read(3, 0);
+    EXPECT_EQ(Bus::get().spiTransfer("cs", write, read), 0);
+    EXPECT_EQ(device.calls, 1);
+    EXPECT_EQ(device.lastWrite, text("hello"));
+    EXPECT_EQ(read, (Bytes{1, 2, 3}));
+    Bus::get().detachSpi("cs", &other);  // not the device there: nothing happens
+    read.assign(2, 0);
+    EXPECT_EQ(Bus::get().spiTransfer("cs", write, read), 0);
+    EXPECT_EQ(device.calls, 2);
+    Bus::get().detachSpi("cs", &device);
+    // Nothing attached: MISO floats as zeros
+    read.assign(2, 0);
+    EXPECT_EQ(Bus::get().spiTransfer("cs", write, read), 0);
+    EXPECT_EQ(read, (Bytes{0, 0}));
+}
+
+TEST_F(CoreTest, GpioDeviceSeesFlightWritesAndDetachesItself) {
+    TestGpioDevice device;
+    TestGpioDevice other;
+    Bus::get().attachGpio("switch", &device);
+    EXPECT_EQ(Bus::get().gpioWrite("switch", true), 0);
+    EXPECT_EQ(Bus::get().gpioWrite("switch", false), 0);
+    ASSERT_EQ(device.levels.size(), 2u);
+    EXPECT_TRUE(device.levels[0]);
+    EXPECT_FALSE(device.levels[1]);
+    Bus::get().detachGpio("switch", &other);  // not the device there: nothing happens
+    EXPECT_EQ(Bus::get().gpioWrite("switch", true), 0);
+    EXPECT_EQ(device.calls, 3);
+    Bus::get().detachGpio("switch", &device);
+    EXPECT_EQ(Bus::get().gpioWrite("switch", false), 0);
+    EXPECT_EQ(device.calls, 3);
+}
+
 // ----------------------------------------------------------------------
 // Faults
 // ----------------------------------------------------------------------

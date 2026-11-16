@@ -173,10 +173,11 @@ def test_flight_numbering_is_unchanged(default, tmp_path):
     assert numbers(after, "RateGroupMemberOut") - numbers(before, "RateGroupMemberOut") == {
         ("Cdh.rateGroup1Hz", 6, "SensorSim.sensorSim"), ("Cdh.rateGroup1Hz", 7, "SensorSim.txBuffers"),
         ("SensorSim.fastGroup", 0, "SensorSim.gyroSim")}, "the simulation's own rate group, and two flight ports"
-    # Everything else the flight topology connects explicitly (pattern-made command,
-    # event and telemetry connections aside) is where it was
+    # Everything else the flight topology connects explicitly (pattern-made command, event,
+    # text event, telemetry and time connections aside) is where it was
     explicit = {n for n in before.numbered
-                if not n.from_port.lower().startswith(("cmd", "compcmd", "log", "tlm", "time", "prm")) and "Cmd" not in n.to_port}
+                if not n.from_port.lower().startswith(("cmd", "compcmd", "event", "log", "tlm", "time", "prm"))
+                and "Cmd" not in n.to_port}
     assert explicit and explicit <= set(after.numbered)
     ids = {s["instance"]: s["base_id"] for s in default.report["substitutions"]}
     assert all(ids[s["instance"]] == s["base_id"] for s in flight_out.report["substitutions"])
@@ -305,7 +306,7 @@ def test_rate_group_out_of_ports(project, tmp_path):
     ([{"instance": "SensorSim.sensorPort", "endpoint": "radio"}], None,
      r"no surrogate is bound to endpoint 'radio'. Endpoints: uart, vxTimer"),
     ([{"instance": "SensorSim.sensorPort", "endpoint": "vxTimer"}], None,
-     r"endpoint 'vxTimer' \(Cdh.vxTimer\) is not a byte stream"),
+     r"endpoint 'vxTimer' \(Cdh.vxTimer\) has no kind a device adapter serves"),
     ([{"instance": "SensorSim.sensorPort", "endpoint": "uart"}],
      [{"name": "scripted", "class": "Wsts::ScriptedByteStream", "endpoint": "uart", "kind": "bytestream"}],
      r"endpoint 'uart' already has the model 'scripted'"),
@@ -319,6 +320,50 @@ def test_rate_group_out_of_ports(project, tmp_path):
 def test_device_errors(tmp_path, devices, models, message):
     with pytest.raises(WstsError, match=message):
         run(SIM, tmp_path / "out", devices=devices, models=models)
+
+
+def run_payload(out: Path, **changes):
+    """Generate the payload element of the example: the one with the I2C bus and the
+    component device on it"""
+    data = yaml.safe_load((SIM / "payload.yaml").read_text())
+    data["project"] = str(FLIGHT)
+    for key, value in changes.items():
+        if value is None:
+            data.pop(key, None)
+        else:
+            data[key] = value
+    return generate(FLIGHT, parse_manifest(data, SIM / "payload.yaml"), out)
+
+
+@needs_fpp
+def test_payload_component_device_shares_the_i2c_bus_with_a_model(tmp_path):
+    """The power monitor is an F Prime component device at 0x40 (options: addr=0x40); the
+    IMU model stays on the same endpoint at 0x68: one device per address"""
+    result = run_payload(tmp_path / "out")
+    assert result.report["simulators"]["devices"] == [
+        {"instance": "PayloadSim.powerDevice", "component": "Wsts.BusI2cDevice", "endpoint": "i2cBus", "kind": "i2c"}
+    ]
+    setup = (tmp_path / "out" / "Payload" / "Top" / "WstsSetup.cpp").read_text()
+    bound = setup.index('::Payload::i2cBus.wstsBind("i2cBus", "");')
+    assert bound < setup.index('::PayloadSim::powerDevice.wstsServe("i2cBus", "addr=0x40");')
+
+
+@needs_fpp
+@pytest.mark.parametrize("devices, message", [
+    ([{"instance": "PayloadSim.powerDevice", "endpoint": "spiBus"}],
+     r"endpoint 'spiBus' \(Payload.spiBus\) is a spi endpoint, and Wsts.BusI2cDevice is a i2c device"),
+    ([{"instance": "PayloadSim.powerDevice", "endpoint": "i2cBus"}],
+     r"an I2C device names the address it answers with 'options: addr=<n>'"),
+    ([{"instance": "PayloadSim.powerDevice", "endpoint": "i2cBus", "options": "addr=none"}],
+     r"an I2C device names the address it answers with 'options: addr=<n>'"),
+    ([{"instance": "PayloadSim.powerDevice", "endpoint": "i2cBus", "options": "addr=0x68"}],
+     r"endpoint 'i2cBus' already has the model 'imu' at address 0x68"),
+    ([{"instance": "PayloadSim.powerDevice", "endpoint": "fpgaRegs"}],
+     r"endpoint 'fpgaRegs' \(Payload.fpgaRegs\) has no kind a device adapter serves"),
+])
+def test_payload_device_errors(tmp_path, devices, message):
+    with pytest.raises(WstsError, match=message):
+        run_payload(tmp_path / "out", devices=devices)
 
 
 @needs_fpp

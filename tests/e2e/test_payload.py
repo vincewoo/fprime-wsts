@@ -5,12 +5,13 @@ and channel comes back the same way. The simulated hardware is driven through Pa
 own bridge, or through its WSTS commands (`Payload.wstsControl`).
 
 Behind the surrogates:
-  - i2cBus     Sim::ImuModel at 0x68 (a model of the simulation project, set in g) and the
-               toolkit's Wsts::RegisterMapI2c at 0x40 (the power monitor)
+  - i2cBus     Sim::ImuModel at 0x68 (a model of the simulation project, set in g) and
+               PowerSim at 0x40 (the power monitor), an F Prime component of the simulation
+               project that answers through Wsts.BusI2cDevice
   - spiBus     the toolkit's Wsts::LoopbackSpi (the instrument's converter)
   - sensorUart the toolkit's Wsts::ScriptedByteStream, reporting once a second
   - heaterPin, switchPin
-               Sim.SimLinuxGpio, the simulation project's mirror of Drv.LinuxGpioDriver
+                Sim.SimLinuxGpio, the simulation project's mirror of Drv.LinuxGpioDriver
   - fpgaRegs   the toolkit's Wsts::RegisterFile: the registers of the FPGA's housekeeping
                block and its frame interrupt once a second. The register interface
                component (of sensor-lib) is replaced by Wsts.SimRegister, written with that
@@ -58,7 +59,7 @@ def test_two_devices_answer_on_one_i2c_bus(payload):
 
 
 def test_flight_telemetry_comes_from_models(gds):
-    # A project model in engineering units, the toolkit's register map, the scripted sensor
+    # A project model in engineering units, a component device, the scripted sensor
     gds.assert_telemetry("Payload.imu.AccelZ", value=0x4000, timeout=T)
     gds.assert_telemetry("Payload.power.BusVoltage", value=14.0, timeout=T)
     gds.assert_telemetry("Payload.power.Current", value=500, timeout=T)
@@ -169,6 +170,24 @@ def test_wsts_commands_through_gds(gds, payload):
     payload.model_set("imu", "accel_x", 0)
     payload.i2c_reg_set("i2cBus", POWER_ADDR, 0x02, 0x6D)
     payload.i2c_reg_set("i2cBus", POWER_ADDR, 0x03, 0x60)
+
+
+def test_component_device_takes_commands_from_the_gds(gds, payload):
+    # The power monitor is an F Prime component (PowerSim) behind Wsts.BusI2cDevice. The
+    # command crosses the hub from the ground system, the component changes the registers
+    # it serves, and the flight driver reads them as the new voltage
+    gds.send_and_assert_command("PayloadSim.powerSim.SET_VOLTAGE", [12000], timeout=T)
+    gds.assert_event("PayloadSim.powerSim.VoltageSet", [12000], timeout=T)
+    gds.assert_telemetry("Payload.power.BusVoltage", value=12.0, timeout=T)
+    gds.send_and_assert_command("PayloadSim.powerSim.SET_CURRENT", [250], timeout=T)
+    gds.assert_telemetry("Payload.power.Current", value=250, timeout=T)
+    # The component's own telemetry sees the same thing
+    gds.assert_telemetry("PayloadSim.powerSim.BusVoltage", value=12.0, timeout=T)
+    # And the manifest's values come back by the same road
+    gds.send_and_assert_command("PayloadSim.powerSim.SET_VOLTAGE", [14000], timeout=T)
+    gds.send_and_assert_command("PayloadSim.powerSim.SET_CURRENT", [500], timeout=T)
+    gds.assert_telemetry("Payload.power.BusVoltage", value=14.0, timeout=T)
+    gds.assert_telemetry("Payload.power.Current", value=500, timeout=T)
 
 
 def test_step_runs_flight_software_for_exact_ticks(gds, payload):

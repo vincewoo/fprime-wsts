@@ -12,7 +12,7 @@ add_compile_definitions(MISSION_VEHICLE_ID=2)
 include_directories(BEFORE "${CMAKE_CURRENT_LIST_DIR}/wsts-include")
 # From `cmake.cache` in the manifest. Set before F Prime reads the libraries; a value given on the
 # command line (-D) takes precedence.
-set(MISSION_SIM_MODULES "Models;Surrogates/SimLinuxGpio;Surrogates/SimRegisterInterface" CACHE STRING "Set by fprime-wsts from cmake.cache in the manifest")
+set(MISSION_SIM_MODULES "Models;PowerSim;Surrogates/SimLinuxGpio;Surrogates/SimRegisterInterface" CACHE STRING "Set by fprime-wsts from cmake.cache in the manifest")
 # Carried over from the flight project's CMakeLists.txt, which sets them before F Prime is read.
 # `cmake.cache` in the manifest takes precedence, and so does -D on the command line.
 set(SENSOR_LIB_BOARD "cdh-rev-b" CACHE STRING "Carried over by fprime-wsts from the flight project's CMakeLists.txt")

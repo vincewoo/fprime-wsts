@@ -208,9 +208,10 @@ endpoint, so faults, recording, replay and the bridge work the same either way.
    is the four ports of `Drv.ByteStreamDriverClient` (`drvConnected`, `drvReceiveIn`,
    `drvReceiveReturnOut`, `drvSendOut`), under any names.
 2. FPP with the instances: the simulator, whatever it needs (a `Svc.BufferManager` for
-   its transmit buffers), and one `Wsts.BusByteStreamDevice` adapter per bus endpoint.
-   Phase code configures them, as in any topology. A subtopology keeps it together and
-   keeps flight names out of it:
+   its transmit buffers), and one adapter per bus endpoint — `Wsts.BusByteStreamDevice`
+   for a byte stream, `Wsts.BusI2cDevice`, `Wsts.BusSpiDevice` or `Wsts.BusGpioDevice`
+   for the others. Phase code configures them, as in any topology. A subtopology keeps it
+   together and keeps flight names out of it:
 
    ```fpp
    module SensorSim {
@@ -370,8 +371,11 @@ simulator's parameters are loaded from it. If it has none, add a `Svc.PrmDb` to 
 simulator's subtopology and connect the parameter ports to it there. Simulator instances
 are not pinged by the flight health component.
 
-**Other buses.** Only the byte stream adapter exists. For I2C, SPI and GPIO endpoints
-use a C++ model, which can forward to whatever you need.
+**Other buses.** Every bus kind has an adapter (`Wsts.BusI2cDevice`, `Wsts.BusSpiDevice`,
+`Wsts.BusGpioDevice` alongside the byte stream one). The simulator's ports to it are
+synchronous, and it answers the bus from inside the transaction, so keep the handler
+short. See [Simulators](user-guide/simulators.md#notes) for the per-kind shapes. A
+register endpoint takes no adapter: its device is a register model.
 
 ## Surrogates
 

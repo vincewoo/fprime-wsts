@@ -193,14 +193,14 @@
         "properties": {
           "instance": {
             "type": "string",
-            "description": "An instance of Wsts.BusByteStreamDevice"
+            "description": "An instance of a Wsts device adapter: Wsts.BusByteStreamDevice, Wsts.BusI2cDevice, Wsts.BusSpiDevice or Wsts.BusGpioDevice"
           },
           "endpoint": {
             "type": "string"
           },
           "options": {
             "type": "string",
-            "description": "Passed to wstsServe()"
+            "description": "Passed to wstsServe(): 'chunk=<bytes>' on a byte stream endpoint, 'addr=<n>' (required) on an I2C endpoint"
           }
         },
         "additionalProperties": false,

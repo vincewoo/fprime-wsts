@@ -16,6 +16,93 @@
       "peer": "cdh.hubDriver"
     }
   ],
+  "simulators": {
+    "instances": [
+      {
+        "instance": "PayloadSim.powerDevice",
+        "component": "Wsts.BusI2cDevice",
+        "kind": "passive",
+        "base_id": 788529152,
+        "last_id": null,
+        "from": "manifest",
+        "defined_in": "PowerSim.fpp",
+        "pinged": null,
+        "dictionary_items": {
+          "commands": [],
+          "events": [],
+          "channels": [],
+          "params": []
+        }
+      },
+      {
+        "instance": "PayloadSim.powerSim",
+        "component": "PowerSim.PowerSim",
+        "kind": "passive",
+        "base_id": 788533248,
+        "last_id": 788533250,
+        "from": "manifest",
+        "defined_in": "PowerSim.fpp",
+        "pinged": null,
+        "dictionary_items": {
+          "commands": [
+            "PayloadSim.powerSim.SET_CURRENT",
+            "PayloadSim.powerSim.SET_VOLTAGE"
+          ],
+          "events": [
+            "PayloadSim.powerSim.CurrentSet",
+            "PayloadSim.powerSim.VoltageSet"
+          ],
+          "channels": [
+            "PayloadSim.powerSim.BusVoltage",
+            "PayloadSim.powerSim.Current",
+            "PayloadSim.powerSim.Transactions"
+          ],
+          "params": []
+        }
+      }
+    ],
+    "devices": [
+      {
+        "instance": "PayloadSim.powerDevice",
+        "component": "Wsts.BusI2cDevice",
+        "endpoint": "i2cBus",
+        "kind": "i2c"
+      }
+    ],
+    "connections": [
+      {
+        "connection": "PayloadSim.powerDevice.transact -> PayloadSim.powerSim.transaction",
+        "port_type": "Wsts.I2cDeviceTransact",
+        "port_number_chosen": false
+      },
+      {
+        "connection": "PayloadSim.powerDevice.poke -> PayloadSim.powerSim.poke",
+        "port_type": "Wsts.I2cDevicePoke",
+        "port_number_chosen": false
+      }
+    ],
+    "scheduling": [],
+    "health": {
+      "flight_targets_listed": null,
+      "not_pinged": []
+    },
+    "dictionary_items_added": {
+      "commands": [
+        "PayloadSim.powerSim.SET_CURRENT",
+        "PayloadSim.powerSim.SET_VOLTAGE"
+      ],
+      "events": [
+        "PayloadSim.powerSim.CurrentSet",
+        "PayloadSim.powerSim.VoltageSet"
+      ],
+      "channels": [
+        "PayloadSim.powerSim.BusVoltage",
+        "PayloadSim.powerSim.Current",
+        "PayloadSim.powerSim.Transactions"
+      ],
+      "params": []
+    }
+  },
   "register_blocks": [
     {
       "instance": "Payload.fpgaRegs",
@@ -236,13 +323,6 @@
       "address": 104
     },
     {
-      "name": "power",
-      "class": "Wsts::RegisterMapI2c",
-      "endpoint": "i2cBus",
-      "kind": "i2c",
-      "address": 64
-    },
-    {
       "name": "adc",
       "class": "Wsts::LoopbackSpi",
       "endpoint": "spiBus",
@@ -266,8 +346,8 @@
   ],
   "control": {
     "enabled": true,
-    "setup_base_id": 537100288,
-    "control_base_id": 537104384
+    "setup_base_id": 788537344,
+    "control_base_id": 788541440
   },
   "bridge": "tcp:50101",
   "dictionary": {
@@ -357,6 +437,22 @@
         "Payload.wstsControl.SimTicks",
         "Payload.wstsControl.SimTimeScale"
       ]
+    },
+    "added_by_simulators": {
+      "commands": [
+        "PayloadSim.powerSim.SET_CURRENT",
+        "PayloadSim.powerSim.SET_VOLTAGE"
+      ],
+      "events": [
+        "PayloadSim.powerSim.CurrentSet",
+        "PayloadSim.powerSim.VoltageSet"
+      ],
+      "channels": [
+        "PayloadSim.powerSim.BusVoltage",
+        "PayloadSim.powerSim.Current",
+        "PayloadSim.powerSim.Transactions"
+      ],
+      "params": []
     }
   },
   "libraries": {
@@ -388,6 +484,7 @@
     "Payload.fpgaRegs is a register interface component, replaced by WstsAdapted.SensorLib_RegisterInterface: the flight drivers that read and write registers through it run as in flight, against the model 'fpga' on endpoint 'fpgaRegs'. Register semantics are exactly what the model implements. Bus timing, caches, the order of accesses from several cores and accesses of other widths than 4 and 8 bytes are not reproduced. Interrupts are delivered on the thread that raises them (a model's is the simulation's tick thread), one at a time: the target's interrupt priorities, masking and nesting are not reproduced.",
     "DMA: a flight driver that allocates memory for hardware and writes its physical address into a register needs that address to mean something on the host. The toolkit cannot supply this: off the target, the flight libraries' virtual-to-physical translation has to go through the allocator's region (host base, physical base, size), and the model has to be given the same translation (Wsts::Dma, registered from 'setup' in the manifest). See docs/vxworks-conversion.md, 'Memory shared with hardware'.",
     "Payload.posixTime is replaced by Wsts.SimTime, which has no bus endpoint: it talks to the flight components over their ports directly. Fault injection, recording, replay and the bridge do not reach that link.",
+    "Simulator components (see 'Simulator components') are part of the simulated deployment only: their commands, events, telemetry and parameters are in its dictionary and not in the flight one, and they use command dispatcher, telemetry and rate group capacity that flight does not.",
     "Operating system: flight OSAL implementations are replaced by the Linux/POSIX ones. Task priorities are advisory and scheduling is not real-time, so timing and preemption order differ from the target.",
     "Word size and byte order are those of the host; code that depends on the target's differs here.",
     "Surrogates replace drivers at their port interface: driver internals (register access, interrupt handling, device files) are not exercised.",
@@ -620,6 +717,10 @@
         "instances": []
       },
       {
+        "module": "../mission-sim/PowerSim",
+        "instances": []
+      },
+      {
         "module": "../mission-sim/Surrogates/SimLinuxGpio",
         "instances": []
       },
@@ -675,6 +776,7 @@
     "cache": {
       "MISSION_SIM_MODULES": [
         "Models",
+        "PowerSim",
         "Surrogates/SimLinuxGpio",
         "Surrogates/SimRegisterInterface"
       ]
@@ -687,6 +789,23 @@
     "FPRIME_PLATFORM=VxWorks"
   ],
   "simulation_project": "../../..",
+  "capacity": {
+    "command_ports": {
+      "used": 9,
+      "size": 30,
+      "constant": "CmdDispatcherComponentCommandPorts"
+    },
+    "command_table": {
+      "used": 31,
+      "size": 80,
+      "source": "../../../config/CommandDispatcherImplCfg.hpp"
+    },
+    "parameter_table": {
+      "used": 0,
+      "size": 25,
+      "source": "../../../../../lib/fprime/default/config/PrmDbImplCfg.hpp"
+    }
+  },
   "config_overrides": [
     {
       "file": "CdhCoreConfig.fpp",

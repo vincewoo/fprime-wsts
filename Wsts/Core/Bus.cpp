@@ -208,6 +208,34 @@ void Bus::detachByteStream(const std::string& endpoint, ByteStreamDevice* device
     }
 }
 
+void Bus::detachI2c(const std::string& endpoint, std::uint32_t addr, I2cDevice* device) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto it = m_endpoints.find(endpoint);
+    if (it == m_endpoints.end()) {
+        return;
+    }
+    const auto deviceIt = it->second.i2c.find(addr);
+    if (deviceIt != it->second.i2c.end() && deviceIt->second == device) {
+        it->second.i2c.erase(deviceIt);
+    }
+}
+
+void Bus::detachSpi(const std::string& endpoint, SpiDevice* device) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto it = m_endpoints.find(endpoint);
+    if (it != m_endpoints.end() && it->second.spi == device) {
+        it->second.spi = nullptr;
+    }
+}
+
+void Bus::detachGpio(const std::string& endpoint, GpioDevice* device) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto it = m_endpoints.find(endpoint);
+    if (it != m_endpoints.end() && it->second.gpio == device) {
+        it->second.gpio = nullptr;
+    }
+}
+
 bool Bus::byteStreamBound(const std::string& endpoint) {
     std::lock_guard<std::mutex> lock(m_mutex);
     const auto it = m_endpoints.find(endpoint);

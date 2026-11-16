@@ -117,9 +117,9 @@ actions, so they can all do the same things:
 - the socket bridge (`Wsts/Core/Bridge`), newline-delimited JSON over TCP or a Unix socket;
 - scenario files, one action per line with a tick.
 
-**Device adapters** (`Wsts/Drv/BusByteStreamDevice`). The mirror image of a surrogate: an
-F´ component that is the *device* on an endpoint, and offers the driver interface to a
-simulator written as a component (see
+**Device adapters** (`Wsts/Drv/BusByteStreamDevice`, `BusI2cDevice`, `BusSpiDevice`,
+`BusGpioDevice`). The mirror image of a surrogate: an F´ component that is the *device* on
+an endpoint, and offers the driver interface to a simulator written as a component (see
 [Simulator components](#simulator-components)).
 
 **Surrogates** (`Wsts/Drv`, `Wsts/Svc`). Passive F´ components. Each is bound to one bus
@@ -645,9 +645,14 @@ C++ model is. So it receives what flight software sent after the fault table has
 applied, and its replies go through `byteStreamInject` with source `model`: faults in
 both directions, recording, replay of recorded responses and bridge injection all behave
 as with a model. It holds no lock while delivering, so a simulator with a synchronous
-receive port may reply from inside the call. The other bus kinds would follow the same
-shape (an `I2cDevice` that calls out on a `Drv.I2c` output port); only the byte stream
-one is built.
+receive port may reply from inside the call. The other bus kinds follow the same shape:
+`Wsts.BusI2cDevice` implements `I2cDevice` and calls out on a `Wsts.I2cDeviceTransact`
+output port whose buffers wrap the transaction's own memory (the simulator answers in
+place, nothing is copied), `Wsts.BusSpiDevice` implements `SpiDevice` likewise, and
+`Wsts.BusGpioDevice` implements `GpioDevice`, importing `Drv.Gpio` so the simulator drives
+and reads the pin as it would a real one, with what flight writes arriving on `pinWrite`.
+Several I2C adapters share an endpoint, each at its own address (`addr=` option); SPI and
+GPIO have one per endpoint.
 
 **How instances get into the topology.** The simulation project's FPP defines the
 instances, with their phase code, and usually a subtopology of them with its internal

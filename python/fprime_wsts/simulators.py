@@ -3,7 +3,8 @@
 A simulation project may hold simulators that are ordinary components, with their own
 commands, telemetry, parameters and scheduling. The manifest's `simulators` section adds
 their instances to the simulated topology and connects them to flight instances;
-`devices` puts a stock adapter instance (Wsts.BusByteStreamDevice) on a bus endpoint, so
+`devices` puts a stock adapter instance on a bus endpoint (Wsts.BusByteStreamDevice,
+Wsts.BusI2cDevice, Wsts.BusSpiDevice or Wsts.BusGpioDevice, one per kind of endpoint), so
 that a simulator talks to flight software through the bus like any device model.
 
 This module plans those additions. It changes nothing in the flight topology's own
@@ -22,7 +23,12 @@ from .manifest import ClockSpec, ConnectionSpec, DeviceSpec, Manifest
 
 CYCLE_SOURCE = "Wsts.SimCycle"
 # Stock adapters: component -> the kind of bus endpoint it is the device on
-DEVICE_ADAPTERS = {"Wsts.BusByteStreamDevice": "bytestream"}
+DEVICE_ADAPTERS = {
+    "Wsts.BusByteStreamDevice": "bytestream",
+    "Wsts.BusI2cDevice": "i2c",
+    "Wsts.BusSpiDevice": "spi",
+    "Wsts.BusGpioDevice": "gpio",
+}
 PING_PORT = "Svc.Ping"
 SCHEDULING_PORTS = {"Svc.Sched", "Svc.Cycle"}
 SIMULATOR_GRAPH = "WstsSimulators"
@@ -394,14 +400,47 @@ def plan_health(sim: SimulatorPlan, model: fpp.Model, topology: fpp.Topology) ->
     sim.health_targets = sorted(targets)
 
 
+def endpoint_kind(ports: Set[str]) -> str:
+    """What kind of bus endpoint a bound surrogate serves, from the port names its interface
+    gives it. Mirrors the interfaces of the flight drivers: Drv.ByteStreamDriver (send/recv),
+    Drv.I2c (write/read/writeRead), Drv.Spi (SpiWriteRead), Drv.Gpio (gpioWrite/gpioRead).
+    A register endpoint (a register interface component replaced by Wsts.SimRegister) is
+    'other': its ports are the flight component's own, and devices there take a register
+    model instead"""
+    ports = set(ports)
+    if {"send", "recv"} <= ports:
+        return "bytestream"
+    if "writeRead" in ports:
+        return "i2c"
+    if "SpiWriteRead" in ports:
+        return "spi"
+    if "gpioWrite" in ports:
+        return "gpio"
+    return "other"
+
+
+def parse_address(options: str) -> Optional[int]:
+    """The address in a device's options ("addr=0x40"), the way the adapter's wstsServe
+    parses it. None if it is missing or not a number"""
+    index = options.find("addr=")
+    if index < 0:
+        return None
+    text = options[index + len("addr="):].split()[0] if options[index + len("addr="):].split() else ""
+    try:
+        return int(text, 0)
+    except ValueError:
+        return None
+
+
 def plan_devices(sim: SimulatorPlan, model: fpp.Model, manifest: Manifest, topology: fpp.Topology,
-                 endpoints: Dict[str, Tuple[str, bool]], linked: Dict[str, str]) -> None:
-    """`endpoints`: endpoint -> (instance bound to it, whether it is a byte stream);
+                 endpoints: Dict[str, Tuple[str, str]], linked: Dict[str, str]) -> None:
+    """`endpoints`: endpoint -> (instance bound to it, the kind of endpoint it is);
     `linked`: endpoint -> the system link that ends there"""
     from .generate import resolve_instance
 
     instances = topology.instances + sim.names
-    served: Dict[str, str] = {}
+    served_endpoints: Dict[str, str] = {}
+    served_addresses: Dict[Tuple[str, int], str] = {}
     for spec in manifest.devices:
         where = f"devices: {spec.instance}"
         instance = resolve_instance(spec.instance, instances)
@@ -423,26 +462,53 @@ def plan_devices(sim: SimulatorPlan, model: fpp.Model, manifest: Manifest, topol
                 f"{where}: no surrogate is bound to endpoint '{spec.endpoint}'. Endpoints: "
                 f"{', '.join(sorted(endpoints)) or 'none'}"
             )
-        bound, is_byte_stream = endpoints[spec.endpoint]
-        if kind == "bytestream" and not is_byte_stream:
+        bound, endpoint_is = endpoints[spec.endpoint]
+        if kind != endpoint_is:
+            if endpoint_is == "other":
+                raise WstsError(
+                    f"{where}: endpoint '{spec.endpoint}' ({bound}) has no kind a device adapter serves. Only byte "
+                    "stream, I2C, SPI and GPIO endpoints take one; a register endpoint takes a register model "
+                    "under 'models'"
+                )
             raise WstsError(
-                f"{where}: endpoint '{spec.endpoint}' ({bound}) is not a byte stream, and {component} is a byte "
-                "stream device. Adapters for I2C, SPI and GPIO endpoints do not exist yet: use a C++ device model there."
+                f"{where}: endpoint '{spec.endpoint}' ({bound}) is a {endpoint_is} endpoint, and {component} is a "
+                f"{kind} device. Name the adapter for that kind of endpoint"
+            )
+        address = parse_address(spec.options) if kind == "i2c" else None
+        if kind == "i2c" and address is None:
+            raise WstsError(
+                f"{where}: an I2C device names the address it answers with 'options: addr=<n>' (for example "
+                "'addr=0x40'). Several devices may share the endpoint, each at its own address"
             )
         for model_spec in manifest.models:
-            if model_spec.endpoint == spec.endpoint and model_spec.kind == kind:
-                raise WstsError(
-                    f"{where}: endpoint '{spec.endpoint}' already has the model '{model_spec.name}'. A byte stream "
-                    "endpoint has one device: remove the model, or the device."
-                )
+            if model_spec.endpoint != spec.endpoint or model_spec.kind != kind:
+                continue
+            if kind == "i2c" and model_spec.address != address:
+                continue
+            at = f" at address {address:#x}" if kind == "i2c" else ""
+            raise WstsError(
+                f"{where}: endpoint '{spec.endpoint}' already has the model '{model_spec.name}'{at}. A "
+                f"{kind} endpoint has one device per address: remove the model, or the device"
+            )
         if spec.endpoint in linked:
             raise WstsError(f"{where}: endpoint '{spec.endpoint}' is an end of the system link '{linked[spec.endpoint]}'; "
                             "the other element is the device there")
-        if spec.endpoint in served:
-            raise WstsError(f"{where}: endpoint '{spec.endpoint}' is already served by {served[spec.endpoint]}")
-        if instance in served.values():
+        if kind == "i2c":
+            if (spec.endpoint, address) in served_addresses:
+                raise WstsError(
+                    f"{where}: address {address:#x} of endpoint '{spec.endpoint}' is already served by "
+                    f"{served_addresses[(spec.endpoint, address)]}"
+                )
+        elif spec.endpoint in served_endpoints:
+            raise WstsError(
+                f"{where}: endpoint '{spec.endpoint}' is already served by {served_endpoints[spec.endpoint]}"
+            )
+        if instance in served_endpoints.values() or instance in served_addresses.values():
             raise WstsError(f"{where}: {instance} is listed twice; an adapter serves one endpoint")
-        served[spec.endpoint] = instance
+        if kind == "i2c":
+            served_addresses[(spec.endpoint, address)] = instance
+        else:
+            served_endpoints[spec.endpoint] = instance
         sim.devices.append(PlannedDevice(spec, instance, component, kind, spec.endpoint))
 
 

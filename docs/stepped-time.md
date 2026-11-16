@@ -126,7 +126,8 @@ The control core already counts ticks and knows the tick period. Simulated time 
 - `Wsts_Os_RawTime::now()` returns it. Rate groups then measure a cycle time of zero, or
   of the simulated time their handlers waited; `RgCycleSlip` no longer depends on host
   load. That is a fidelity change: stated in the report.
-- `Wsts.SimTime`, a new stock surrogate for `Svc.PosixTime` and `Svc.ChronoTime` in the
+- `Wsts.SimTime`, a new stock surrogate for `Svc.PosixTime`, `Svc.ChronoTime` and
+  `Svc.OsTime` in the
   catalog, gives the same time on the time port, so event and telemetry time stamps are
   the same in two runs. The epoch is fixed by default and can be set
   (`time: {epoch: 2030-01-01T00:00:00Z}`).
@@ -306,7 +307,7 @@ computers three times and compares the files.
 | | |
 |---|---|
 | Simulated time | `Control::simTimeNs()`: an epoch (2000-01-01T00:00:00Z, or `time.epoch` in the manifest) plus ticks times the tick period |
-| The time component | `Wsts.SimTime` replaces `Svc.PosixTime` and `Svc.ChronoTime` from the catalog: the host's clock in real time, simulated time in stepped time. A project's own time component needs a surrogate that asks `Control::flightTime()` (the example's Cdh has one) |
+| The time component | `Wsts.SimTime` replaces `Svc.PosixTime`, `Svc.ChronoTime` and `Svc.OsTime` from the catalog: the host's clock in real time, simulated time in stepped time. A project's own time component needs a surrogate that asks `Control::flightTime()` (the example's Cdh has one) |
 | `Os::RawTime` | `Wsts_Os_RawTime`: the POSIX one in real time, simulated time in stepped time. Time stands still within a tick, so a rate group that times its cycle measures zero in every run |
 | One at a time | In stepped time flight code runs on one thread at a time (`Activity::enter()`, `awaitTurn()`). When the turn is free it goes to the ready contender of lowest rank: threads of the simulation (a tick, a delivery) first, then tasks that are starting, in the order they were started, then tasks at their queues, in the order the queues were created. A task is known from the moment it is started (`Activity::expectTask()`, on the thread that starts it), not from when its thread first runs: no one ranked after it is given the turn before it comes. A task gives up its turn and queues for the next in one step, so who runs next does not depend on how fast a thread comes back |
 | `Os::Task` | `Wsts_Os_Task`: the POSIX one; in stepped time a task takes the turn before its routine runs, so what it does before it first waits for a message is ordered too |
@@ -345,7 +346,7 @@ the same from its trial generation, before a manifest is written. The code is in
 | | |
 |---|---|
 | What is read | The kept components of the topology (flight project and flight libraries), the simulation project's surrogates and its simulators: the C and C++ files their module's `CMakeLists.txt` names, in the variant the build takes (`cmake.stub_variants`), or every such file of the directory when it names none. Comments and string literals are left out. Text only: the report is the same on every machine |
-| What is not | The framework's components go through the OSAL; the few that do not are known by name (socket, serial and GPIO drivers, `Svc.PosixTime`, `Svc.ChronoTime`, `Svc.LinuxTimer`, `Svc.SystemResources`) and listed with what they do when they are kept. The toolkit's own components are not read |
+| What is not | The framework's components go through the OSAL; the few that do not are known by name (socket, serial and GPIO drivers, `Svc.PosixTime`, `Svc.ChronoTime`, `Svc.OsTime`, `Svc.LinuxTimer`, `Svc.SystemResources`) and listed with what they do when they are kept. The toolkit's own components are not read |
 | Sleeps on the wall clock | `sleep`, `usleep`, `nanosleep`, `std::this_thread::sleep_for`, `taskDelay`, `Os::Task::delay`: *slower*, the result the same |
 | Reads the host's clock | `clock_gettime`, `gettimeofday`, `time(NULL)`, `std::chrono` clocks: *not repeatable* |
 | Reads the state of the host | `Svc.SystemResources`: *not repeatable* |
