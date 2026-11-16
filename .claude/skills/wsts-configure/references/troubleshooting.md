@@ -147,6 +147,8 @@ run from `<dir>` with `WSTS_BRIDGE` set as the manifest's `bridge`.
 | `errors` > 0 in the final status | An I2C or register endpoint without a model, or a model that rejects what flight sends. `--record run.jsonl` shows each transaction with its status and endpoint |
 | `links_up` < `links` | One element did not start or did not open its hub driver (the surrogate reports ready on `start`/`open`). Check that element's `sim.log`. A deployment that only connects after a command will not link up by itself |
 | GDS: `cannot merge dictionaries … versions differ` | The elements were built from different checkout states (`-dirty`). Rebuild both from the same state |
+| A file the deployment wrote is gone after the next run | The default sandbox for the files of flight software is the files directory of the run, cleared with the logs between runs: `files.sandbox: ./wsts-files` ([decisions §12](decisions.md#12-files-of-flight-software)) |
+| Flight code that opens files through the VxWorks shim (`open()`, `read()`, `write()` of ioLib) reads or writes the host's paths as written | The sandbox covers `Os::File`, `Os::FileSystem` and `Os::Directory` only. Guard the code in flight (`#ifndef WSTS_SIM`) or substitute the component |
 | GDS does not start over an existing log directory | `fprime-wsts run` clears its own. Remove a `--log-dir` you chose |
 | Events from one element arrive late, or after `clear_histories()` | Expected for elements behind a hub (AGENTS.md, "Things that surprise") |
 | Values injected into telemetry are overwritten | Telemetry is downlinked about once a second with the latest value. A free-running model can overwrite an injected value before it is seen |

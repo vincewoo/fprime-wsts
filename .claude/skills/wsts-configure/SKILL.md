@@ -118,6 +118,9 @@ This writes `wsts.yaml` for one deployment, or `<element>.yaml` per deployment p
 | trial generation warnings (SDK, headers, root CMake) | [§9](references/decisions.md#9-what-does-not-build-on-the-host) |
 | `wsts-system.yaml`: links, ground, `ids` | [§10](references/decisions.md#10-systems) |
 
+The survey does not flag file use: ask whether the deployment writes files it reads back
+(a saved parameter database, persisted state) — [decisions §12](references/decisions.md#12-files-of-flight-software).
+
 **How to ask.** Read the flight code first (driver set-up lines are in the survey output;
 device managers say what they check at start-up). Then ask the questions that remain in
 one batch, each with your recommended answer, so the user can confirm most of them at

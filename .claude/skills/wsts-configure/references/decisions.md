@@ -22,6 +22,7 @@ why a line is there.
 9. [What does not build on the host](#9-what-does-not-build-on-the-host)
 10. [Systems: elements, links, ground, ID windows, bridges](#10-systems)
 11. [Simulators the project already has](#11-simulators-the-project-already-has)
+12. [Files of flight software](#12-files-of-flight-software)
 
 ---
 
@@ -258,3 +259,30 @@ loop simulator. If it does, they can be added to the simulated topology
 (`simulators`, `devices`, `clocks`, `libraries.sim`). `cdh.yaml` in the example is the
 pattern, and `docs/surrogate-guide.md` ("Device simulators as F´ components") explains
 it. This is not part of a first bring-up: get the deployment building and running first.
+
+## 12. Files of flight software
+
+**Survey:** nothing. The survey does not flag file use — ask the user, and grep the
+flight code for `Os::File`, `Os::FileSystem`, `Os::Directory`, a saved parameter database
+(`PrmDb`, `PRM_SAVE_FILE`), file downlink staging and log writers.
+
+**What happens:** `Os::File`, `Os::FileSystem` and `Os::Directory` of the deployment map
+what flight software names — `/ram0/logs/events.log`, `/tffs0/data.bin`, or a relative
+name — into one sandbox directory on the host, under the same path
+(`docs/reference.md`, "Files"). By default the sandbox is the files directory of the run
+(`WSTS_DIR`): the files land beside the logs and are cleared with them between runs. The
+raw I/O of the VxWorks shim (`open()`, `read()`, `write()` of ioLib) stays host-literal:
+it does not go through the sandbox.
+
+**Ask:** whether the deployment writes anything it expects to find again at the next
+boot (a parameter database it saves and loads, persisted state), and where the user
+wants those files. A file that must survive between runs is the reason to set
+`files.sandbox`; otherwise leave the key out.
+
+| Situation | Recommend |
+|---|---|
+| Nothing written, or files only inspected right after a run | Leave `files.sandbox` out (the default) |
+| A parameter database or other state read back at the next start | `files.sandbox: ./wsts-files` |
+
+The example's `cdh.yaml` sets it, so the parameter database `SensorSim.prmDb` saves as
+`/ram0/SensorSimPrmDb.dat` lands in `./wsts-files/ram0/` and survives the next run.
