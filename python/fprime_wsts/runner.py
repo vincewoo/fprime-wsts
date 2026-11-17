@@ -204,6 +204,44 @@ def _wait_for_path(path: str, timeout: float, process: Optional[subprocess.Popen
     return False
 
 
+def _is_listening(port: int) -> Optional[bool]:
+    """Whether a local process listens on a TCP port, read from the kernel's table and not by
+    connecting: the listener takes a single client, and a probe would take the GDS's place.
+    None when this host cannot tell."""
+    try:
+        lines = Path("/proc/net/tcp").read_text().splitlines()[1:]
+    except OSError:
+        lsof = shutil.which("lsof")
+        if lsof is None:
+            return None
+        found = subprocess.run([lsof, "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"], capture_output=True, text=True)
+        return bool(found.stdout.strip())
+    for line in lines:
+        fields = line.split()
+        # fields: slot, local address, remote address, state (0A = listening)
+        if len(fields) > 3 and fields[3] == "0A" and fields[1].upper().endswith(f":{port:04X}"):
+            return True
+    return False
+
+
+def _wait_until_listening(port: int, timeout: float, process: Optional[subprocess.Popen] = None) -> bool:
+    """Wait until something listens on a local port. Gives up early when `process`, which was
+    to open it, has exited. On a host that cannot tell, waits a moment and goes on: the GDS
+    retries its connection."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        listening = _is_listening(port)
+        if listening is None:
+            time.sleep(1)
+            return True
+        if listening:
+            return True
+        if process is not None and process.poll() is not None:
+            return False
+        time.sleep(0.2)
+    return False
+
+
 def _link_established(port: int) -> bool:
     """True once some local TCP connection to `port` is established.
 
@@ -306,16 +344,22 @@ def end_group(group: int, grace: float = 2.0) -> bool:
 
 def gds_command(executable: str, dictionary: Path, gds_port: int, log_dir: Path,
                 gui_port: Optional[int] = None, gui_addr: str = "127.0.0.1",
-                zmq_transport: Optional[List[str]] = None) -> List[str]:
+                zmq_transport: Optional[List[str]] = None, client: bool = False) -> List[str]:
     """The `fprime-gds` command line: headless, or with its browser GUI on `gui_port`.
 
     `-n` keeps fprime-gds from running a deployment of its own: the simulation is started
     separately. With a GUI the HTML app is served on `gui_addr:gui_port` (its own port, not
     `gds_port`, which carries the flight link); the browser is left unopened because the run
     may be on a headless host, so the caller prints the URL instead.
+
+    The GDS listens on `gds_port` and the deployment connects to it, as a `Drv.TcpClient` does.
+    With `client` it is the other way round, for a deployment whose ground link is a
+    `Drv.TcpServer`: the deployment listens on `gds_port` and the GDS connects to it.
     """
     command = [executable, "-n", "--dictionary", str(dictionary), "--ip-port", str(gds_port),
                "--logs", str(log_dir), "--log-directly"]
+    if client:
+        command += ["--ip-client", "--ip-address", "127.0.0.1"]
     if zmq_transport:
         # The GDS's own processes meet on two sockets that are otherwise the same for every
         # GDS of a user: a second GDS on the machine needs a pair of its own
@@ -368,6 +412,8 @@ class Simulation:
                     self._zmq_dir = tempfile.mkdtemp(prefix="wsts-gds-")
                     self.zmq_transport = [f"ipc://{self._zmq_dir}/in", f"ipc://{self._zmq_dir}/out"]
         self.gds_gui_addr = gds_gui_addr
+        # The deployment's ground link listens (Drv.TcpServer): the GDS is the client of it
+        self.gds_is_client = "ground_link" in self.report
         self.scenario = scenario
         self.scenario_mode = scenario_mode
         self.record = record
@@ -377,6 +423,11 @@ class Simulation:
         self._processes: List[subprocess.Popen] = []
         self.sim: Optional[subprocess.Popen] = None
         self.started = 0.0
+
+    def _start_gds(self, command: List[str], log) -> None:
+        self._gds_process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
+                                             cwd=self.log_dir, start_new_session=True)
+        self._processes.append(self._gds_process)
 
     def start(self) -> "Simulation":
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -391,11 +442,10 @@ class Simulation:
             shutil.rmtree(self.log_dir / "gds", ignore_errors=True)
             gds_log = open(self.log_dir / "gds.log", "w")
             command = gds_command(executable, self.dictionary, self.gds_port, self.log_dir / "gds",
-                                  self.gds_gui, self.gds_gui_addr, self.zmq_transport)
-            self._gds_process = subprocess.Popen(command, stdout=gds_log, stderr=subprocess.STDOUT,
-                                                 cwd=self.log_dir, start_new_session=True)
-            self._processes.append(self._gds_process)
+                                  self.gds_gui, self.gds_gui_addr, self.zmq_transport, client=self.gds_is_client)
             arguments = ["-a", "127.0.0.1", "-p", str(self.gds_port)]
+            if not self.gds_is_client:
+                self._start_gds(command, gds_log)
         env = dict(os.environ)
         # Defaults from the manifest (`run.env`), then what this run was given
         defaults = self.report.get("run", {})
@@ -443,6 +493,15 @@ class Simulation:
                                         self.log_dir / "sim.log")
         if models:
             self._start_models(models)
+        if self.gds and self.gds_is_client:
+            # The deployment listens, and the GDS connects: the GDS retries, but the deployment
+            # takes a single client, so it starts once the port is open
+            if not _wait_until_listening(self.gds_port, 30, self.sim):
+                code = self.sim.poll()
+                self.stop()
+                raise self._start_error(f"the deployment did not listen for the GDS on port {self.gds_port}",
+                                        code, self.log_dir)
+            self._start_gds(command, gds_log)
         if self.gds:
             # The deployment's TCP client retries until the GDS is listening
             deadline = time.monotonic() + 30
@@ -1036,7 +1095,8 @@ def run_cli(args) -> int:
     if not args.json:
         print(f"simulation running: {simulation.binary.name} (bridge {simulation.bridge}, logs {simulation.log_dir})")
         if gds:
-            print(f"GDS listening for the deployment on port {simulation.gds_port}")
+            print(f"GDS connecting to the deployment on port {simulation.gds_port}" if simulation.gds_is_client
+                  else f"GDS listening for the deployment on port {simulation.gds_port}")
         if args.gds_gui:
             print(f"GDS browser GUI at {simulation.gds_gui_url}")
     status = {}

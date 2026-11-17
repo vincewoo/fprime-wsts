@@ -58,6 +58,7 @@ register_fprime_module(
     HEADERS
         "${CMAKE_CURRENT_LIST_DIR}/SimTask.hpp"
     DEPENDS
+        Drv_Ip
         Fw_Types
         Os_Task_Posix_Implementation
         Wsts_Core
