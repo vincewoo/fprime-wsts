@@ -28,14 +28,51 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <Wsts/Core/Bus.hpp>
 #include <Wsts/Core/Control.hpp>
 
 namespace Wsts {
+
+//! Every link started in this process, whichever kind it carries. The bridge status and the
+//! lockstep conductor see all of them here: started(), connected(), traffic() and expect().
+//! A link registers when it starts and removes itself when it stops, so the counts cover
+//! bytestream and GPIO links alike (a datagram link will land here too).
+class LinkRegistry {
+  public:
+    enum class Kind { BYTESTREAM, GPIO };
+
+    struct Entry {
+        Kind kind;
+        std::string name;
+        const void* owner;  //!< the link that registered, for removal
+        std::function<std::uint64_t()> sent;
+        std::function<std::uint64_t()> received;
+        std::function<bool()> up;
+        std::function<void(std::uint64_t)> expect;
+    };
+
+    static LinkRegistry& get();
+
+    void add(Entry entry);
+    void remove(Kind kind, const void* owner);
+
+    //! Links started in this process, and how many of them have their peer
+    std::uint32_t started() const;
+    std::uint32_t connected() const;
+    //! What each link sent and received, as `link.<name>.sent` and `link.<name>.received`
+    void traffic(JsonObj& out) const;
+    //! Tell the link of this name how many messages will have arrived before the next tick.
+    //! False when no link of that name is started.
+    bool expect(const std::string& name, std::uint64_t received) const;
+    //! The first link of this kind and name started in this process, or null
+    const void* find(Kind kind, const std::string& name) const;
+};
 
 //! One end of a byte stream link to another simulated deployment.
 //! Parameters: endpoint, link (name), role ("listen" or "connect"), address (socket path;
@@ -68,13 +105,14 @@ class LinkByteStream : public Model, public ByteStreamDevice, public Inbound {
     void expect(std::uint64_t received);
     std::string deliverDue(std::uint64_t beforeNs, std::chrono::steady_clock::time_point limit) override;
 
-    //! Links started in this process, and how many of them are up (bridge status)
+    //! Every link started in this process, and how many of them are up (bridge status):
+    //! both kinds, through the shared registry
     static std::uint32_t started();
     static std::uint32_t connected();
-    //! The link of this name started in this process, or null
+    //! The byte stream link of this name started in this process, or null
     static LinkByteStream* find(const std::string& name);
     //! What each link started in this process sent and received, as `link.<name>.sent` and
-    //! `link.<name>.received` (bridge status)
+    //! `link.<name>.received` (bridge status): both kinds, through the shared registry
     static void traffic(JsonObj& out);
 
   private:

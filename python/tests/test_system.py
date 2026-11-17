@@ -41,6 +41,11 @@ def test_system_manifest(tmp_path):
     assert parse_system(changed(ground="payload")).ground == "payload"
 
 
+def test_gpio_link_kind_is_accepted():
+    system = parse_system(changed(links=[{"name": "sep", "kind": "gpio", "a": "cdh.x", "b": "payload.y"}]))
+    assert system.links[0].kind == "gpio"
+
+
 def test_system_manifests_are_told_from_deployment_manifests():
     assert is_system_manifest(SYSTEM)
     assert not is_system_manifest(SIM / "cdh.yaml")
@@ -60,7 +65,7 @@ def test_system_manifests_are_told_from_deployment_manifests():
     (changed(links=[{"name": "hub", "a": "cdh.hubDriver"}]), "needs 'name', 'a' and 'b'"),
     (changed(links=[{"name": "hub", "a": "cdh.hubDriver", "b": "elsewhere.x"}]), "<element>.<instance>"),
     (changed(links=[{"name": "hub", "a": "cdh.x", "b": "cdh.y"}]), "same element"),
-    (changed(links=[{"name": "hub", "kind": "gpio", "a": "cdh.x", "b": "payload.y"}]), "not supported"),
+    (changed(links=[{"name": "hub", "kind": "datagram", "a": "cdh.x", "b": "payload.y"}]), "not supported"),
     (changed(links=[{"name": "cdh", "a": "cdh.x", "b": "payload.y"}]), "already used"),
     (changed(links=[{"name": "one", "a": "cdh.x", "b": "payload.y"}, {"name": "two", "a": "cdh.x", "b": "payload.z"}]),
      "an end of both link 'one' and link 'two'"),
@@ -203,6 +208,58 @@ def test_uart_link_between_projects_and_platforms(tmp_path):
     assert len(set(bases)) == 2
     bridges = [element["bridge"] for element in result.description["elements"]]
     assert len(set(bridges)) == 2 and "none" not in bridges
+
+
+def gpio_system(tmp_path, **changes):
+    """Two elements of the Payload deployment, joined by a gpio link between two pins"""
+    elements = {
+        "one": {"manifest": standalone(tmp_path, "one", "Payload"), "ids": [0x20000000, 0x2FFFFFFF]},
+        "two": {"manifest": standalone(tmp_path, "two", "Payload", bridge="tcp:50107"),
+                "ids": [0x30000000, 0x3FFFFFFF]},
+    }
+    data = {
+        "system": "Sep",
+        "elements": elements,
+        "links": [{"name": "sep", "kind": "gpio", "a": "one.Payload.heaterPin", "b": "two.Payload.switchPin"}],
+    }
+    data.update(changes)
+    path = tmp_path / "wsts-system.yaml"
+    path.write_text(yaml.safe_dump(data))
+    return load_system(path)
+
+
+@needs_fpp
+def test_gpio_link_generates_both_ends(tmp_path):
+    result = generate_system(gpio_system(tmp_path), tmp_path / "out")
+    for element, endpoint, role in (("one", "heaterPin", "listen"), ("two", "switchPin", "connect")):
+        gpio = next(sub for sub in result.elements[element].report["substitutions"] if sub["endpoint"] == endpoint)
+        assert gpio["surrogate"] == "Wsts.SimGpio"
+        assert gpio["flight_component"] == "Drv.LinuxGpioDriver"
+        setup = (tmp_path / "out" / element / "Payload" / "Top" / "WstsSetup.cpp").read_text()
+        assert "Wsts::LinkGpio link_sep;" in setup
+        assert f'Wsts::Bus::get().attachGpio("{endpoint}", &link_sep);' in setup
+        assert f'Wsts::configureModel(&link_sep, "role", "{role}")' in setup
+        assert setup.index("Wsts::Runtime::start(config);") < setup.index("link_sep.start();")
+        assert setup.index("link_sep.stop();") < setup.index("Wsts::Runtime::stop();")
+
+
+@needs_fpp
+def test_gpio_link_description(tmp_path):
+    generate_system(gpio_system(tmp_path), tmp_path / "out")
+    description = json.loads((tmp_path / "out" / "wsts-system.json").read_text())
+    assert description["links"] == [{
+        "name": "sep", "kind": "gpio",
+        "a": {"element": "one", "instance": "Payload.heaterPin", "endpoint": "heaterPin"},
+        "b": {"element": "two", "instance": "Payload.switchPin", "endpoint": "switchPin"},
+    }]
+
+
+@needs_fpp
+def test_gpio_link_end_without_gpio_ports_is_an_error(tmp_path):
+    system = gpio_system(tmp_path, links=[{"name": "sep", "kind": "gpio",
+                                           "a": "one.Payload.heaterPin", "b": "two.Payload.sensorUart"}])
+    with pytest.raises(WstsError, match="not a GPIO driver"):
+        generate_system(system, tmp_path / "out")
 
 
 @needs_fpp

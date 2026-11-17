@@ -215,9 +215,10 @@ class LinkEnd:
     deployment manifest: the system manifest declares links and `generate_system` fills
     these in."""
     link: str  # link name, shared by both ends
-    instance: str  # the byte stream driver instance the link ends at
+    instance: str  # the driver instance the link ends at
     role: str  # listen or connect
     peer: str  # the far end, "<element>.<instance>", for the report
+    kind: str = "bytestream"  # what the link carries: bytestream or gpio
 
 
 @dataclass
