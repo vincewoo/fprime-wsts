@@ -79,11 +79,7 @@ class PlannedLink:
     end: LinkEnd
     instance: str  # qualified instance name
     endpoint: str
-    kind: str  # bytestream or gpio: what the link carries
-
-    @property
-    def kind(self) -> str:
-        return self.end.kind
+    kind: str  # bytestream, gpio or datagram: what the link carries
 
 
 @dataclass

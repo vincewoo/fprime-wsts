@@ -5,8 +5,8 @@ import json
 import pytest
 
 from fprime_wsts.fpp import WstsError
-from fprime_wsts.generate import generate
-from fprime_wsts.manifest import load_manifest, parse_manifest
+from fprime_wsts.generate import PlannedLink, generate
+from fprime_wsts.manifest import LinkEnd, load_manifest, parse_manifest
 from mission import CDH_MAIN, MISSION, REPO, copy_sim, flight_manifest, needs_fpp
 
 pytestmark = needs_fpp
@@ -173,3 +173,9 @@ def test_simulation_project_needs_a_library_cmake_for_its_modules(tmp_path):
     (sim / "library.cmake").unlink()
     with pytest.raises(WstsError, match="no library.cmake"):
         generate(MISSION, load_manifest(sim / "payload.yaml"))
+
+
+@needs_fpp
+def test_planned_link_construction_sets_its_kind():
+    link = PlannedLink(LinkEnd(link="l", instance="i", role="listen", peer="p", kind="gpio"), "i", "e", "gpio")
+    assert link.kind == "gpio"
