@@ -272,12 +272,10 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
             if (key.rfind(prefix, 0) != 0) {
                 continue;
             }
-            LinkByteStream* link = LinkByteStream::find(key.substr(prefix.size()));
-            if (link == nullptr) {
+            if (!LinkRegistry::get().expect(key.substr(prefix.size()), request.unum(key))) {
                 error = "no link '" + key.substr(prefix.size()) + "' in this element";
                 return false;
             }
-            link->expect(request.unum(key));
         }
         const std::int64_t ticks = request.num("ticks", 1);
         if (ticks < 0 || ticks > 1000000000) {

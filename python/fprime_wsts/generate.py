@@ -33,6 +33,7 @@ CONTROL_COMPONENT = "Wsts.SimControl"
 SETUP_INSTANCE = "wstsSetup"
 CONTROL_INSTANCE = "wstsControl"
 LINK_SURROGATE = "Wsts.SimByteStream"
+LINK_SURROGATE_GPIO = "Wsts.SimGpio"
 ID_BLOCK = 0x1000
 HOST_PLATFORMS = {"linux", "posix", "sockets"}
 ATTRIBUTE_CLAUSE = re.compile(r"\b(queue\s+size|stack\s+size|priority|cpu)\s+[^\\\n{]+")
@@ -71,6 +72,7 @@ class PlannedLink:
     end: LinkEnd
     instance: str  # qualified instance name
     endpoint: str
+    kind: str  # bytestream or gpio: what the link carries
 
 
 @dataclass
@@ -397,7 +399,8 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
             if kept:
                 raise WstsError(f"link '{link_ends[name].link}' ends at {name}, which the manifest lists under 'keep'")
             if chosen is None:
-                chosen = by_surrogate.get(LINK_SURROGATE) or Surrogate(name=LINK_SURROGATE, source="link")
+                surrogate = LINK_SURROGATE_GPIO if link_ends[name].kind == "gpio" else LINK_SURROGATE
+                chosen = by_surrogate.get(surrogate) or Surrogate(name=surrogate, source="link")
                 reason = "link"
         restriction = None if chosen else _restricted_from_host(original, roots)
         if chosen is None and restriction and not kept:
@@ -566,18 +569,20 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
         end = link_ends.get(sub.instance.name)
         if end is None:
             continue
-        if not {"send", "recv"} <= set(sub.surrogate.ports):
+        wanted, what = ({"gpioWrite", "gpioRead"}, "a GPIO driver (no gpioWrite and gpioRead ports)") \
+            if end.kind == "gpio" else ({"send", "recv"}, "a byte stream driver (no send and recv ports)")
+        if not wanted <= set(sub.surrogate.ports):
             raise WstsError(
-                f"link '{end.link}' ends at {sub.instance.name}, but its surrogate {sub.surrogate.name} is not a "
-                "byte stream driver (no send and recv ports)"
+                f"link '{end.link}' ends at {sub.instance.name}, but its surrogate {sub.surrogate.name} is not {what}"
             )
         for spec in manifest.models:
-            if spec.kind == "bytestream" and spec.endpoint == sub.endpoint:
+            if spec.endpoint == sub.endpoint and spec.kind in {"bytestream", "gpio"}:
+                endpoint_kind = "byte stream" if end.kind == "bytestream" else "GPIO"
                 raise WstsError(
                     f"endpoint '{sub.endpoint}' has both the model '{spec.name}' and the link '{end.link}': "
-                    "a byte stream endpoint takes one or the other"
+                    f"a {endpoint_kind} endpoint takes one or the other"
                 )
-        plan.links.append(PlannedLink(end, sub.instance.name, sub.endpoint))
+        plan.links.append(PlannedLink(end, sub.instance.name, sub.endpoint, end.kind))
     # ---- Register blocks ----
     bound = {sub.endpoint: sub for sub in plan.substitutions if sub.bind}
     register_models: Dict[str, str] = {}
@@ -1421,8 +1426,10 @@ def render_setup(plan: Plan, manifest: Manifest, topology_header: str) -> str:
         "#include <Wsts/Core/Control.hpp>",
         "#include <Wsts/Core/Runtime.hpp>",
     ]
-    if plan.links:
+    if any(link.kind == "bytestream" for link in plan.links):
         lines.append("#include <Wsts/Core/Link.hpp>")
+    if any(link.kind == "gpio" for link in plan.links):
+        lines.append("#include <Wsts/Core/LinkGpio.hpp>")
     for header in sorted({m.header for m in manifest.models}):
         lines.append(f"#include <{header}>")
     if manifest.setup:
@@ -1432,7 +1439,8 @@ def render_setup(plan: Plan, manifest: Manifest, topology_header: str) -> str:
     for spec in manifest.models:
         lines.append(f"{spec.cls} model_{_identifier(spec.name)};")
     for link in plan.links:
-        lines.append(f"Wsts::LinkByteStream link_{_identifier(link.end.link)};")
+        cls = "LinkGpio" if link.kind == "gpio" else "LinkByteStream"
+        lines.append(f"Wsts::{cls} link_{_identifier(link.end.link)};")
     lines += [
         "",
         "void configure(const char* model, bool accepted, const char* key) {",
@@ -1488,7 +1496,8 @@ def render_setup(plan: Plan, manifest: Manifest, topology_header: str) -> str:
             lines.append(
                 f"    configure({name}, Wsts::configureModel(&{var}, {_cpp_string(key)}, {_cpp_string(value)}), {_cpp_string(key)});"
             )
-        lines.append(f"    Wsts::Bus::get().attachByteStream({_cpp_string(link.endpoint)}, &{var});")
+        attach = "attachGpio" if link.kind == "gpio" else "attachByteStream"
+        lines.append(f"    Wsts::Bus::get().{attach}({_cpp_string(link.endpoint)}, &{var});")
     lines.append("")
     if manifest.setup:
         lines += [

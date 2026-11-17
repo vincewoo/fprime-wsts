@@ -22,6 +22,7 @@
 #include <Wsts/Core/Control.hpp>
 #include <Wsts/Core/Dma.hpp>
 #include <Wsts/Core/Link.hpp>
+#include <Wsts/Core/LinkGpio.hpp>
 #include <Wsts/Core/Models.hpp>
 #include <Wsts/Core/RegisterSurrogate.hpp>
 
@@ -1714,6 +1715,146 @@ TEST_F(CoreTest, LinkWithoutAnAddressStaysDown) {
     link.start();
     EXPECT_FALSE(link.up());
     EXPECT_EQ(Wsts::LinkByteStream::started(), 0u);
+}
+
+// ----------------------------------------------------------------------
+// GPIO links between elements
+// ----------------------------------------------------------------------
+
+// Both ends live in this one process here, on two endpoints of the same bus. In a system
+// each end is in its own deployment.
+TEST_F(CoreTest, LinkGpioCarriesLevelsBetweenEndpoints) {
+    std::mutex mutex;
+    std::vector<bool> atA;
+    std::vector<bool> atB;
+    Bus::get().bindGpio("linkA", [&](bool level) {
+        std::lock_guard<std::mutex> lock(mutex);
+        atA.push_back(level);
+    });
+    Bus::get().bindGpio("linkB", [&](bool level) {
+        std::lock_guard<std::mutex> lock(mutex);
+        atB.push_back(level);
+    });
+    const std::string path = tempFile("gpio.sock");
+    Wsts::LinkGpio a;
+    Wsts::LinkGpio b;
+    ASSERT_TRUE(a.set("endpoint", "linkA") && a.set("link", "sep") && a.set("role", "listen") && a.set("address", path));
+    ASSERT_TRUE(b.set("endpoint", "linkB") && b.set("link", "sep") && b.set("role", "connect") && b.set("address", path));
+    EXPECT_FALSE(a.set("role", "sideways"));
+    Bus::get().attachGpio("linkA", &a);
+    Bus::get().attachGpio("linkB", &b);
+
+    // Nothing at the far end yet: the level is lost, as on a wire with nothing connected
+    EXPECT_EQ(Bus::get().gpioWrite("linkA", true), 0);
+    EXPECT_EQ(a.dropped(), 1u);
+
+    b.start();  // the connecting side may come up first
+    a.start();
+    ASSERT_TRUE(eventually([&]() { return a.up() && b.up(); }));
+    EXPECT_EQ(Wsts::LinkByteStream::started(), 2u) << "the shared registry covers gpio links";
+    EXPECT_EQ(Wsts::LinkByteStream::connected(), 2u);
+
+    // Flight software at end a drives the pin: the level arrives at end b as an input,
+    // and b's interrupt handler sees an edge
+    EXPECT_EQ(Bus::get().gpioWrite("linkA", true), 0);
+    ASSERT_TRUE(eventually([&]() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return atB.size() == 1;
+    }));
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        EXPECT_TRUE(atB[0]);
+        EXPECT_TRUE(atA.empty()) << "the reverse direction is a second link";
+    }
+    EXPECT_EQ(a.sent(), 1u) << "the link that was down did not send";
+    EXPECT_EQ(b.received(), 1u);
+
+    // And the other way: b drives its pin, a sees the level change from the one it drove
+    EXPECT_EQ(Bus::get().gpioWrite("linkB", false), 0);
+    ASSERT_TRUE(eventually([&]() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return atA.size() == 1;
+    }));
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        EXPECT_FALSE(atA[0]);
+    }
+    EXPECT_EQ(b.sent(), 1u);
+    EXPECT_EQ(a.received(), 1u);
+
+    // The bridge status sees a gpio link like a byte stream one: same keys, same registry
+    JsonObj traffic;
+    Wsts::LinkByteStream::traffic(traffic);
+    EXPECT_EQ(traffic.num("link.sep.sent", -1), 1) << traffic.dump();
+    EXPECT_EQ(traffic.num("link.sep.received", -1), 1) << traffic.dump();
+    EXPECT_EQ(Wsts::LinkByteStream::find("sep"), nullptr) << "find() is for byte stream links";
+
+    a.stop();
+    b.stop();
+    EXPECT_EQ(Wsts::LinkByteStream::started(), 0u);
+    Bus::get().detach("linkA");
+    Bus::get().detach("linkB");
+}
+
+// In lockstep a level is held until the tick after the one it was sent at, and the conductor
+// is told how many messages will have arrived so that a tick does not start without them.
+TEST_F(CoreTest, LinkGpioInLockstepHoldsWhatItBrings) {
+    Control& control = Control::get();
+    control.setLockstep(true);
+    Ticker ticker(10);  // 100 ms ticks
+    std::mutex mutex;
+    std::vector<bool> atB;
+    Bus::get().bindGpio("linkA", [](bool) {});
+    Bus::get().bindGpio("linkB", [&](bool level) {
+        std::lock_guard<std::mutex> lock(mutex);
+        atB.push_back(level);
+    });
+    const std::string path = tempFile("gpio-lockstep.sock");
+    Wsts::LinkGpio a;
+    Wsts::LinkGpio b;
+    ASSERT_TRUE(a.set("endpoint", "linkA") && a.set("link", "sep") && a.set("role", "listen") && a.set("address", path));
+    ASSERT_TRUE(b.set("endpoint", "linkB") && b.set("link", "sep") && b.set("role", "connect") && b.set("address", path));
+    Bus::get().attachGpio("linkA", &a);
+    Bus::get().attachGpio("linkB", &b);
+    a.start();
+    b.start();
+    ASSERT_TRUE(eventually([&]() { return a.up() && b.up(); }));
+
+    EXPECT_EQ(Bus::get().gpioWrite("linkA", true), 0);
+    ASSERT_TRUE(eventually([&]() { return b.received() == 1; }));
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        EXPECT_TRUE(atB.empty()) << "held until a tick";
+    }
+    b.expect(1);  // what the conductor says will have arrived
+    ASSERT_TRUE(control.grant(1));
+    ASSERT_TRUE(control.awaitGranted(std::chrono::milliseconds(2000)));
+    ASSERT_TRUE(eventually([&]() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return atB.size() == 1;
+    }));
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        EXPECT_TRUE(atB[0]);
+    }
+
+    // The end of lockstep delivers what is still held, as for a byte stream link
+    EXPECT_EQ(Bus::get().gpioWrite("linkA", false), 0);
+    ASSERT_TRUE(eventually([&]() { return b.received() == 2; }));
+    control.setLockstep(false);
+    ASSERT_TRUE(eventually([&]() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return atB.size() == 2;
+    }));
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        EXPECT_FALSE(atB[1]);
+    }
+
+    a.stop();
+    b.stop();
+    Bus::get().detach("linkA");
+    Bus::get().detach("linkB");
 }
 
 // ----------------------------------------------------------------------
