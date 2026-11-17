@@ -24,6 +24,16 @@ def _int(value, what: str) -> int:
         raise WstsError(f"{what}: '{value}' is not a number") from None
 
 
+def id_window(value: object, where: str) -> Tuple[int, int]:
+    """`ids`: the first and last ID that reach a deployment, as flight software routes commands"""
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise WstsError(f"{where}: 'ids' must be [first, last]")
+    low, high = (_int(item, f"{where} ids") for item in value)
+    if low > high:
+        raise WstsError(f"{where}: 'ids' must be [first, last] with first <= last")
+    return low, high
+
+
 def _bits(value: object, where: str) -> int:
     """`cmake.bits`: the width of the simulated deployment's executable"""
     number = _int(value, where)
@@ -342,7 +352,7 @@ class Manifest:
 KNOWN_KEYS = {
     "project", "deployment", "topology", "output", "substitute", "keep", "models", "control", "bridge", "tick_hz",
     "catalogs", "sources", "main", "cmake", "libraries", "fpp_exclude", "defines", "simulators", "devices",
-    "clocks", "run", "host", "setup", "time", "shims", "files",
+    "clocks", "run", "host", "setup", "time", "shims", "files", "ids",
 }
 #: Operating system APIs the toolkit implements for project code that calls them (`shims`)
 SHIMS = {"vxworks": "Wsts/VxWorks"}
@@ -568,6 +578,8 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
     manifest.control_enabled = bool(control.get("enabled", True))
     if "base_id" in control:
         manifest.control_base_id = _int(control["base_id"], f"{where}: control.base_id")
+    if data.get("ids") is not None:
+        manifest.id_window = id_window(data["ids"], where)
 
     sources = data.get("sources") or {}
     manifest.topology_fpp = sources.get("fpp")

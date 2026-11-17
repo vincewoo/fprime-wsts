@@ -42,6 +42,18 @@ def test_the_deployment_schema_has_the_keys_the_parser_accepts():
     assert set(properties["models"]["items"]["properties"]["kind"]["enum"]) == set(manifest.MODEL_KINDS)
 
 
+def test_the_ids_window_is_a_pair_in_a_deployment_and_a_system():
+    from fprime_wsts.fpp import WstsError
+    from fprime_wsts.manifest import parse_manifest
+
+    assert parse_manifest({"deployment": "D", "ids": [0, "0x0FFFFFFF"]}).id_window == (0, 0x0FFFFFFF)
+    for bad in ([5], [10, 5], "0x10"):
+        with pytest.raises(WstsError, match=r"'ids' must be \[first, last\]"):
+            parse_manifest({"deployment": "D", "ids": bad})
+    assert keys(schema("wsts"))  >= {"ids"}
+    assert schema("wsts")["properties"]["ids"]["maxItems"] == 2
+
+
 def test_the_system_schema_has_the_keys_the_parser_accepts():
     top = schema("wsts-system")
     assert keys(top) == system.SYSTEM_KEYS

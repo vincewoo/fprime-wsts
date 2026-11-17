@@ -215,8 +215,9 @@ endpoint, so faults, recording, replay and the bridge work the same either way.
 
    ```fpp
    module SensorSim {
-     instance sensorSim: SensorSim.SerialSensorSim base id 0x70000000 queue size 10
-     instance sensorPort: Wsts.BusByteStreamDevice base id 0x70002000
+     # IDs above the flight IDs and inside the share that reaches this deployment (`ids`)
+     instance sensorSim: SensorSim.SerialSensorSim base id 0x18000000 queue size 10
+     instance sensorPort: Wsts.BusByteStreamDevice base id 0x18002000
 
      topology Simulator {
        instance sensorSim
@@ -248,8 +249,21 @@ endpoint, so faults, recording, replay and the bridge work the same either way.
 element of the flight project `examples/mission` (`cdh.yaml`, `SensorSim/`). The keys are
 described in [reference.md](reference.md#simulator-components).
 
-**Base IDs.** Give the simulator instances a block of IDs that the flight software does
-not use and is unlikely to grow into. Flight IDs never move; a collision is an error.
+**Base IDs.** Flight software routes commands, events and telemetry by ID, and a simulator
+instance has to be where that routing sends its IDs. FPP only checks that IDs do not
+overlap, so an instance with a perfectly legal ID far above the flight IDs can be
+unreachable. A flight `Svc.CmdSplitter` sends every opcode from one ID up to another
+computer, for instance: a command to a simulator above that line is never answered, and
+nothing says why. So:
+
+- find out how the flight software divides its IDs (its topology code and its ID plan: a
+  `Svc.CmdSplitter.configure(...)` call, an FPP constant per computer);
+- give the simulator instances IDs in this deployment's share, in a block above the
+  highest flight ID, which the generator reports when it stops;
+- say what that share is in the manifest with `ids: [first, last]`, and `generate` stops
+  at any simulator instance outside it, naming it. The WSTS instances go inside too.
+
+Flight IDs never move; a collision is an error.
 
 **Threading.** The adapter delivers what flight software sent from inside the flight
 driver's `send` call, on the thread of the flight component that sent it.
@@ -287,8 +301,8 @@ ports for, gets a clock from the simulation: an instance of `Wsts.SimCycle`. Its
 `Svc.ActiveRateGroup` that the simulation defines, and the manifest gives its rate:
 
 ```fpp
-instance simClock: Wsts.SimCycle base id 0x70004000
-instance fastGroup: Svc.PassiveRateGroup base id 0x70005000 { ... }   # configure() in phase code
+instance simClock: Wsts.SimCycle base id 0x18004000
+instance fastGroup: Svc.PassiveRateGroup base id 0x18005000 { ... }   # configure() in phase code
 
 topology Simulator {
   instance simClock
@@ -345,7 +359,7 @@ for: a data file, a seed. Take it from the environment in the instance's phase c
 a fallback, so that nothing in flight changes:
 
 ```fpp
-instance starSim: Sim.StarSim base id 0x70010000 {
+instance starSim: Sim.StarSim base id 0x18010000 {
   phase Fpp.ToCpp.Phases.configComponents """
   // Unset: the simulator uses its built-in catalogue
   Sim::starSim.configure(std::getenv("SIM_STAR_CATALOGUE"));

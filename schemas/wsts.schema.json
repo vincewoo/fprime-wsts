@@ -567,6 +567,18 @@
       "uniqueItems": true,
       "description": "Operating system APIs implemented for project code that calls them. vxworks: a POSIX-backed subset of taskLib, semLib, msgQLib, wdLib, sysLib, tickLib, intLib, logLib, errnoLib and ioLib (docs/vxworks-shim.md)"
     },
+    "ids": {
+      "type": "array",
+      "items": {
+        "type": [
+          "integer",
+          "string"
+        ]
+      },
+      "minItems": 2,
+      "maxItems": 2,
+      "description": "The IDs that reach this deployment, as flight software routes commands (an F Prime Svc.CmdSplitter sends the opcodes from one ID up to another computer): [first, last]. Simulator instances outside it are an error, and the WSTS instances go inside. A system's 'ids' for the element wins"
+    },
     "files": {
       "type": "object",
       "properties": {
