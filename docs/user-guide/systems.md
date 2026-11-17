@@ -174,6 +174,6 @@ D=my-mission-sim/wsts/Mission; pytest tests -p fprime_wsts.pytest_plugin --wsts-
   lockstep it waits for it). It has no connection, so it never shows as "up".
 - **Build both elements from the same checkout state.** The GDS refuses to merge
   dictionaries whose project versions differ (`-dirty` on one of them).
-- **Not built yet:** GPIO links between computers, one recording for the whole system.
+- **Not built yet:** one recording for the whole system.
 
 The full description is in the reference's [Systems](../systems.md) page.

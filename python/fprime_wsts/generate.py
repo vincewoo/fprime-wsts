@@ -36,8 +36,11 @@ LINK_SURROGATE = "Wsts.SimByteStream"
 #! A datagram link ends at the same surrogate as a bytestream one: the flight driver ports
 #! are the same, and only the transport between the two elements differs.
 LINK_DATAGRAM_SURROGATE = "Wsts.SimByteStream"
-LINK_MODEL = {"bytestream": "Wsts::LinkByteStream", "datagram": "Wsts::LinkDatagram"}
-LINK_HEADER = {"bytestream": "Wsts/Core/Link.hpp", "datagram": "Wsts/Core/LinkDatagram.hpp"}
+LINK_MODEL = {"bytestream": "Wsts::LinkByteStream", "gpio": "Wsts::LinkGpio",
+              "datagram": "Wsts::LinkDatagram"}
+LINK_HEADER = {"bytestream": "Wsts/Core/Link.hpp", "gpio": "Wsts/Core/LinkGpio.hpp",
+               "datagram": "Wsts/Core/LinkDatagram.hpp"}
+LINK_SURROGATE_GPIO = "Wsts.SimGpio"
 ID_BLOCK = 0x1000
 HOST_PLATFORMS = {"linux", "posix", "sockets"}
 ATTRIBUTE_CLAUSE = re.compile(r"\b(queue\s+size|stack\s+size|priority|cpu)\s+[^\\\n{]+")
@@ -76,6 +79,7 @@ class PlannedLink:
     end: LinkEnd
     instance: str  # qualified instance name
     endpoint: str
+    kind: str  # bytestream or gpio: what the link carries
 
     @property
     def kind(self) -> str:
@@ -87,6 +91,7 @@ class Plan:
     topology: fpp.Topology
     substitutions: List[PlannedSubstitution] = field(default_factory=list)
     kept_hardware: List[str] = field(default_factory=list)
+    ground_servers: List[str] = field(default_factory=list)  # kept ground link drivers that listen (Drv.TcpServer)
     warnings: List[str] = field(default_factory=list)
     fidelity_notes: List[str] = field(default_factory=list)
     setup_base_id: int = 0
@@ -405,7 +410,8 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
             if kept:
                 raise WstsError(f"link '{link_ends[name].link}' ends at {name}, which the manifest lists under 'keep'")
             if chosen is None:
-                surrogate = (LINK_DATAGRAM_SURROGATE if link_ends[name].kind == "datagram" else LINK_SURROGATE)
+                surrogate = (LINK_SURROGATE_GPIO if link_ends[name].kind == "gpio" else
+                             LINK_DATAGRAM_SURROGATE if link_ends[name].kind == "datagram" else LINK_SURROGATE)
                 chosen = by_surrogate.get(surrogate) or Surrogate(name=surrogate, source="link")
                 reason = "link"
         restriction = None if chosen else _restricted_from_host(original, roots)
@@ -425,6 +431,11 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
                     f"is mapped to it. Add a 'substitute' entry to the manifest. Surrogates whose ports fit: {candidates}."
                 )
         if chosen is None:
+            if original.name == "Drv.TcpServer":
+                # Imported here: the survey imports this module
+                from .survey import bytestream_role
+                if bytestream_role(model, topology, name) == "ground":
+                    plan.ground_servers.append(name)
             if restriction:
                 plan.kept_hardware.append(name)
                 plan.warnings.append(f"{name} ({original.name}) is kept by the manifest although it is restricted: {restriction}")
@@ -570,18 +581,20 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
         end = link_ends.get(sub.instance.name)
         if end is None:
             continue
-        if not {"send", "recv"} <= set(sub.surrogate.ports):
+        wanted, what = ({"gpioWrite", "gpioRead"}, "a GPIO driver (no gpioWrite and gpioRead ports)") \
+            if end.kind == "gpio" else ({"send", "recv"}, "a byte stream driver (no send and recv ports)")
+        if not wanted <= set(sub.surrogate.ports):
             raise WstsError(
-                f"link '{end.link}' ends at {sub.instance.name}, but its surrogate {sub.surrogate.name} is not a "
-                "byte stream driver (no send and recv ports)"
+                f"link '{end.link}' ends at {sub.instance.name}, but its surrogate {sub.surrogate.name} is not {what}"
             )
         for spec in manifest.models:
-            if spec.kind == "bytestream" and spec.endpoint == sub.endpoint:
+            if spec.endpoint == sub.endpoint and spec.kind in {"bytestream", "gpio"}:
+                endpoint_kind = "byte stream" if end.kind == "bytestream" else "GPIO"
                 raise WstsError(
                     f"endpoint '{sub.endpoint}' has both the model '{spec.name}' and the link '{end.link}': "
-                    "a byte stream endpoint takes one or the other"
+                    f"a {endpoint_kind} endpoint takes one or the other"
                 )
-        plan.links.append(PlannedLink(end, sub.instance.name, sub.endpoint))
+        plan.links.append(PlannedLink(end, sub.instance.name, sub.endpoint, end.kind))
     # ---- Register blocks ----
     bound = {sub.endpoint: sub for sub in plan.substitutions if sub.bind}
     register_models: Dict[str, str] = {}
@@ -1492,7 +1505,8 @@ def render_setup(plan: Plan, manifest: Manifest, topology_header: str) -> str:
             lines.append(
                 f"    configure({name}, Wsts::configureModel(&{var}, {_cpp_string(key)}, {_cpp_string(value)}), {_cpp_string(key)});"
             )
-        lines.append(f"    Wsts::Bus::get().attachByteStream({_cpp_string(link.endpoint)}, &{var});")
+        attach = "attachGpio" if link.kind == "gpio" else "attachByteStream"
+        lines.append(f"    Wsts::Bus::get().{attach}({_cpp_string(link.endpoint)}, &{var});")
     lines.append("")
     if manifest.setup:
         lines += [
@@ -1724,6 +1738,10 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
                  **({"time_source": time_source} if time_source else {})},
         "substitutions": substitutions,
         "kept_hardware_instances": plan.kept_hardware,
+        # Only when there is one, so that reports of other deployments are unchanged: the flight
+        # side listens, so the GDS has to connect to it (`fprime-wsts run`)
+        **({"ground_link": {"instance": plan.ground_servers[0], "component": "Drv.TcpServer"}}
+           if plan.ground_servers else {}),
         "models": [
             {"name": m.name, "class": m.cls, "endpoint": m.endpoint, "kind": m.kind, "address": m.address}
             for m in manifest.models
@@ -2155,6 +2173,9 @@ def render_report(report: dict) -> str:
         lines.append("- Files of an SDK: " + (", ".join(f"`{d['entry']}` (`{d['module']}`)" for d in host["sdk_paths"]) or "none"))
         if host["sanitizers"]:
             lines.append("- Sanitizer runtime for: " + ", ".join(host["sanitizers"]))
+        if host.get("bits"):
+            lines.append(f"- A {host['bits']}-bit executable (`cmake.bits: {host['bits']}`): the generated "
+                         "`CMakeLists.txt` adds `-m32` to the C, C++ and link flags")
         for statement in host.get("not_read", []):
             lines.append(f"- Not read: `{statement}` adds directories through a variable, so every module directory "
                          "below that file is taken to be built")
@@ -3025,6 +3046,9 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
            f'include_directories(BEFORE "${{CMAKE_CURRENT_LIST_DIR}}/{STANDIN_DIR}")'] if standin_files else []),
         *(["# From `cmake.cxx_flags` in the manifest: for every C++ source of this build",
            f'string(APPEND CMAKE_CXX_FLAGS " {" ".join(global_flags)}")'] if global_flags else []),
+        *(['string(APPEND CMAKE_C_FLAGS " -m32")',
+           'string(APPEND CMAKE_CXX_FLAGS " -m32")',
+           'string(APPEND CMAKE_EXE_LINKER_FLAGS " -m32")'] if manifest.bits == 32 else []),
         *(["# From `cmake.cache` in the manifest. Set before F Prime reads the libraries; a value given on the",
            "# command line (-D) takes precedence.",
            *[f'set({name} "{";".join(values)}" CACHE STRING "Set by fprime-wsts from cmake.cache in the manifest")'
@@ -3255,6 +3279,7 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         "cache": manifest.cmake_cache,
         "sanitizers": sanitizers,
         "ignore": manifest.host_ignore,
+        **({"bits": manifest.bits} if manifest.bits != 64 else {}),
         **({"not_read": unread_roots} if unread_roots else {}),
     }
     # Headers of an operating system API the toolkit has a shim for, without the shim

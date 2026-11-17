@@ -42,7 +42,7 @@ SYSTEM_FILE = "wsts-system.json"
 SYSTEM_KEYS = {"system", "ground", "elements", "links", "output"}
 ELEMENT_KEYS = {"manifest", "bridge", "ids"}
 LINK_KEYS = {"name", "kind", "a", "b"}
-LINK_KINDS = {"bytestream", "datagram"}
+LINK_KINDS = {"bytestream", "gpio", "datagram"}
 FIRST_BRIDGE_PORT = 50100
 ELEMENT_NAME = re.compile(r"[A-Za-z_]\w*")
 LINK_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]*")
@@ -215,8 +215,8 @@ def _element_manifests(system: SystemManifest) -> Dict[str, Manifest]:
         for link in system.links:
             for (name, instance), role, peer in ((link.a, "listen", link.b), (link.b, "connect", link.a)):
                 if name == element.name:
-                    manifest.links.append(LinkEnd(link=link.name, instance=instance, role=role, peer=".".join(peer),
-                                                  kind=link.kind))
+                    manifest.links.append(LinkEnd(link=link.name, kind=link.kind, instance=instance, role=role,
+                                                  peer=".".join(peer)))
         manifests[element.name] = manifest
     return manifests
 

@@ -133,18 +133,23 @@ flowchart LR
 
 ### Links
 
-A link joins a byte stream driver instance of one element to one of another. Naming an
-instance in a link is enough to have it simulated:
+A link joins a driver instance of one element to one of another. `kind` says what it
+carries: `bytestream` (the default), a UART or socket connection, or `gpio`, a discrete wire
+between two pins. Naming an instance in a link is enough to have it simulated:
 
-- if the catalog or the element's manifest already replaces it (a UART driver, say), that
-  surrogate is used;
-- otherwise it is replaced by `Wsts.SimByteStream` (reported as chosen by `link`). This is
-  how the socket drivers are handled: they are not in the catalog, because a deployment's
-  ground link normally stays a real socket (`keep: [comDriver]`).
+- if the catalog or the element's manifest already replaces it (a UART or GPIO driver, say),
+  that surrogate is used;
+- otherwise a bytestream link is replaced by `Wsts.SimByteStream` and a gpio link by
+  `Wsts.SimGpio` (reported as chosen by `link`). This is how the socket drivers are
+  handled: they are not in the catalog, because a deployment's ground link normally stays a
+  real socket (`keep: [comDriver]`).
 
-A `Wsts::LinkByteStream` model is attached to the endpoint at each end. Whatever flight
-software sends on one side is delivered on the other. Because the link is a model behind
-the bus:
+A `Wsts::LinkByteStream` model is attached to the endpoint at each end of a bytestream
+link; a `Wsts::LinkGpio` model does the same for a gpio link. What flight software sends on
+one side is delivered on the other: bytes for a bytestream link, a level for a gpio link
+(what flight software at `a` writes arrives as an input level at `b`, where it fires the
+pin's interrupt as a device-driven edge would). A gpio link is one direction: the reverse is
+a second link with `a` and `b` swapped. Because the link is a model behind the bus:
 
 - **faults** on either endpoint act on the traffic (`drop`, `corrupt`, `delay`,
   `duplicate`, per direction);
@@ -182,10 +187,11 @@ the peer and nothing reconnects.
 Both ends may send, as with a stream link; `a`/`b` only decide which path is `.a.sock` and
 which is `.b.sock`. Faults and recording apply as on any byte stream endpoint.
 
-Links join byte streams only. A register block is not linked between elements: a register
-interface component is replaced inside its own element, and the model behind it lives
-there (in-process, or attached through that element's bridge). Two computers that share a
-dual-port memory or an FPGA need one external model attached to both elements' bridges.
+Links join byte streams, GPIO discretes and datagrams. A register block is not linked
+between elements: a register interface component is replaced inside its own element, and the
+model behind it lives there (in-process, or attached through that element's bridge). Two
+computers that share a dual-port memory or an FPGA need one external model attached to both
+elements' bridges.
 
 The surrogate accepts the set-up calls topology code makes on the socket drivers
 (`configure`, `configureSend`, `configureRecv`, `start`, `stop`, `join`), so that code
@@ -315,5 +321,5 @@ for the session; the `wsts_system` fixture is a `WstsSystem`, and fprime-gds's
   `delay` fault. Bytes sent while the peer is not connected are lost (in lockstep they wait
   for it). In lockstep what a link brings arrives at the receiver's next tick, a latency of
   up to one of its tick periods that the wire does not have.
-- **Not built yet:** GPIO links (discretes between computers), one recording for the whole
-  system (recordings are per element; a scenario for the whole system needs lockstep).
+- **Not built yet:** one recording for the whole system (recordings are per element; a
+  scenario for the whole system needs lockstep).

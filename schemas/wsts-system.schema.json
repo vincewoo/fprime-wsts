@@ -69,9 +69,10 @@
           "kind": {
             "enum": [
               "bytestream",
+              "gpio",
               "datagram"
             ],
-            "description": "bytestream: a connected stream socket. datagram: connectionless datagrams, one message each; a send while the peer is absent is dropped in real time, and held in lockstep"
+            "description": "bytestream: a connected stream socket. gpio: a discrete wire, a level from the pin flight software at end a writes to an input at end b. datagram: connectionless datagrams, one message each; a send while the peer is absent is dropped in real time, and held in lockstep"
           },
           "a": {
             "type": "string",

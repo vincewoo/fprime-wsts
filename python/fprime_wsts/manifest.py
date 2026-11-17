@@ -24,6 +24,14 @@ def _int(value, what: str) -> int:
         raise WstsError(f"{what}: '{value}' is not a number") from None
 
 
+def _bits(value: object, where: str) -> int:
+    """`cmake.bits`: the width of the simulated deployment's executable"""
+    number = _int(value, where)
+    if number not in (32, 64):
+        raise WstsError(f"{where}: '{value}' is not 32 or 64")
+    return number
+
+
 # ----------------------------------------------------------------------
 # Catalog
 # ----------------------------------------------------------------------
@@ -215,10 +223,10 @@ class LinkEnd:
     deployment manifest: the system manifest declares links and `generate_system` fills
     these in."""
     link: str  # link name, shared by both ends
-    instance: str  # the byte stream driver instance the link ends at
+    instance: str  # the driver instance the link ends at
     role: str  # listen or connect
     peer: str  # the far end, "<element>.<instance>", for the report
-    kind: str = "bytestream"  # bytestream or datagram: the transport of the link
+    kind: str = "bytestream"  # what the link carries: bytestream, gpio or datagram
 
 
 @dataclass
@@ -275,6 +283,8 @@ class Manifest:
     stub_variants: List[str] = field(default_factory=list)
     # Flags for the host's C++ compiler: for every module (key ALL_MODULES), or for one module directory
     cxx_flags: Dict[str, List[str]] = field(default_factory=dict)
+    # Width of the simulated deployment's executable: 32 (-m32) or 64
+    bits: int = 64
     # Names the host check does not report: headers, libraries (-l<name>), packages, SDK entries
     host_ignore: List[str] = field(default_factory=list)
     simulators: SimulatorsSpec = field(default_factory=SimulatorsSpec)
@@ -354,7 +364,7 @@ SUBSTITUTE_KEYS = {"instance", "component", "with", "endpoint", "options", "port
 SIMULATOR_KEYS = {"instances", "topologies", "connections", "headers"}
 DEVICE_KEYS = {"instance", "endpoint", "options"}
 CMAKE_KEYS = {"extra_subdirectories", "exclude_subdirectories", "depends", "cache", "include", "include_early",
-              "stub_variants", "cxx_flags"}
+              "stub_variants", "cxx_flags", "bits"}
 CONNECTION_END = r"([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+)\s*(?:\[\s*(\d+)\s*\])?"
 CACHE_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
 
@@ -655,6 +665,8 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
         raise WstsError(f"{where}: cmake.stub_variants must be a list of module directories, relative to the flight project")
     manifest.stub_variants = [d.strip() for d in stubs]
     manifest.cxx_flags = _cxx_flags(cmake.get("cxx_flags"), where)
+    if cmake.get("bits") is not None:
+        manifest.bits = _bits(cmake["bits"], f"{where}: cmake.bits")
     host = data.get("host") or {}
     unknown = set(host) - HOST_KEYS if isinstance(host, dict) else {"(not a mapping)"}
     if unknown:

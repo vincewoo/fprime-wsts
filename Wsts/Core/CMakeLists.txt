@@ -20,6 +20,7 @@ register_fprime_module(
         "${CMAKE_CURRENT_LIST_DIR}/Link.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/LinkRegistry.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/LinkDatagram.cpp"
+        "${CMAKE_CURRENT_LIST_DIR}/LinkGpio.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/Runtime.cpp"
     HEADERS
         "${CMAKE_CURRENT_LIST_DIR}/Activity.hpp"
@@ -34,6 +35,7 @@ register_fprime_module(
         "${CMAKE_CURRENT_LIST_DIR}/Link.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/LinkRegistry.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/LinkDatagram.hpp"
+        "${CMAKE_CURRENT_LIST_DIR}/LinkGpio.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/Runtime.hpp"
     DEPENDS
         Threads::Threads
