@@ -9,8 +9,6 @@ from fprime_wsts.generate import PlannedLink, generate
 from fprime_wsts.manifest import LinkEnd, load_manifest, parse_manifest
 from mission import CDH_MAIN, MISSION, REPO, copy_sim, flight_manifest, needs_fpp
 
-pytestmark = needs_fpp
-
 #: A manifest for Payload that lives in the flight project and uses stock models only
 PAYLOAD_MODELS = [
     {"name": "imu", "class": "Wsts::RegisterMapI2c", "endpoint": "i2cBus", "kind": "i2c", "address": 0x68,
@@ -26,6 +24,7 @@ def cdh_manifest(**changes):
     return flight_manifest("Cdh", **{"keep": ["comDriver"], "main": CDH_MAIN, **changes})
 
 
+@needs_fpp
 def test_manifest_in_the_flight_project(tmp_path):
     """No simulation project: drivers replaced from the toolkit catalog, stock models"""
     result = generate(MISSION, payload_manifest(keep=["hubDriver"]), tmp_path / "out")
@@ -57,6 +56,7 @@ def test_manifest_in_the_flight_project(tmp_path):
     assert json.loads((result.output / "wsts-report.json").read_text())["topology"] == "Payload.Payload"
 
 
+@needs_fpp
 def test_default_output_is_in_the_flight_project():
     # Check mode generates into a scratch directory and writes nothing
     result = generate(MISSION, payload_manifest(), check=True)
@@ -64,6 +64,7 @@ def test_default_output_is_in_the_flight_project():
     assert not (MISSION / "wsts").exists()
 
 
+@needs_fpp
 def test_control_none_adds_nothing_to_the_dictionary(tmp_path):
     result = generate(MISSION, payload_manifest(control="none"), tmp_path / "out")
     assert not any(result.report["dictionary"]["added"].values())
@@ -71,6 +72,7 @@ def test_control_none_adds_nothing_to_the_dictionary(tmp_path):
     assert "instance wstsSetup" in topology and "wstsControl" not in topology
 
 
+@needs_fpp
 def test_vxworks_deployment_converts_without_its_toolchain(tmp_path):
     result = generate(MISSION, cdh_manifest(), tmp_path / "out")
     report = result.report
@@ -91,6 +93,7 @@ def test_vxworks_deployment_converts_without_its_toolchain(tmp_path):
     assert "cdhStart(hostname, port, 50050);" in (result.output / "Cdh" / "WstsMain.cpp").read_text()
 
 
+@needs_fpp
 def test_unmapped_restricted_component_is_an_error_with_candidates(tmp_path):
     manifest = cdh_manifest()
     manifest.catalogs = []
@@ -114,6 +117,7 @@ def test_unmapped_restricted_component_is_an_error_with_candidates(tmp_path):
     assert len(vxworks) == 2 and {s["chosen_by"] for s in vxworks} == {"structural"}
 
 
+@needs_fpp
 @pytest.mark.parametrize("changes, message", [
     ({"keep": ["noSuchInstance"]}, "not in topology"),
     ({"models": [{"name": "m", "class": "C", "endpoint": "nowhere", "kind": "i2c"}]}, "no surrogate is bound"),
@@ -126,12 +130,14 @@ def test_plan_errors(tmp_path, changes, message):
         generate(MISSION, payload_manifest(**changes), tmp_path / "out")
 
 
+@needs_fpp
 def test_refuses_to_overwrite_foreign_directories(tmp_path):
     (tmp_path / "precious.txt").write_text("keep me")
     with pytest.raises(WstsError, match="refusing to overwrite"):
         generate(MISSION, payload_manifest(), tmp_path)
 
 
+@needs_fpp
 def test_upstream_ref_with_telemetry_packets(tmp_path):
     """Ref defines telemetry packets and its topology shares its module's name"""
     project = REPO / "lib" / "fprime" / "TestDeploymentsProject"
@@ -143,6 +149,7 @@ def test_upstream_ref_with_telemetry_packets(tmp_path):
     assert len(result.report["project_modules"]) == 7
 
 
+@needs_fpp
 def test_standalone_simulation_project(tmp_path):
     sim = copy_sim(tmp_path)
     flight_before = sorted(p for p in MISSION.rglob("*") if "build-" not in str(p))
@@ -168,6 +175,7 @@ def test_standalone_simulation_project(tmp_path):
     assert '::PayloadSim::powerDevice.wstsServe("i2cBus", "addr=0x40");' in setup
 
 
+@needs_fpp
 def test_simulation_project_needs_a_library_cmake_for_its_modules(tmp_path):
     sim = copy_sim(tmp_path)
     (sim / "library.cmake").unlink()
@@ -175,7 +183,6 @@ def test_simulation_project_needs_a_library_cmake_for_its_modules(tmp_path):
         generate(MISSION, load_manifest(sim / "payload.yaml"))
 
 
-@needs_fpp
 def test_planned_link_construction_sets_its_kind():
     link = PlannedLink(LinkEnd(link="l", instance="i", role="listen", peer="p", kind="gpio"), "i", "e", "gpio")
     assert link.kind == "gpio"
