@@ -419,6 +419,12 @@ def main(argv=None) -> int:
     run.add_argument("--record", action="append", metavar="[ELEMENT=]FILE",
                      help="record bus traffic and actions to this file; for a system, <element>=<file> for one "
                           "element, or a plain file to record every element to <stem>.<element>.<suffix>")
+    run.add_argument("--record-merged", metavar="FILE",
+                     help="record every element of a system to one file, each line tagged with its element; "
+                          "replay it with --scenario-merged")
+    run.add_argument("--scenario-merged", metavar="FILE",
+                     help="play a merged recording (from --record-merged) on a system: its lines are split back per "
+                          "element, and each element plays its own from start-up")
     run.add_argument("--duration", type=float, help="stop after this many seconds (default: run until interrupted)")
     run.add_argument("--log-dir", help="directory for logs (default: <directory>/wsts-logs)")
     run.add_argument("--files-dir", help="directory for relative scenario/recording paths (default: the log directory)")

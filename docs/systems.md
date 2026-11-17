@@ -249,6 +249,27 @@ element; a plain `--record run1.jsonl` records every element, to `run1.cdh.jsonl
 `run1.payload.jsonl`. `--bridge` and `--files-dir` apply to a single deployment and are
 rejected for a system.
 
+For one file holding every element's recording there is `--record-merged <file>`:
+
+```bash
+fprime-wsts run examples/mission-sim/wsts/Mission --duration 30 --record-merged run.jsonl
+fprime-wsts run examples/mission-sim/wsts/Mission --scenario-merged run.jsonl --scenario-mode responses
+```
+
+Each element records to a temp file under the log directory while the run is up; when it
+stops they are merged into the one file, every line gaining `"element": <name>`. The lines
+are per element in the order of the system's elements, each element's in the order it
+recorded them: the file is not re-sorted by tick, because ticks are relative to each
+element's own recording start and are not comparable across elements. The temp files are
+removed once the merge has succeeded; a merge that fails names the element it could not read
+and leaves them in the log directory. `--scenario-merged <file>` is the inverse: it splits
+the file by `element` into one file per element and plays each on its element from start-up,
+in the mode `--scenario-mode` gives (both `stimulus` and `responses` work, as they do for one
+element). A merged file and the per-element `--record`/`--scenario` cannot be given together.
+A merged recording replays with each element's ticks relative to its own replay start, so
+cross-element timing shifts by the difference in when each element's recording started; that
+is the price of one file, not a bug.
+
 An element can still be run by itself with `fprime-wsts run <system>/<element>`: its links
 then stay down, as with the other computer switched off.
 
@@ -321,5 +342,3 @@ for the session; the `wsts_system` fixture is a `WstsSystem`, and fprime-gds's
   `delay` fault. Bytes sent while the peer is not connected are lost (in lockstep they wait
   for it). In lockstep what a link brings arrives at the receiver's next tick, a latency of
   up to one of its tick periods that the wire does not have.
-- **Not built yet:** one recording for the whole system (recordings are per element; a
-  scenario for the whole system needs lockstep).

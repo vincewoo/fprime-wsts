@@ -683,6 +683,74 @@ def one_value(option: str, values) -> Optional[str]:
     return values[0]
 
 
+#: The `element` a merged recording tags each line with, at the start of the object
+MERGED_ELEMENT = re.compile(r'^\s*\{\s*"element"\s*:\s*"((?:[^"\\]|\\.)*)"\s*,')
+
+
+def merge_recordings(sources: Dict[str, Path], target: Path) -> int:
+    """One file holding every element's recording (`--record-merged` of a system run).
+
+    Each line keeps its fields and gains `"element"`; the lines come in the order of
+    `sources` (the system's elements) and, within one, in the order the element recorded
+    them. Ticks are relative to each element's own recording start, so they are not
+    comparable across elements and the lines are not re-sorted. Blank lines contribute
+    nothing. Returns the line count of `target`.
+    """
+    missing = [f"{name} ({path})" for name, path in sources.items() if not Path(path).is_file()]
+    if missing:
+        raise WstsError("no recording to merge for " + ", ".join(missing)
+                        + ": the element(s) did not leave a file to merge")
+    target = Path(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    lines = 0
+    with open(target, "w", newline="\n") as merged:
+        for name, path in sources.items():
+            for number, line in enumerate(Path(path).read_text().splitlines(), 1):
+                text = line.strip()
+                if not text:
+                    continue
+                if not text.startswith("{"):
+                    raise WstsError(f"{path}:{number}: not a line of a recording")
+                merged.write('{"element": ' + json.dumps(name) + "," + text[1:] + "\n")
+                lines += 1
+    return lines
+
+
+def split_recording(source: Path, elements: List[str],
+                    directory: Optional[Path] = None) -> Dict[str, str]:
+    """The inverse of `merge_recordings` (`--scenario-merged` of a system run): each
+    element's lines go to a file of its own, with the `"element"` key removed, byte for byte
+    as they were recorded. Elements that have no lines get no file. The files are written to
+    `directory` (default: a new temporary directory) and returned as element -> path.
+    A line whose element is not one of `elements` is an error naming the line."""
+    source = Path(source)
+    directory = Path(directory) if directory is not None else Path(tempfile.mkdtemp(prefix="wsts-merged-"))
+    directory.mkdir(parents=True, exist_ok=True)
+    handles: Dict[str, tuple] = {}
+    try:
+        for number, line in enumerate(source.read_text().splitlines(), 1):
+            text = line.strip()
+            if not text:
+                continue
+            match = MERGED_ELEMENT.match(text)
+            if not match:
+                raise WstsError(f"{source}:{number}: not a line of a merged recording "
+                                '(each line starts with {"element": "<element>", …)')
+            name = json.loads('"' + match.group(1) + '"')
+            if name not in elements:
+                raise WstsError(f"{source}:{number}: element '{name}' is not one of this system's "
+                                f"({', '.join(elements)})")
+            if name not in handles:
+                path = directory / f"{name}.jsonl"
+                handles[name] = (open(path, "w", newline="\n"), path)
+            handle, _ = handles[name]
+            handle.write("{" + text[match.end():] + "\n")
+    finally:
+        for handle, _ in handles.values():
+            handle.close()
+    return {name: str(handles[name][1]) for name in elements if name in handles}
+
+
 def dictionary_mismatch(dictionaries: Dict[str, Path], directory: Optional[Path] = None) -> Optional[str]:
     """Why the dictionaries of a system's elements cannot be merged into one, if they
     cannot: F Prime writes the version of the checkout into each when its build is
@@ -716,7 +784,8 @@ class SystemSimulation:
                  env: Optional[List[str]] = None, gds_gui: Optional[int] = None, gds_gui_addr: str = "127.0.0.1",
                  auto_ports: bool = False, zmq_transport: Optional[List[str]] = None,
                  scenarios: Optional[Dict[str, str]] = None, scenario_mode: str = "stimulus",
-                 records: Optional[Dict[str, str]] = None, stepped: Optional[bool] = None):
+                 records: Optional[Dict[str, str]] = None, stepped: Optional[bool] = None,
+                 record_merged: Optional[str] = None, scenario_merged: Optional[str] = None):
         from .system import load_description
 
         self.directory = Path(directory).resolve()
@@ -739,6 +808,16 @@ class SystemSimulation:
         self.scenarios = dict(scenarios or {})  # element -> scenario file played from start-up
         self.scenario_mode = scenario_mode
         self.records = dict(records or {})  # element -> file its bus traffic and actions are recorded to
+        # One file for the whole system: the elements record to temp files under the log
+        # directory, merged when the run stops, and a replay is split back into one file per
+        # element (see merge_recordings / split_recording)
+        self.record_merged = Path(record_merged).resolve() if record_merged else None
+        self.scenario_merged = scenario_merged
+        self._merged_dir: Optional[Path] = None
+        self._scenario_dir: Optional[Path] = None
+        self._merge_pending = False
+        self.merged_lines: Optional[int] = None
+        self.merge_error: Optional[str] = None
         # Lockstep: every element in stepped time, its ticks granted by a conductor. None
         # leaves it to the manifests: lockstep if any element's asks for stepped time.
         if stepped is None:
@@ -793,6 +872,19 @@ class SystemSimulation:
         self.log_dir.mkdir(parents=True, exist_ok=True)
         if self.gds:
             self.dictionary = self.merge_dictionaries()
+        names = [element["name"] for element in self.description["elements"]]
+        if self.scenario_merged:
+            # One file for the whole system: split by element, and play each element's part
+            self._scenario_dir = self.log_dir / "scenario-merged"
+            shutil.rmtree(self._scenario_dir, ignore_errors=True)
+            self.scenarios.update(split_recording(Path(self.scenario_merged), names, self._scenario_dir))
+        if self.record_merged:
+            # Each element records to a file of its own under the log directory; they are
+            # merged into the one file when the run stops
+            self._merged_dir = self.log_dir / "record-merged"
+            shutil.rmtree(self._merged_dir, ignore_errors=True)
+            self._merged_dir.mkdir(parents=True, exist_ok=True)
+            self.records = {name: str(self._merged_dir / f"{name}.jsonl") for name in names}
         # Link sockets live in a short path of their own: Unix socket paths are limited to
         # about a hundred characters
         self._link_dir = tempfile.mkdtemp(prefix="wsts-links-")
@@ -825,6 +917,7 @@ class SystemSimulation:
                     raise WstsError(f"element '{name}': {error}") from None
             self._wait_for_links()
             write_run_file(self.log_dir, self.addresses())
+            self._merge_pending = bool(self.record_merged)
         except BaseException:
             self.stop()
             raise
@@ -884,11 +977,29 @@ class SystemSimulation:
 
     def stop(self) -> Dict[str, Optional[int]]:
         codes = {name: simulation.stop() for name, simulation in reversed(list(self.elements.items()))}
+        if self._merge_pending:
+            self._merge_pending = False
+            self._merge()
         (self.log_dir / RUN_FILE).unlink(missing_ok=True)
         if self._link_dir:
             shutil.rmtree(self._link_dir, ignore_errors=True)
             self._link_dir = None
         return codes
+
+    def _merge(self) -> None:
+        """The one file of `--record-merged`, from the elements' own recordings, in the
+        order of the system's elements. The temp files go once the merge has succeeded; a
+        failed merge leaves them in place, to be looked at."""
+        sources = {element["name"]: Path(self.records[element["name"]])
+                   for element in self.description["elements"] if element["name"] in self.records}
+        try:
+            self.merged_lines = merge_recordings(sources, self.record_merged)
+        except WstsError as error:
+            self.merge_error = str(error)
+            return
+        self.merge_error = None
+        if self._merged_dir:
+            shutil.rmtree(self._merged_dir, ignore_errors=True)
 
     def __enter__(self) -> "SystemSimulation":
         return self.start()
@@ -905,13 +1016,23 @@ def run_system_cli(args) -> int:
             raise WstsError(f"--{option.replace('_', '-')} applies to a single deployment and is not supported when "
                             "running a system; drive the elements through their bridges instead")
     names = [element["name"] for element in load_description(Path(args.directory).resolve())["elements"]]
+    record_merged = getattr(args, "record_merged", None)
+    scenario_merged = getattr(args, "scenario_merged", None)
+    # One file per kind: a merged file and the per-element form say the same thing twice
+    if record_merged and args.record:
+        raise WstsError("--record-merged holds every element's recording in one file, so --record cannot be given "
+                        "with it: use one or the other")
+    if scenario_merged and args.scenario:
+        raise WstsError("--scenario-merged holds every element's scenario in one file, so --scenario cannot be "
+                        "given with it: use one or the other")
     stepped = getattr(args, "stepped", None)
     gds = args.gds or args.gds_gui
     system = SystemSimulation(Path(args.directory), gds=gds, gds_port=args.gds_port,
                               gds_gui=args.gds_gui_port if args.gds_gui else None,
                               gds_gui_addr=args.gds_gui_addr,
                               log_dir=Path(args.log_dir) if args.log_dir else None, env=getattr(args, "env", None),
-                              auto_ports=getattr(args, "auto_ports", False), stepped=stepped)
+                              auto_ports=getattr(args, "auto_ports", False), stepped=stepped,
+                              record_merged=record_merged, scenario_merged=scenario_merged)
     lockstep = bool(system.stepped)
     # In lockstep a scenario without an element is the system's: actions at simulated times
     system_scenario = None
@@ -924,7 +1045,8 @@ def run_system_cli(args) -> int:
                         "A scenario for the whole system, on one time base, needs lockstep (--stepped)")
     system.scenarios = per_element("scenario", args.scenario, names)
     system.scenario_mode = args.scenario_mode
-    system.records = records = per_element("record", args.record, names, spread=True)
+    records = {} if record_merged else per_element("record", args.record, names, spread=True)
+    system.records.update(records)
     scenario = None
     if system_scenario:
         from .lockstep import SystemScenario
@@ -1022,6 +1144,9 @@ def run_system_cli(args) -> int:
             }
             for name, simulation in system.elements.items()
         },
+        **({"record_merged": {"path": str(system.record_merged), "lines": system.merged_lines}}
+           if system.record_merged else {}),
+        **({"merge_error": system.merge_error} if system.merge_error else {}),
     }
     if args.json:
         print(json.dumps(summary, indent=2))
@@ -1030,6 +1155,13 @@ def run_system_cli(args) -> int:
               + ", ".join(f"{name} {code}" for name, code in codes.items())
               + (f"; {timing['sim_seconds']} s simulated in lockstep, {timing['speed']} times real time"
                  if timing and timing.get("speed") else ""))
+        if system.record_merged and system.merged_lines is not None:
+            print(f"merged recording: {system.merged_lines} lines of {len(system.records)} element(s) in "
+                  f"{system.record_merged}")
+    if system.merge_error:
+        print(f"the recordings of the elements were not merged: {system.merge_error}. They are in "
+              f"{system.log_dir / 'record-merged'}", file=sys.stderr)
+        return 1
     if stuck:
         for name, why in stuck.items():
             print(f"lockstep: a tick of element '{name}' did not finish, and the system stopped at "
@@ -1062,6 +1194,11 @@ def run_cli(args) -> int:
 
     if (Path(args.directory) / SYSTEM_FILE).is_file():
         return run_system_cli(args)
+    for merged, option, single in (("record_merged", "--record-merged", "--record"),
+                                   ("scenario_merged", "--scenario-merged", "--scenario")):
+        if getattr(args, merged, None):
+            raise WstsError(f"{option} is for a system, where it holds every element's file in one; a single "
+                            f"deployment plays and records one file already: use {single}")
     gds = args.gds or args.gds_gui
     simulation = Simulation(Path(args.directory), gds=gds, gds_port=args.gds_port,
                             gds_gui=args.gds_gui_port if args.gds_gui else None,

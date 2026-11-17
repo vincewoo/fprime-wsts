@@ -105,9 +105,11 @@ events and channels of every element are then available under their usual names:
 `--env NAME=VALUE` goes to every element and `--env payload.NAME=VALUE` to one.
 `--scenario` and `--record` are per element (`--scenario payload=overtemp.jsonl`; a plain
 `--record run.jsonl` records each element to `run.<element>.jsonl`), and `--bridge` applies
-to single deployments only. An element can still run alone with
-`fprime-wsts run <system>/<element>`; its links then stay down, as if the other computer
-were switched off.
+to single deployments only. For one file holding every element's recording, use
+`--record-merged run.jsonl`, and replay it with `--scenario-merged run.jsonl`: each line of
+the file carries its `element`, and the replay splits it back per element. An element can
+still run alone with `fprime-wsts run <system>/<element>`; its links then stay down, as if
+the other computer were switched off.
 
 ## Run a system in lockstep
 
@@ -174,6 +176,5 @@ D=my-mission-sim/wsts/Mission; pytest tests -p fprime_wsts.pytest_plugin --wsts-
   lockstep it waits for it). It has no connection, so it never shows as "up".
 - **Build both elements from the same checkout state.** The GDS refuses to merge
   dictionaries whose project versions differ (`-dirty` on one of them).
-- **Not built yet:** one recording for the whole system.
 
 The full description is in the reference's [Systems](../systems.md) page.

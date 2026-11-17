@@ -49,9 +49,11 @@ the concrete list for that deployment.
 ## Repeatability
 
 A scenario applies its actions at fixed ticks, and a recording replays at the ticks it was
-recorded at. In real time, the order in which flight threads run within a tick is decided
-by the host scheduler: tests should assert on outcomes (an event occurred, a channel
-reached a value) rather than on exact interleavings. In
+recorded at. A merged recording (`--record-merged`) replays with each element's ticks
+relative to its own replay start, so cross-element timing shifts by the difference in when
+each element's recording started. In real time, the order in which flight threads run within
+a tick is decided by the host scheduler: tests should assert on outcomes (an event occurred,
+a channel reached a value) rather than on exact interleavings. In
 [stepped time](user-guide/control.md#stepped-time-experimental) the order is fixed and two
 runs record the same bytes, as long as nothing in the deployment waits on the host.
 
