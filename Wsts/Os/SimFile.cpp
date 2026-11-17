@@ -11,7 +11,11 @@ Os::FileInterface::Status SimFile::open(const char* path, Mode mode, OverwriteTy
     std::string mapped;
     const Os::FilePathUtils::Status mappedStatus = SimPath::map(path, mapped);
     if (mappedStatus == Os::FilePathUtils::OUTSIDE_SANDBOX) {
+#if WSTS_HAS_FILE_OUTSIDE_SANDBOX
         return OUTSIDE_SANDBOX;
+#else
+        return NO_PERMISSION;  // this framework's Os::File has no status for it
+#endif
     } else if (mappedStatus != Os::FilePathUtils::VALID) {
         // INVALID_PATH or TOO_LONG: the path of flight software cannot name a file
         return INVALID_ARGUMENT;

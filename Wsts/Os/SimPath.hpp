@@ -13,7 +13,7 @@
 #define WSTS_OS_SIMPATH_HPP
 
 #include <Fw/FPrimeBasicTypes.hpp>
-#include <Os/FilePathUtils.hpp>
+#include <Wsts/Os/FilePathUtilsCompat.hpp>
 #include <string>
 
 namespace Wsts {

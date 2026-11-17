@@ -182,8 +182,8 @@ void SimControl::SIM_SET_STEPPED_cmdHandler(FwOpcodeType opCode, U32 cmdSeq, boo
 void SimControl::FAULT_SET_cmdHandler(FwOpcodeType opCode,
                                       U32 cmdSeq,
                                       const Fw::CmdStringArg& endpoint,
-                                      const Wsts::SimFaultKind& kind,
-                                      const Wsts::SimFaultDir& direction,
+                                      WSTS_ENUM_ARG(Wsts::SimFaultKind) kind,
+                                      WSTS_ENUM_ARG(Wsts::SimFaultDir) direction,
                                       U32 arg,
                                       U32 count,
                                       U32 ticks) {
@@ -221,7 +221,7 @@ void SimControl::INJECT_TEXT_cmdHandler(FwOpcodeType opCode,
 void SimControl::GPIO_FORCE_cmdHandler(FwOpcodeType opCode,
                                        U32 cmdSeq,
                                        const Fw::CmdStringArg& endpoint,
-                                       const Fw::Logic& level) {
+                                       WSTS_ENUM_ARG(Fw::Logic) level) {
     JsonObj action;
     action.set("op", "gpio_force").set("endpoint", endpoint.toChar()).setBool("level", level == Fw::Logic::HIGH);
     this->run(opCode, cmdSeq, action);
@@ -272,7 +272,7 @@ void SimControl::MODEL_SET_cmdHandler(FwOpcodeType opCode,
 void SimControl::SCENARIO_LOAD_cmdHandler(FwOpcodeType opCode,
                                           U32 cmdSeq,
                                           const Fw::CmdStringArg& path,
-                                          const Wsts::SimReplayMode& mode) {
+                                          WSTS_ENUM_ARG(Wsts::SimReplayMode) mode) {
     JsonObj action;
     action.set("op", "scenario_load").set("path", path.toChar());
     this->run(opCode, cmdSeq, action.set("mode", (mode == SimReplayMode::RESPONSES) ? "responses" : "stimulus"));
