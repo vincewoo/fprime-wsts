@@ -68,8 +68,10 @@
           },
           "kind": {
             "enum": [
-              "bytestream"
-            ]
+              "bytestream",
+              "datagram"
+            ],
+            "description": "bytestream: a connected stream socket. datagram: connectionless datagrams, one message each; a send while the peer is absent is dropped in real time, and held in lockstep"
           },
           "a": {
             "type": "string",

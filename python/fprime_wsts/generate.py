@@ -33,6 +33,11 @@ CONTROL_COMPONENT = "Wsts.SimControl"
 SETUP_INSTANCE = "wstsSetup"
 CONTROL_INSTANCE = "wstsControl"
 LINK_SURROGATE = "Wsts.SimByteStream"
+#! A datagram link ends at the same surrogate as a bytestream one: the flight driver ports
+#! are the same, and only the transport between the two elements differs.
+LINK_DATAGRAM_SURROGATE = "Wsts.SimByteStream"
+LINK_MODEL = {"bytestream": "Wsts::LinkByteStream", "datagram": "Wsts::LinkDatagram"}
+LINK_HEADER = {"bytestream": "Wsts/Core/Link.hpp", "datagram": "Wsts/Core/LinkDatagram.hpp"}
 ID_BLOCK = 0x1000
 HOST_PLATFORMS = {"linux", "posix", "sockets"}
 ATTRIBUTE_CLAUSE = re.compile(r"\b(queue\s+size|stack\s+size|priority|cpu)\s+[^\\\n{]+")
@@ -71,6 +76,10 @@ class PlannedLink:
     end: LinkEnd
     instance: str  # qualified instance name
     endpoint: str
+
+    @property
+    def kind(self) -> str:
+        return self.end.kind
 
 
 @dataclass
@@ -396,7 +405,8 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
             if kept:
                 raise WstsError(f"link '{link_ends[name].link}' ends at {name}, which the manifest lists under 'keep'")
             if chosen is None:
-                chosen = by_surrogate.get(LINK_SURROGATE) or Surrogate(name=LINK_SURROGATE, source="link")
+                surrogate = (LINK_DATAGRAM_SURROGATE if link_ends[name].kind == "datagram" else LINK_SURROGATE)
+                chosen = by_surrogate.get(surrogate) or Surrogate(name=surrogate, source="link")
                 reason = "link"
         restriction = None if chosen else _restricted_from_host(original, roots)
         if chosen is None and restriction and not kept:
@@ -1415,8 +1425,8 @@ def render_setup(plan: Plan, manifest: Manifest, topology_header: str) -> str:
         "#include <Wsts/Core/Control.hpp>",
         "#include <Wsts/Core/Runtime.hpp>",
     ]
-    if plan.links:
-        lines.append("#include <Wsts/Core/Link.hpp>")
+    for header in sorted({LINK_HEADER[link.kind] for link in plan.links}):
+        lines.append(f"#include <{header}>")
     for header in sorted({m.header for m in manifest.models}):
         lines.append(f"#include <{header}>")
     if manifest.setup:
@@ -1426,7 +1436,7 @@ def render_setup(plan: Plan, manifest: Manifest, topology_header: str) -> str:
     for spec in manifest.models:
         lines.append(f"{spec.cls} model_{_identifier(spec.name)};")
     for link in plan.links:
-        lines.append(f"Wsts::LinkByteStream link_{_identifier(link.end.link)};")
+        lines.append(f"{LINK_MODEL[link.kind]} link_{_identifier(link.end.link)};")
     lines += [
         "",
         "void configure(const char* model, bool accepted, const char* key) {",

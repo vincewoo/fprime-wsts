@@ -26,12 +26,6 @@ const std::uint32_t MAX_MESSAGE = 16 * 1024 * 1024;  //!< Larger lengths mean a 
 const std::size_t MAX_WAITING = 65536;               //!< Lockstep: messages kept for a peer not yet connected
 const std::size_t HEADER = 12;                       //!< Length (4 bytes), then the time it was sent at (8)
 
-std::atomic<std::uint32_t> s_started{0};
-std::atomic<std::uint32_t> s_connected{0};
-
-std::mutex s_registryMutex;
-std::vector<LinkByteStream*> s_links;  //!< started, in the order they were started
-
 bool unixAddress(const std::string& path, sockaddr_un& address) {
     std::memset(&address, 0, sizeof(address));
     address.sun_family = AF_UNIX;
@@ -61,29 +55,20 @@ LinkByteStream::~LinkByteStream() {
 }
 
 std::uint32_t LinkByteStream::started() {
-    return s_started.load();
+    return LinkRegistry::started();
 }
 
 std::uint32_t LinkByteStream::connected() {
-    return s_connected.load();
+    return LinkRegistry::connected();
 }
 
 LinkByteStream* LinkByteStream::find(const std::string& name) {
-    std::lock_guard<std::mutex> lock(s_registryMutex);
-    for (LinkByteStream* link : s_links) {
-        if (link->m_name == name) {
-            return link;
-        }
-    }
-    return nullptr;
+    LinkEnd* link = LinkRegistry::find(name);
+    return link == nullptr ? nullptr : link->byteStream();
 }
 
 void LinkByteStream::traffic(JsonObj& out) {
-    std::lock_guard<std::mutex> lock(s_registryMutex);
-    for (LinkByteStream* link : s_links) {
-        out.setNum("link." + link->m_name + ".sent", static_cast<std::int64_t>(link->sent()));
-        out.setNum("link." + link->m_name + ".received", static_cast<std::int64_t>(link->received()));
-    }
+    LinkRegistry::traffic(out);
 }
 
 std::uint64_t LinkByteStream::received() const {
@@ -156,11 +141,7 @@ void LinkByteStream::start() {
         return;
     }
     m_running.store(true);
-    s_started++;
-    {
-        std::lock_guard<std::mutex> lock(s_registryMutex);
-        s_links.push_back(this);
-    }
+    LinkRegistry::add(this);
     Control::get().addInbound(this);
     m_thread = std::thread([this]() { this->run(); });
 }
@@ -173,11 +154,7 @@ void LinkByteStream::stop() {
         m_thread.join();
     }
     Control::get().removeInbound(this);
-    {
-        std::lock_guard<std::mutex> lock(s_registryMutex);
-        s_links.erase(std::remove(s_links.begin(), s_links.end(), this), s_links.end());
-    }
-    s_started--;
+    LinkRegistry::remove(this);
     if (m_listen) {
         (void)::unlink(m_address.c_str());
     }
@@ -283,7 +260,6 @@ void LinkByteStream::serve(int fd) {
         }
     }
     m_up.store(true);
-    s_connected++;
     std::fprintf(stderr, "[WSTS] link %s: up\n", m_name.c_str());
 
     while (m_running.load()) {
@@ -323,7 +299,6 @@ void LinkByteStream::serve(int fd) {
         }
     }
 
-    s_connected--;
     m_up.store(false);
     {
         std::lock_guard<std::mutex> lock(m_sendMutex);

@@ -6,10 +6,12 @@
 #include <gtest/gtest.h>
 
 #include <unistd.h>
+#include <sys/stat.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <functional>
 #include <mutex>
@@ -22,6 +24,8 @@
 #include <Wsts/Core/Control.hpp>
 #include <Wsts/Core/Dma.hpp>
 #include <Wsts/Core/Link.hpp>
+#include <Wsts/Core/LinkDatagram.hpp>
+#include <Wsts/Core/LinkRegistry.hpp>
 #include <Wsts/Core/Models.hpp>
 #include <Wsts/Core/RegisterSurrogate.hpp>
 
@@ -1714,6 +1718,241 @@ TEST_F(CoreTest, LinkWithoutAnAddressStaysDown) {
     link.start();
     EXPECT_FALSE(link.up());
     EXPECT_EQ(Wsts::LinkByteStream::started(), 0u);
+}
+
+// ----------------------------------------------------------------------
+// Datagram links: a connectionless transport with the same delivery
+// ----------------------------------------------------------------------
+
+namespace {
+//! Two ends of a datagram link in this one process, on the endpoints linkA and linkB. Each
+//! binds its own socket file, as the two ends of a system do in their own processes.
+struct DatagramPair {
+    DatagramPair() {
+        Bus::get().bindByteStream("linkA", [this](const Bytes& data) {
+            std::lock_guard<std::mutex> lock(mutex);
+            atA.push_back(data);
+            atATick.push_back(Control::get().tick());
+        });
+        Bus::get().bindByteStream("linkB", [this](const Bytes& data) {
+            std::lock_guard<std::mutex> lock(mutex);
+            atB.push_back(data);
+            atBTick.push_back(Control::get().tick());
+        });
+        const std::string base = tempFile("datagram");
+        pathA = base + ".a.sock";
+        pathB = base + ".b.sock";
+        (void)a.set("endpoint", "linkA");
+        (void)a.set("link", "dgram");
+        (void)a.set("role", "listen");
+        (void)a.set("address", pathA);
+        (void)a.set("address_b", pathB);
+        (void)b.set("endpoint", "linkB");
+        (void)b.set("link", "dgram");
+        (void)b.set("role", "connect");
+        (void)b.set("address", pathA);
+        (void)b.set("address_b", pathB);
+        Bus::get().attachByteStream("linkA", &a);
+        Bus::get().attachByteStream("linkB", &b);
+    }
+    ~DatagramPair() {
+        a.stop();
+        b.stop();
+        Bus::get().detach("linkA");
+        Bus::get().detach("linkB");
+    }
+    std::size_t sizeAtA() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return atA.size();
+    }
+    std::size_t sizeAtB() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return atB.size();
+    }
+
+    std::mutex mutex;
+    std::vector<Bytes> atA;
+    std::vector<Bytes> atB;
+    std::vector<std::uint64_t> atATick;
+    std::vector<std::uint64_t> atBTick;
+    std::string pathA;
+    std::string pathB;
+    Wsts::LinkDatagram a;
+    Wsts::LinkDatagram b;
+};
+}  // namespace
+
+TEST_F(CoreTest, DatagramLinkCarriesMessagesBothWaysWholeAndInOrder) {
+    DatagramPair pair;
+    EXPECT_FALSE(pair.a.set("role", "sideways"));
+    pair.a.start();
+    pair.b.start();
+    // Each end binds a socket file of its own: neither is the other's
+    EXPECT_NE(pair.pathA, pair.pathB);
+    EXPECT_EQ(Wsts::LinkRegistry::started(), 2u) << "a datagram link is started...";
+    EXPECT_EQ(Wsts::LinkRegistry::connected(), 0u) << "...and has no connection to be up";
+    EXPECT_EQ(Wsts::LinkByteStream::started(), 2u) << "the bridge's counters cover every kind";
+
+    EXPECT_EQ(Bus::get().byteStreamSend("linkA", text("to b")), 0);
+    EXPECT_EQ(Bus::get().byteStreamSend("linkA", text("again")), 0);
+    EXPECT_EQ(Bus::get().byteStreamSend("linkB", text("to a")), 0);
+    ASSERT_TRUE(eventually([&]() { return pair.sizeAtB() == 2 && pair.sizeAtA() == 1; }));
+    {
+        // One message is one datagram: it arrives whole, in the order it was sent
+        std::lock_guard<std::mutex> lock(pair.mutex);
+        EXPECT_EQ(pair.atB[0], text("to b"));
+        EXPECT_EQ(pair.atB[1], text("again"));
+        EXPECT_EQ(pair.atA[0], text("to a"));
+    }
+    EXPECT_EQ(pair.a.dropped(), 0u);
+    EXPECT_EQ(pair.a.sent(), 2u);
+    EXPECT_EQ(pair.a.received(), 1u);
+    EXPECT_EQ(pair.b.sent(), 1u);
+    EXPECT_EQ(pair.b.received(), 2u);
+
+    // The bridge counts it among the links, reports its traffic, and knows it by name
+    JsonObj traffic;
+    Wsts::LinkRegistry::traffic(traffic);
+    EXPECT_EQ(traffic.num("link.dgram.sent", -1), 1) << "the end started last is what the registry reports";
+    EXPECT_EQ(traffic.num("link.dgram.received", -1), 2) << traffic.dump();
+    EXPECT_EQ(Wsts::LinkRegistry::find("dgram"), &pair.a);
+    EXPECT_EQ(Wsts::LinkRegistry::find("nothing"), nullptr);
+
+    // A fault on one endpoint cuts that direction, as on a stream link
+    ASSERT_TRUE(run(R"({"op": "fault_set", "endpoint": "linkA", "kind": "drop", "dir": "to_device"})"));
+    EXPECT_EQ(Bus::get().byteStreamSend("linkA", text("dropped")), 0);
+    EXPECT_EQ(Bus::get().byteStreamSend("linkB", text("passes")), 0);
+    ASSERT_TRUE(eventually([&]() { return pair.sizeAtA() == 2; }));
+    EXPECT_EQ(pair.sizeAtB(), 2u) << "only what the faulted endpoint sends is cut";
+}
+
+TEST_F(CoreTest, DatagramLinkWithoutAPeerDropsInRealTime) {
+    DatagramPair pair;
+    pair.a.start();
+    // Nothing is bound at the peer's path: a datagram goes nowhere, and is not retried
+    EXPECT_EQ(Bus::get().byteStreamSend("linkA", text("into the void")), 0);
+    EXPECT_EQ(pair.a.dropped(), 1u);
+    EXPECT_EQ(pair.a.sent(), 0u);
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_EQ(pair.a.dropped(), 1u) << "no retry";
+
+    // The peer appears: the next message goes
+    pair.b.start();
+    EXPECT_EQ(Bus::get().byteStreamSend("linkA", text("to b")), 0);
+    ASSERT_TRUE(eventually([&]() { return pair.sizeAtB() == 1; }));
+    EXPECT_EQ(pair.a.dropped(), 1u) << "the one dropped earlier is not resurrected";
+    EXPECT_EQ(pair.a.sent(), 1u);
+}
+
+TEST_F(CoreTest, DatagramLinkWithoutAnAddressStaysDown) {
+    ::unsetenv("WSTS_LINK_DIR");
+    Wsts::LinkDatagram link;
+    ASSERT_TRUE(link.set("link", "alone"));
+    link.start();
+    EXPECT_EQ(Wsts::LinkRegistry::started(), 0u);
+    EXPECT_FALSE(link.isUp());
+}
+
+// The role picks the socket file: end a binds <link>.a.sock, end b <link>.b.sock, and each
+// sends to the other's. Both ends derive it from WSTS_LINK_DIR, as the generated set-up
+// relies on.
+TEST_F(CoreTest, DatagramLinkTakesItsSocketFilesFromTheLinkDirAndItsRole) {
+    const std::string directory = tempFile("dgramdir");
+    (void)::mkdir(directory.c_str(), 0700);
+    ::setenv("WSTS_LINK_DIR", directory.c_str(), 1);
+    DatagramPair pair;
+    ASSERT_TRUE(pair.a.set("address", "") && pair.a.set("address_b", ""));
+    ASSERT_TRUE(pair.b.set("address", "") && pair.b.set("address_b", ""));
+    pair.a.set("link", "hubLink");
+    pair.b.set("link", "hubLink");
+    pair.a.start();
+    pair.b.start();
+    // The two files are told apart by the role, and neither end unlinked the other's
+    EXPECT_EQ(::access((directory + "/hubLink.a.sock").c_str(), F_OK), 0) << "end a (listen) binds .a.sock";
+    EXPECT_EQ(::access((directory + "/hubLink.b.sock").c_str(), F_OK), 0) << "end b (connect) binds .b.sock";
+    EXPECT_EQ(Bus::get().byteStreamSend("linkA", text("a to b")), 0);
+    EXPECT_EQ(Bus::get().byteStreamSend("linkB", text("b to a")), 0);
+    ASSERT_TRUE(eventually([&]() { return pair.sizeAtA() == 1 && pair.sizeAtB() == 1; }));
+    pair.a.stop();
+    pair.b.stop();
+    (void)::unlink((directory + "/hubLink.a.sock").c_str());
+    (void)::unlink((directory + "/hubLink.b.sock").c_str());
+    (void)::rmdir(directory.c_str());
+    ::unsetenv("WSTS_LINK_DIR");
+}
+
+TEST_F(CoreTest, InLockstepADatagramSentBeforeThePeerExistsIsHeldThenDelivered) {
+    Control& control = Control::get();
+    control.setLockstep(true);
+    Ticker ticker(10);  // 100 ms ticks
+    DatagramPair pair;
+    pair.a.start();
+    // The peer has bound no socket yet: in lockstep that must not decide what it gets
+    EXPECT_EQ(Bus::get().byteStreamSend("linkA", text("early")), 0);
+    EXPECT_EQ(pair.a.dropped(), 0u);
+    EXPECT_EQ(pair.a.sent(), 1u) << "held, and counted as sent";
+    EXPECT_EQ(pair.sizeAtB(), 0u);
+    pair.b.start();
+    ASSERT_TRUE(eventually([&]() { return pair.b.received() == 1; })) << "it went when the peer bound its socket";
+    EXPECT_EQ(pair.sizeAtB(), 0u) << "held until a tick";
+
+    ASSERT_TRUE(control.grant(2));
+    ASSERT_TRUE(control.awaitGranted(std::chrono::milliseconds(2000)));
+    ASSERT_EQ(pair.sizeAtB(), 1u) << "sent at 0 ms, delivered at the first tick after";
+    {
+        std::lock_guard<std::mutex> lock(pair.mutex);
+        EXPECT_EQ(pair.atB[0], text("early"));
+        EXPECT_EQ(pair.atBTick[0], 1u);
+    }
+
+    // What the peer sends comes back the same way: held until the receiving end's next tick
+    EXPECT_EQ(Bus::get().byteStreamSend("linkB", text("reply")), 0);
+    ASSERT_TRUE(eventually([&]() { return pair.a.received() == 1; }));
+    EXPECT_EQ(pair.sizeAtA(), 0u) << "no tick, no delivery";
+    pair.a.expect(1);  // what the conductor says will have arrived
+    ASSERT_TRUE(control.grant(1));
+    ASSERT_TRUE(control.awaitGranted(std::chrono::milliseconds(2000)));
+    ASSERT_EQ(pair.sizeAtA(), 1u);
+    {
+        std::lock_guard<std::mutex> lock(pair.mutex);
+        EXPECT_EQ(pair.atA[0], text("reply"));
+        EXPECT_EQ(pair.atATick[0], 3u);
+    }
+
+    // The end of lockstep delivers what is held, as for a stream link
+    EXPECT_EQ(Bus::get().byteStreamSend("linkB", text("held")), 0);
+    ASSERT_TRUE(eventually([&]() { return pair.a.received() == 2; }));
+    EXPECT_EQ(pair.sizeAtA(), 1u);
+    control.setLockstep(false);
+    EXPECT_EQ(pair.sizeAtA(), 2u);
+    control.setStepped(false);
+}
+
+TEST_F(CoreTest, InLockstepADatagramKeepsTheOrderItsMessagesWereSentIn) {
+    Control& control = Control::get();
+    control.setLockstep(true);
+    Ticker ticker(10);
+    DatagramPair pair;
+    pair.a.start();
+    // All three are held (the peer has not bound its socket yet) and must arrive in order
+    for (const char* message : {"one", "two", "three"}) {
+        EXPECT_EQ(Bus::get().byteStreamSend("linkA", text(message)), 0);
+    }
+    EXPECT_EQ(pair.a.dropped(), 0u);
+    pair.b.start();
+    ASSERT_TRUE(eventually([&]() { return pair.b.received() == 3; }));
+    EXPECT_EQ(pair.sizeAtB(), 0u);
+    pair.b.expect(3);
+    ASSERT_TRUE(control.grant(1));
+    ASSERT_TRUE(control.awaitGranted(std::chrono::milliseconds(2000)));
+    ASSERT_EQ(pair.sizeAtB(), 3u);
+    {
+        std::lock_guard<std::mutex> lock(pair.mutex);
+        EXPECT_EQ(pair.atB[0], text("one"));
+        EXPECT_EQ(pair.atB[1], text("two"));
+        EXPECT_EQ(pair.atB[2], text("three"));
+    }
+    control.setStepped(false);
 }
 
 // ----------------------------------------------------------------------

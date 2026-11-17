@@ -218,6 +218,7 @@ class LinkEnd:
     instance: str  # the byte stream driver instance the link ends at
     role: str  # listen or connect
     peer: str  # the far end, "<element>.<instance>", for the report
+    kind: str = "bytestream"  # bytestream or datagram: the transport of the link
 
 
 @dataclass

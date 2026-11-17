@@ -47,6 +47,7 @@ def test_the_system_schema_has_the_keys_the_parser_accepts():
     assert keys(top) == system.SYSTEM_KEYS
     assert keys(top["properties"]["elements"]["additionalProperties"]["oneOf"][1]) == system.ELEMENT_KEYS
     assert keys(top["properties"]["links"]["items"]) == system.LINK_KEYS
+    assert set(top["properties"]["links"]["items"]["properties"]["kind"]["enum"]) == system.LINK_KINDS
 
 
 @pytest.mark.parametrize("file, name", [("cdh.yaml", "wsts"), ("payload.yaml", "wsts"), ("wsts-system.yaml", "wsts-system")])

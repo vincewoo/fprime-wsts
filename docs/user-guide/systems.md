@@ -169,9 +169,11 @@ D=my-mission-sim/wsts/Mission; pytest tests -p fprime_wsts.pytest_plugin --wsts-
   real UART or TCP stream does not guarantee; missing framing does not show up here.
 - **No link timing.** Add latency with a `delay` fault. Bytes sent while the peer is not
   connected are lost. In lockstep a link's bytes arrive at the receiver's next tick.
+- **A datagram link** (`kind: datagram`) keeps message boundaries by construction: one
+  message is one datagram, and a send while the peer has not started goes nowhere (in
+  lockstep it waits for it). It has no connection, so it never shows as "up".
 - **Build both elements from the same checkout state.** The GDS refuses to merge
   dictionaries whose project versions differ (`-dirty` on one of them).
-- **Not built yet:** GPIO links between computers, socket connection semantics, one
-  recording for the whole system.
+- **Not built yet:** GPIO links between computers, one recording for the whole system.
 
 The full description is in the reference's [Systems](../systems.md) page.
