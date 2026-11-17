@@ -78,6 +78,7 @@ class Plan:
     topology: fpp.Topology
     substitutions: List[PlannedSubstitution] = field(default_factory=list)
     kept_hardware: List[str] = field(default_factory=list)
+    ground_servers: List[str] = field(default_factory=list)  # kept ground link drivers that listen (Drv.TcpServer)
     warnings: List[str] = field(default_factory=list)
     fidelity_notes: List[str] = field(default_factory=list)
     setup_base_id: int = 0
@@ -415,6 +416,11 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
                     f"is mapped to it. Add a 'substitute' entry to the manifest. Surrogates whose ports fit: {candidates}."
                 )
         if chosen is None:
+            if original.name == "Drv.TcpServer":
+                # Imported here: the survey imports this module
+                from .survey import bytestream_role
+                if bytestream_role(model, topology, name) == "ground":
+                    plan.ground_servers.append(name)
             if restriction:
                 plan.kept_hardware.append(name)
                 plan.warnings.append(f"{name} ({original.name}) is kept by the manifest although it is restricted: {restriction}")
@@ -1714,6 +1720,10 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
                  **({"time_source": time_source} if time_source else {})},
         "substitutions": substitutions,
         "kept_hardware_instances": plan.kept_hardware,
+        # Only when there is one, so that reports of other deployments are unchanged: the flight
+        # side listens, so the GDS has to connect to it (`fprime-wsts run`)
+        **({"ground_link": {"instance": plan.ground_servers[0], "component": "Drv.TcpServer"}}
+           if plan.ground_servers else {}),
         "models": [
             {"name": m.name, "class": m.cls, "endpoint": m.endpoint, "kind": m.kind, "address": m.address}
             for m in manifest.models
