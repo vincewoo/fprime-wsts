@@ -31,7 +31,7 @@ Each fix belongs in one of three places:
 | `… has no Top directory` | `deployment` is not the deployment's directory | Fix `deployment:` (relative to the flight project) and `project:` (relative to the manifest) |
 | `manifest names instance 'x', which is not in topology` | Typo, or a name from another deployment | Qualified names (`SensorLink.uart`) always work |
 | `instance name 'x' is ambiguous` | Two subtopologies have one | Use the qualified name |
-| `instance X (C) cannot build on Linux […] and no surrogate is mapped` | A platform-restricted component outside the catalog | `substitute` with one of the surrogates the message lists, or a project surrogate |
+| `instance X (C) cannot build on Linux […] and no surrogate is mapped` | A platform-restricted component outside the catalog | `substitute` with one of the surrogates the message lists, or a project surrogate; or, for flight logic that only a test harness kept off the host, `cmake.build_on_host: [<module dir>]` |
 | `S cannot replace X (C): connected ports it does not serve` | The surrogate's ports differ | `ports: {flightName: surrogateName}`, an empty value to drop a connection, or a mirror surrogate |
 | `Wsts.SimRegister cannot stand in for X: …` | A command or other port on the register interface | `ports: {<port>: }` to drop it, or a mirror surrogate |
 | `surrogate component … was not found` | A project surrogate the analysis cannot see | Is it in the simulation project, named in `catalogs:` or `substitute`, and added by `library.cmake`? FPP names are `Module.Component` |

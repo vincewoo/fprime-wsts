@@ -64,6 +64,10 @@ class Surrogate:
     # False for a surrogate that talks to flight components over F Prime ports only: it
     # has no bus endpoint and no wstsBind()
     bind: bool = True
+    # True for a surrogate that serves register accesses through ports of its own shape (an
+    # analog-to-digital driver that returns a conversion, not a register value): its endpoint takes a
+    # register block (`kind: register`) all the same
+    register_endpoint: bool = False
 
     @property
     def cpp_name(self) -> str:
@@ -101,6 +105,15 @@ def _no_endpoint(value, what: str, catalog: bool = False) -> bool:
         raise WstsError(f"{what}: in a catalog, 'endpoint' can only be 'none' (the surrogate does not use the bus); "
                         "endpoint names are given per instance in the manifest")
     return False
+
+
+def _flag(value, what: str) -> bool:
+    """A yes or no in a manifest or catalog: absent is no"""
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise WstsError(f"{what} must be true or false, not {value!r}")
+    return value
 
 
 def _attributes(entry: dict, what: str) -> Dict[str, str]:
@@ -155,6 +168,7 @@ def load_catalog(path: Path) -> List[Surrogate]:
                            for k, v in (entry.get("ports_for") or {}).items()},
                 attributes=_attributes(entry, str(path)),
                 bind=not _no_endpoint(entry.get("endpoint", ""), f"{path}: {entry['surrogate']}", catalog=True),
+                register_endpoint=_flag(entry.get("register_endpoint"), f"{path}: {entry['surrogate']}: register_endpoint"),
             )
         )
     return surrogates
@@ -175,6 +189,7 @@ class Substitution:
     ports: Optional[Dict[str, Optional[str]]] = None
     attributes: Dict[str, str] = field(default_factory=dict)
     no_endpoint: bool = False  # `endpoint: none`
+    register_endpoint: bool = False  # the endpoint takes a register block although the ports are not register-shaped
 
 
 @dataclass
@@ -287,6 +302,9 @@ class Manifest:
     setup: SetupSpec = field(default_factory=SetupSpec)
     extra_subdirectories: List[str] = field(default_factory=list)
     exclude_subdirectories: List[str] = field(default_factory=list)
+    # Modules (directories relative to the flight project) that restrict_platforms() keeps off a
+    # Linux host and that the simulated build adds anyway
+    build_on_host: List[str] = field(default_factory=list)
     extra_depends: List[str] = field(default_factory=list)
     cmake_cache: Dict[str, List[str]] = field(default_factory=dict)  # name -> values (one, or a CMake list)
     # Module directories read with BUILD_TESTING set (their stub variant), relative to the flight project
@@ -370,10 +388,10 @@ RUN_KEYS = {"env", "models"}
 FILES_KEYS = {"sandbox"}
 MAX_CLOCK_HZ = 100000.0  # Wsts::CycleClock::MAX_HZ
 ENV_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
-SUBSTITUTE_KEYS = {"instance", "component", "with", "endpoint", "options", "ports", *ATTRIBUTE_KEYS}
+SUBSTITUTE_KEYS = {"instance", "component", "with", "endpoint", "options", "ports", "register_endpoint", *ATTRIBUTE_KEYS}
 SIMULATOR_KEYS = {"instances", "topologies", "connections", "headers"}
 DEVICE_KEYS = {"instance", "endpoint", "options"}
-CMAKE_KEYS = {"extra_subdirectories", "exclude_subdirectories", "depends", "cache", "include", "include_early",
+CMAKE_KEYS = {"extra_subdirectories", "exclude_subdirectories", "build_on_host", "depends", "cache", "include", "include_early",
               "stub_variants", "cxx_flags", "bits"}
 CONNECTION_END = r"([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+)\s*(?:\[\s*(\d+)\s*\])?"
 CACHE_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
@@ -524,6 +542,7 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
                 ports=_port_map(entry["ports"], f"{where}: substitute") if "ports" in entry else None,
                 attributes=_attributes(entry, where),
                 no_endpoint=_no_endpoint(entry.get("endpoint"), where),
+                register_endpoint=_flag(entry.get("register_endpoint"), f"{where}: substitute: register_endpoint"),
             )
         )
 
@@ -670,6 +689,10 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
         manifest.cmake_cache[str(name)] = rendered
     manifest.extra_subdirectories = [str(d) for d in cmake.get("extra_subdirectories", [])]
     manifest.exclude_subdirectories = [str(d) for d in cmake.get("exclude_subdirectories", [])]
+    hosted = cmake.get("build_on_host") or []
+    if not isinstance(hosted, list) or not all(isinstance(d, str) and d.strip() for d in hosted):
+        raise WstsError(f"{where}: cmake.build_on_host must be a list of module directories, relative to the flight project")
+    manifest.build_on_host = [d.strip() for d in hosted]
     manifest.extra_depends = [str(d) for d in cmake.get("depends", [])]
     manifest.cmake_include = [str(f) for f in cmake.get("include") or []]
     stubs = cmake.get("stub_variants") or []

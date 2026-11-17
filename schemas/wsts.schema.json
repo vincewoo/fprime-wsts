@@ -52,6 +52,10 @@
             "type": "string",
             "description": "Passed to the surrogate's wstsBind()"
           },
+          "register_endpoint": {
+            "type": "boolean",
+            "description": "The surrogate serves registers through ports of its own shape (a driver that returns a conversion, not a register value): its endpoint takes a register block (kind: register)"
+          },
           "ports": {
             "type": "object",
             "additionalProperties": {
@@ -374,6 +378,13 @@
             "type": "string"
           },
           "description": "Modules to leave out, wherever they are added"
+        },
+        "build_on_host": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Modules that restrict_platforms() keeps off a Linux host, built anyway (directories relative to the flight project)"
         },
         "depends": {
           "type": "array",

@@ -10,6 +10,9 @@
 #   options_for  per-replaced-component options
 #   compat       C++ made visible to hand-written topology code, for declarations that
 #                lived in the replaced driver's header outside its class
+#   endpoint     only `none`: the surrogate does not use the bus
+#   register_endpoint  true: the surrogate reads registers through ports of its own shape, and
+#                its endpoint takes a `kind: register` model
 surrogates:
   - surrogate: Wsts.SimByteStream
     replaces:

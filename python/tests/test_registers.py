@@ -359,3 +359,53 @@ def test_a_mirror_keeps_the_flight_dictionary(tmp_path):
     assert not [name for names in removed.values() for name in names if ".fpgaRegs." in name]
     assert "Wsts::Bus::get().attachRegister(\"fpgaRegs\", &model_fpga);" in \
         (tmp_path / "out/Payload/Top/WstsSetup.cpp").read_text()
+
+
+# ----------------------------------------------------------------------
+# A surrogate that reads registers through ports of its own shape
+# ----------------------------------------------------------------------
+
+I2C_AS_REGISTERS = {"instance": "i2cBus", "with": "Wsts.SimI2c", "register_endpoint": True}
+
+
+def test_register_endpoint_is_read_from_a_substitute_entry_and_a_catalog_entry(tmp_path):
+    manifest = parse_manifest({"deployment": "Payload", "substitute": [I2C_AS_REGISTERS]})
+    assert manifest.substitutions[0].register_endpoint is True
+    assert parse_manifest({"deployment": "Payload", "substitute": SUBSTITUTE}).substitutions[0].register_endpoint is False
+    with pytest.raises(WstsError, match="register_endpoint must be true or false, not 'yes please'"):
+        parse_manifest({"deployment": "Payload", "substitute": [{**I2C_AS_REGISTERS, "register_endpoint": "yes please"}]})
+    catalog = tmp_path / "catalog.yaml"
+    catalog.write_text("surrogates:\n  - surrogate: Proj.SimAdc\n    replaces: [Proj.Adc]\n    register_endpoint: true\n"
+                       "  - surrogate: Proj.SimOther\n    replaces: [Proj.Other]\n")
+    from fprime_wsts.manifest import load_catalog
+    adc, other = load_catalog(catalog)
+    assert adc.register_endpoint is True and other.register_endpoint is False
+
+
+@needs_fpp
+def test_a_surrogate_with_ports_of_its_own_shape_takes_a_register_model(tmp_path):
+    """Wsts.SimI2c has no register-shaped port, which the error below says. With the flag the same
+    model is attached to its endpoint, as for a register interface component"""
+    model = {**FPGA_MODEL, "endpoint": "i2cBus"}
+    with pytest.raises(WstsError, match=r"(?s)that is not a surrogate for a register interface component.*"
+                                        r"'register_endpoint: true'.*Register endpoints: fpgaRegs\."):
+        generate(MISSION, payload(models=[model]), tmp_path / "refused")
+
+    result = generate(MISSION, payload(substitute=[*SUBSTITUTE, I2C_AS_REGISTERS], models=[model]), tmp_path / "accepted")
+    blocks = {block["instance"]: block for block in result.report["register_blocks"]}
+    block = blocks["Payload.i2cBus"]
+    assert block["model"] == "fpga" and block["written_for_the_component"] is False and block["ports"] == {}
+    assert block["interrupt_to"] == [] and "Payload.imu" in block["drivers"]
+    assert "Payload.fpgaRegs" in blocks, "the real register interface is reported as before"
+    setup = (tmp_path / "accepted/Payload/Top/WstsSetup.cpp").read_text()
+    assert 'Wsts::Bus::get().attachRegister("i2cBus", &model_fpga);' in setup
+    assert any("reads its values from the register endpoint 'i2cBus' through ports of its own shape" in note
+               for note in result.report["fidelity_notes"])
+    assert "## Register blocks" in (tmp_path / "accepted" / "wsts-report.md").read_text()
+
+
+@needs_fpp
+def test_a_register_endpoint_needs_an_endpoint(tmp_path):
+    with pytest.raises(WstsError, match=r"substituted with 'register_endpoint: true' and 'endpoint: none'"):
+        generate(MISSION, payload(substitute=[*SUBSTITUTE, {**I2C_AS_REGISTERS, "endpoint": "none"}], models=[]),
+                 tmp_path / "out")

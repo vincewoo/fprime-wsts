@@ -48,6 +48,11 @@ if (COMMAND _add_fprime_subdirectory)
     message(FATAL_ERROR "add_fprime_subdirectory() is already overridden: fprime-wsts cannot redirect modules")
 endif()
 function(add_fprime_subdirectory FP_SOURCE_DIR)
+    # F Prime clears the variables that module lists are set in (old style) from the scope of the module
+    # that adds a directory, with PARENT_SCOPE. This function is one scope more, so it clears them there too
+    foreach (WSTS_VARIABLE IN ITEMS SOURCE_FILES MOD_DEPS UT_SOURCE_FILES UT_MOD_DEPS EXECUTABLE_NAME)
+        set(${WSTS_VARIABLE} PARENT_SCOPE)
+    endforeach()
     get_filename_component(WSTS_REQUESTED "${FP_SOURCE_DIR}" REALPATH)
     if (NOT WSTS_ADDING_DEFERRED)
         foreach (WSTS_MODULE IN LISTS WSTS_DEFERRED_MODULES)
