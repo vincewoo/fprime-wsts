@@ -49,6 +49,16 @@ def test_manifest_errors_say_what_is_wrong(data, message):
         parse_manifest(data)
 
 
+def test_bits_of_the_executable():
+    assert parse_manifest({"deployment": "D"}).bits == 64
+    assert parse_manifest({"deployment": "D", "cmake": {"bits": 32}}).bits == 32
+    assert parse_manifest({"deployment": "D", "cmake": {"bits": "32"}}).bits == 32, "a string, as other numbers"
+    assert parse_manifest({"deployment": "D", "cmake": {"bits": 64}}).bits == 64
+    for bad in (16, 8, 0, "wide"):
+        with pytest.raises(WstsError, match="cmake.bits"):
+            parse_manifest({"deployment": "D", "cmake": {"bits": bad}})
+
+
 def test_default_catalog_covers_the_standard_drivers():
     catalog = {s.name: s for s in load_catalog(DEFAULT_CATALOG)}
     replaced = {component for s in catalog.values() for component in s.replaces}

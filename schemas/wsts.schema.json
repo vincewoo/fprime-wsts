@@ -434,6 +434,25 @@
             }
           ],
           "description": "Flags of the host C++ compiler: a list for every module, or {<module directory>: [flags]}"
+        },
+        "bits": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "enum": [
+                32,
+                64
+              ]
+            },
+            {
+              "type": "string",
+              "enum": [
+                "32",
+                "64"
+              ]
+            }
+          ],
+          "description": "Width of the simulated deployment's executable: 32 (x86 -m32) or 64; default 64"
         }
       },
       "additionalProperties": false,

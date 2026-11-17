@@ -20,3 +20,8 @@ wsts-host.md
 /site/
 # Seeds the framework's test library writes where unit tests run
 seed-history
+# Removing ADW and command code settings
+.agents/
+.commandcode/
+specs/
+.adw/

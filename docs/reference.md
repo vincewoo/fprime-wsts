@@ -146,6 +146,7 @@ cmake:
   include_early: [options.cmake]     # CMake included before the framework and libraries are read
   stub_variants: [Components/Imager] # modules read with BUILD_TESTING set: their stub variant (see "Bridging the host")
   cxx_flags: ["-include cstring"]    # flags of the host C++ compiler; or {<module directory>: [flags]}
+  bits: 32                           # 32-bit executable (x86 -m32); default 64
 libraries:
   keep: [...]                        # flight libraries to build although nothing in the model uses them
   drop: [...]
@@ -473,6 +474,14 @@ Recipes and reasons:
 - **`cmake.cxx_flags`** is a list of flags for every C++ source of the build, or a mapping
   from a module directory to its flags (`"*"` for every module). One entry is one flag
   with its argument. Report: `cxx_flags`.
+- **`cmake.bits`** builds the simulated deployment as a 32-bit executable (x86 `-m32`).
+  The generated root `CMakeLists.txt` appends `-m32` to `CMAKE_C_FLAGS`,
+  `CMAKE_CXX_FLAGS` and `CMAKE_EXE_LINKER_FLAGS` after `project()`, not through
+  `cmake.cache`: `project()` has cached those variables already. Absent or 64, none of the
+  lines are written. `check-host` compiles a trivial program with the host compiler,
+  `-m32` and `cmake.cxx_flags`; when that fails it lists a missing 32-bit runtime
+  (`gcc-multilib`/`g++-multilib` on Debian/Ubuntu). Report: `host_requirements.bits`, only
+  when it is 32.
 - **`BUILD_TESTING` for the whole build** (`cmake.cache`, the flight root `CMakeLists.txt`,
   the flight `default_cmake_options`) is a warning that says what it turns on.
 - **`host.ignore`** names what `check-host` should not report.
@@ -480,7 +489,8 @@ Recipes and reasons:
   text alone, so that it is the same on every machine: `modules`, `system_headers:
   {<header>: [{module, file, line, condition?}]}`, `libraries`, `packages: {<name>:
   {required, components, needed_by}}`, `sdk_paths`, `search` (include and link directories
-  from the simulation's CMake files, `cxx_flags`), `sanitizers`, `flight_toolchain`,
+  from the simulation's CMake files, `cxx_flags`), `sanitizers`, `bits` (when the manifest
+  asks for 32), `flight_toolchain`,
   `flight_compiler`, `ignore`. What a machine answers is in `wsts-host.json` beside the
   report (`compiler`, `flight_compiler`, `missing: [{kind, name, needed_by, remedies,
   hint?}]`, `notes`, `warnings`, `ok`); that file is not compared by `--check` and is not
