@@ -2155,6 +2155,9 @@ def render_report(report: dict) -> str:
         lines.append("- Files of an SDK: " + (", ".join(f"`{d['entry']}` (`{d['module']}`)" for d in host["sdk_paths"]) or "none"))
         if host["sanitizers"]:
             lines.append("- Sanitizer runtime for: " + ", ".join(host["sanitizers"]))
+        if host.get("bits"):
+            lines.append(f"- A {host['bits']}-bit executable (`cmake.bits: {host['bits']}`): the generated "
+                         "`CMakeLists.txt` adds `-m32` to the C, C++ and link flags")
         for statement in host.get("not_read", []):
             lines.append(f"- Not read: `{statement}` adds directories through a variable, so every module directory "
                          "below that file is taken to be built")
@@ -3025,6 +3028,9 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
            f'include_directories(BEFORE "${{CMAKE_CURRENT_LIST_DIR}}/{STANDIN_DIR}")'] if standin_files else []),
         *(["# From `cmake.cxx_flags` in the manifest: for every C++ source of this build",
            f'string(APPEND CMAKE_CXX_FLAGS " {" ".join(global_flags)}")'] if global_flags else []),
+        *(['string(APPEND CMAKE_C_FLAGS " -m32")',
+           'string(APPEND CMAKE_CXX_FLAGS " -m32")',
+           'string(APPEND CMAKE_EXE_LINKER_FLAGS " -m32")'] if manifest.bits == 32 else []),
         *(["# From `cmake.cache` in the manifest. Set before F Prime reads the libraries; a value given on the",
            "# command line (-D) takes precedence.",
            *[f'set({name} "{";".join(values)}" CACHE STRING "Set by fprime-wsts from cmake.cache in the manifest")'
@@ -3255,6 +3261,7 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         "cache": manifest.cmake_cache,
         "sanitizers": sanitizers,
         "ignore": manifest.host_ignore,
+        **({"bits": manifest.bits} if manifest.bits != 64 else {}),
         **({"not_read": unread_roots} if unread_roots else {}),
     }
     # Headers of an operating system API the toolkit has a shim for, without the shim

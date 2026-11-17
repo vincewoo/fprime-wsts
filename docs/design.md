@@ -909,7 +909,10 @@ Replay is repeatable to tick granularity. It is not cycle-exact: see
    `Os::FileSystem` and `Os::Directory` — with every path of flight software mapped into a
    sandbox directory of the run, so that target paths (`/ram0`, `/tffs0`) and relative
    names work unchanged and stay inside it.
-4. 32-bit and big-endian build options; adapters to external dynamics simulators.
+4. 32-bit and big-endian build options; adapters to external dynamics simulators. The
+   32-bit half is *built* (`cmake.bits`, [reference.md](reference.md#bridging-the-host)):
+   `-m32` on the C, C++ and link flags, with a `check-host` probe for the 32-bit runtime.
+   Big-endian builds and the adapters remain.
 5. Systems: GPIO links, datagram and connection semantics for socket links, and merged
    recordings. (Lockstep time across elements and system scenarios are built: phase 4 of
    item 1.)

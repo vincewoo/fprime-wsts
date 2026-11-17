@@ -420,6 +420,24 @@ def _stand_in(needs: List[dict], stubs: Dict[str, bool]) -> str:
     return text
 
 
+def probe_bits(compiler: str, cxx_flags: list) -> Tuple[bool, str]:
+    """Whether `compiler` can build a 32-bit executable (x86: -m32) with the flags of the build"""
+    command = shlex.split(compiler) if compiler else []
+    if not command:
+        return False, "no C++ compiler to ask"
+    flags = [part for flag in cxx_flags for part in flag.split()]
+    with tempfile.TemporaryDirectory(prefix="wsts-bits-") as scratch:
+        source = Path(scratch, "probe.cpp")
+        source.write_text("int main() { return 0; }\n")
+        run = _run([*command, "-m32", *flags, str(source), "-o", os.devnull])
+        if run.returncode == 0:
+            return True, "compiled a C++ program with -m32"
+        lines = [line.strip() for line in run.stderr.splitlines() if line.strip()]
+        detail = next((line for line in lines if "error" in line.lower() or "cannot" in line.lower()),
+                      lines[-1] if lines else "the compiler did not accept -m32")
+        return False, detail
+
+
 def probe(requirements: dict, base: Path, env: Optional[Dict[str, str]] = None) -> dict:
     """Ask this host for everything `requirements` lists. `base` is the generated
     directory its paths are relative to. Returns {compiler, missing, notes, warnings, ok}."""
@@ -577,6 +595,17 @@ def probe(requirements: dict, base: Path, env: Optional[Dict[str, str]] = None) 
                 "cmake.stub_variants",
                 "turn the sanitizers off (cmake.cache: {ENABLE_SANITIZER_ADDRESS: OFF, ENABLE_SANITIZER_LEAK: OFF, "
                 "ENABLE_SANITIZER_UNDEFINED_BEHAVIOR: OFF})"]})
+    # ---- 32-bit build ----
+    bits = requirements.get("bits")
+    if bits and compiler:
+        ok, detail = probe_bits(" ".join(compiler), search.get("cxx_flags", []))
+        result["bits"] = {"bits": bits, "ok": ok, "detail": detail}
+        if not ok:
+            missing.append({"kind": "32-bit build", "name": "-m32", "needed_by": [], "detail": detail, "remedies": [
+                "install the 32-bit runtime of this compiler: gcc-multilib and g++-multilib on Debian/Ubuntu (a hint; "
+                "names differ between distributions)",
+                "or drop cmake.bits from the manifest: the deployment then builds as a 64-bit executable",
+            ]})
     result["ok"] = not missing
     return result
 
@@ -646,6 +675,9 @@ def render(result: dict, requirements: dict, base: Optional[Path] = None) -> str
                f"{len(requirements.get('libraries', {}))} librar(ies), {len(requirements.get('packages', {}))} package(s), "
                f"{len(requirements.get('sdk_paths', []))} SDK file(s)")
     lines.append(f"Checked: {counted} that {len(requirements.get('modules', []))} module(s) of the simulated build take from the host")
+    if result.get("bits"):
+        bits = result["bits"]
+        lines.append(f"{bits['bits']}-bit build (-m32): " + ("yes" if bits["ok"] else f"no: {bits['detail']}"))
     if result["missing"]:
         lines += ["", f"Missing on this host ({len(result['missing'])}):"]
     for item in result["missing"]:
