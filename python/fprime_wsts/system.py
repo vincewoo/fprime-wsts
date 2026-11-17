@@ -36,7 +36,7 @@ from typing import Dict, List, Optional, Tuple
 from . import fpp
 from .fpp import WstsError
 from .generate import ID_BLOCK, Result, generate, symlink_notice
-from .manifest import LinkEnd, Manifest, _int, load_manifest, read_yaml, unknown_keys
+from .manifest import LinkEnd, Manifest, id_window, load_manifest, read_yaml, unknown_keys
 
 SYSTEM_FILE = "wsts-system.json"
 SYSTEM_KEYS = {"system", "ground", "elements", "links", "output"}
@@ -142,13 +142,7 @@ def parse_system(data: dict, path: Optional[Path] = None) -> SystemManifest:
         if entry.get("bridge") is not None:
             spec.bridge = str(entry["bridge"])
         if entry.get("ids") is not None:
-            ids = entry["ids"]
-            if not isinstance(ids, (list, tuple)) or len(ids) != 2:
-                raise WstsError(f"{where}: element '{name}': 'ids' must be [first, last]")
-            low, high = (_int(value, f"{where}: element '{name}' ids") for value in ids)
-            if low > high:
-                raise WstsError(f"{where}: element '{name}': 'ids' must be [first, last] with first <= last")
-            spec.ids = (low, high)
+            spec.ids = id_window(entry["ids"], f"{where}: element '{name}'")
         system.elements.append(spec)
     names = [e.name for e in system.elements]
     if system.ground not in names:
@@ -199,7 +193,8 @@ def _element_manifests(system: SystemManifest) -> Dict[str, Manifest]:
         manifest = load_manifest(element.manifest)
         manifest.system = system.name
         manifest.element = element.name
-        manifest.id_window = element.ids
+        # The system's window wins over the element manifest's own
+        manifest.id_window = element.ids or manifest.id_window
         # Every element has its own process, and so its own bridge
         bridge = element.bridge or manifest.bridge
         if bridge == "none" and element.bridge is None:

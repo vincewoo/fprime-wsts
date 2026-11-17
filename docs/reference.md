@@ -109,6 +109,11 @@ clocks:                          # rates of the simulation's own cycle sources
   - instance: SensorSim.simClock         # an instance of Wsts.SimCycle, added by `simulators`
     hz: 125                              # cycles per second of simulated time, up to 100000
 
+ids: [0x00000000, 0x0FFFFFFF]    # the IDs that reach this deployment, as flight software routes them (a
+                                 # Svc.CmdSplitter sends opcodes from one ID up to another computer): simulator
+                                 # instances outside it are an error. Optional; a system's `ids` for the
+                                 # element wins. The WSTS instances go inside it too
+
 control:                         # or `control: none`
   enabled: true
   base_id: 0x10030000            # default: first 0x1000 block above all flight IDs
@@ -335,7 +340,11 @@ What the generator checks, and what it does to keep flight as it is:
 - **IDs.** An added instance keeps the base ID in its definition. It must not overlap a
   flight instance, another added instance or the WSTS instances. The WSTS instances are
   placed above every ID in use, added instances included, unless `control.base_id` says
-  otherwise.
+  otherwise. When the manifest gives `ids: [first, last]` (the IDs that reach this
+  deployment), every added instance must lie inside it, and so must the WSTS instances. The
+  error names the instances outside the window and the highest flight ID. Flight software
+  may route by ID: a `Svc.CmdSplitter` sends the opcodes from one ID up to another
+  computer, so a command to an instance above that line is never answered.
 - **Health.** Ping ports are numbered by instance name over all instances the health
   pattern reaches, and flight code indexes its ping table by that number. When an added
   instance has ping ports, the patched topology lists the flight targets explicitly

@@ -643,6 +643,8 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
     if manifest.control_enabled:
         wsts_ids.append((prefix_of(topology) + CONTROL_INSTANCE, plan.control_base_id, plan.control_base_id + ID_BLOCK - 1))
     sims.check_ids(plan.sim, model, topology, wsts_ids)
+    flight_top = max((sims.id_range(model.instances[name]) or (0, 0))[1] for name in topology.instances)
+    sims.check_window(plan.sim, manifest.id_window, flight_top)
     component_of = {sub.instance.name: sub.surrogate.name for sub in plan.substitutions}
     renamed = {
         (sub.instance.name, surrogate_port): flight_port

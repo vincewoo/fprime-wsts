@@ -210,6 +210,30 @@ def check_ids(sim: SimulatorPlan, model: fpp.Model, topology: fpp.Topology, wsts
         others.append((added.name, "simulator instance", *span))
 
 
+def check_window(sim: SimulatorPlan, window: Optional[Tuple[int, int]], flight_top: int) -> None:
+    """Every added instance must lie inside the IDs that reach the deployment (`ids`).
+
+    Flight software routes a command, event or telemetry item by its ID (an F Prime
+    `Svc.CmdSplitter` sends the opcodes from one ID up to another computer), and one outside
+    the window never arrives: nothing says so, the command just is not answered."""
+    if window is None:
+        return
+    low, high = window
+    outside = []
+    for added in sim.added:
+        span = id_range(added.instance)
+        if span is not None and not (low <= span[0] and span[1] <= high):
+            outside.append(f"{added.name} ({span[0]:#x}..{span[1]:#x})")
+    if outside:
+        raise WstsError(
+            f"simulator instances outside the 'ids' window {low:#x}..{high:#x}, the IDs that reach this "
+            f"deployment: {', '.join(outside)}. A command or telemetry item of an instance outside it is "
+            f"routed elsewhere and gets no answer. The flight instances' highest ID is {flight_top:#x}: give "
+            "the simulator instances base ids inside the window above it, or widen 'ids' if the flight "
+            "software really routes more IDs here."
+        )
+
+
 class _Ends:
     """Resolves the ends of manifest connections against the flight topology plus the
     added instances"""

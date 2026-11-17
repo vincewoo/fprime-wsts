@@ -285,6 +285,33 @@ def test_id_collision_names_both_instances(project, tmp_path):
 
 
 @needs_fpp
+def test_simulator_instances_outside_the_ids_window_are_an_error(project, tmp_path):
+    """Cdh's flight IDs end below 0x18000000 and the simulator is at 0x18000000..: a window
+    that stops short of it says which instances are outside, and where flight's IDs end"""
+    with pytest.raises(WstsError) as error:
+        run(project, tmp_path / "out", ids=[0x00000000, 0x0FFFFFFF])
+    message = str(error.value)
+    assert "outside the 'ids' window 0x0..0xfffffff" in message
+    assert "SensorSim.sensorSim (0x18000000.." in message and "SensorSim.gyroSim" in message
+    assert "highest ID is 0x" in message and "routed elsewhere and gets no answer" in message
+
+
+@needs_fpp
+def test_a_window_around_every_instance_is_accepted(project, tmp_path):
+    result = run(project, tmp_path / "out", ids=[0x00000000, 0x1FFFFFFF])
+    assert result.report["simulators"]["instances"], "the simulators are still added"
+    # The WSTS instances go inside the window too
+    assert 0 <= result.report["control"]["control_base_id"] <= 0x1FFFFFFF
+
+
+@needs_fpp
+def test_the_window_is_optional(project, tmp_path):
+    # Without `ids` nothing is checked: a simulator may use any free ID, as before
+    result = run(project, tmp_path / "out")
+    assert result.report["simulators"]["instances"]
+
+
+@needs_fpp
 def test_id_collision_with_the_wsts_instances(project, tmp_path):
     with pytest.raises(WstsError, match=r"(?s)SensorSim.sensorSim.*WSTS instance Cdh.wstsControl.*control.base_id"):
         run(project, tmp_path / "out", control={"base_id": 0x17FFF000})

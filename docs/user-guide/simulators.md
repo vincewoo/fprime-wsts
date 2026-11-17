@@ -49,8 +49,9 @@ flight names out:
 
 ```fpp title="my-mission-sim/SensorSim/Top/SensorSim.fpp"
 module SensorSim {
-  instance sensorSim: SensorSim.SerialSensorSim base id 0x70000000 queue size 10
-  instance sensorPort: Wsts.BusByteStreamDevice base id 0x70002000
+  # IDs above the flight IDs and inside the share that reaches this deployment (`ids`)
+  instance sensorSim: SensorSim.SerialSensorSim base id 0x18000000 queue size 10
+  instance sensorPort: Wsts.BusByteStreamDevice base id 0x18002000
 
   topology Simulator {
     instance sensorSim
@@ -66,8 +67,12 @@ module SensorSim {
 }
 ```
 
-Give simulator instances a block of IDs that flight does not use and is unlikely to grow
-into. Flight IDs never move; a collision is an error.
+Give simulator instances a block of IDs that flight does not use, inside the share of IDs
+that reaches this deployment. Flight software may route by ID: a `Svc.CmdSplitter` sends every
+opcode from one ID up to another computer, so a command to a simulator above that line is
+never answered, and nothing says why. Put the instances just above the highest flight ID and
+say what the deployment's share is with `ids: [first, last]` in the manifest: `generate` stops
+at a simulator instance outside it. Flight IDs never move; a collision is an error.
 
 ### 3. The manifest entries
 
@@ -87,7 +92,8 @@ port; flight connections keep theirs. When all are taken, generation stops and n
 constant to raise (`ActiveRateGroupOutputPorts`), which the simulation can override for
 its own build (below).
 
-What the generator checks for you: IDs do not overlap, health ping numbering of flight
+What the generator checks for you: IDs do not overlap, simulator instances lie inside the
+`ids` window when the manifest gives one, health ping numbering of flight
 instances does not move (simulator instances are not pinged), and the command dispatcher
 has enough ports and opcode table entries.
 
@@ -98,8 +104,8 @@ multiple of the flight tick, gets a clock from the simulation: a `Wsts.SimCycle`
 rate group that the simulation defines.
 
 ```fpp
-instance simClock: Wsts.SimCycle base id 0x70004000
-instance fastGroup: Svc.PassiveRateGroup base id 0x70005000
+instance simClock: Wsts.SimCycle base id 0x18004000
+instance fastGroup: Svc.PassiveRateGroup base id 0x18005000
 
 topology Simulator {
   instance simClock
@@ -127,7 +133,7 @@ A simulator often needs a data file or a seed that the flight `main()` has no op
 Read it from the environment in phase code, with a fallback:
 
 ```fpp
-instance starSim: Sim.StarSim base id 0x70010000 {
+instance starSim: Sim.StarSim base id 0x18010000 {
   phase Fpp.ToCpp.Phases.configComponents """
   Sim::starSim.configure(std::getenv("SIM_STAR_CATALOGUE"));
   """
