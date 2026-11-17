@@ -86,7 +86,7 @@ elements:
 
 links:
   - name: hub
-    kind: bytestream                     # the default, and the only kind so far
+    kind: bytestream                     # the default; datagram is the connectionless kind
     a: cdh.hubDriver                     # <element>.<instance>
     b: payload.hubDriver
 ```
@@ -133,18 +133,23 @@ flowchart LR
 
 ### Links
 
-A link joins a byte stream driver instance of one element to one of another. Naming an
-instance in a link is enough to have it simulated:
+A link joins a driver instance of one element to one of another. `kind` says what it
+carries: `bytestream` (the default), a UART or socket connection, or `gpio`, a discrete wire
+between two pins. Naming an instance in a link is enough to have it simulated:
 
-- if the catalog or the element's manifest already replaces it (a UART driver, say), that
-  surrogate is used;
-- otherwise it is replaced by `Wsts.SimByteStream` (reported as chosen by `link`). This is
-  how the socket drivers are handled: they are not in the catalog, because a deployment's
-  ground link normally stays a real socket (`keep: [comDriver]`).
+- if the catalog or the element's manifest already replaces it (a UART or GPIO driver, say),
+  that surrogate is used;
+- otherwise a bytestream link is replaced by `Wsts.SimByteStream` and a gpio link by
+  `Wsts.SimGpio` (reported as chosen by `link`). This is how the socket drivers are
+  handled: they are not in the catalog, because a deployment's ground link normally stays a
+  real socket (`keep: [comDriver]`).
 
-A `Wsts::LinkByteStream` model is attached to the endpoint at each end. Whatever flight
-software sends on one side is delivered on the other. Because the link is a model behind
-the bus:
+A `Wsts::LinkByteStream` model is attached to the endpoint at each end of a bytestream
+link; a `Wsts::LinkGpio` model does the same for a gpio link. What flight software sends on
+one side is delivered on the other: bytes for a bytestream link, a level for a gpio link
+(what flight software at `a` writes arrives as an input level at `b`, where it fires the
+pin's interrupt as a device-driven edge would). A gpio link is one direction: the reverse is
+a second link with `a` and `b` swapped. Because the link is a model behind the bus:
 
 - **faults** on either endpoint act on the traffic (`drop`, `corrupt`, `delay`,
   `duplicate`, per direction);
@@ -156,10 +161,37 @@ the bus:
 
 An endpoint has either a device model or a link, not both.
 
-Links join byte streams only. A register block is not linked between elements: a register
-interface component is replaced inside its own element, and the model behind it lives
-there (in-process, or attached through that element's bridge). Two computers that share a
-dual-port memory or an FPGA need one external model attached to both elements' bridges.
+#### Datagram links
+
+`kind: datagram` puts a connectionless transport under the same endpoints: a
+`Wsts::LinkDatagram` model is attached instead, and there is no listen/connect handshake
+and no connection state. Each end binds a Unix datagram socket of its own,
+`<WSTS_LINK_DIR>/<link>.a.sock` at end `a` (the `a:` instance) and `<link>.b.sock` at end
+`b`, and sends to the other's with `sendto()`; `fprime-wsts run` sets `WSTS_LINK_DIR` for
+every element, as for stream links. Both files are created at start-up: nothing waits for
+the peer and nothing reconnects.
+
+- **One message is one datagram.** The length, the sending element's simulated time and
+  the bytes travel in a single `sendto()`; the receiver reads it whole, so there is no
+  `readFully` resynchronisation.
+- **A send with no peer's socket goes nowhere and is not retried.** In real time it counts
+  in the link's dropped messages, as on a cable with nothing at the far end.
+- **In lockstep it is held instead.** A send made before the peer has bound its socket
+  waits in the outbox and is flushed as soon as the socket appears, and what arrives waits
+  for the receiving element's next tick — exactly as for a stream link, so two lockstep
+  runs record the same bytes.
+- **It is never "up".** A datagram link counts in `links` and contributes
+  `link.<name>.sent` / `.received`, but `links_up` only counts links with a connection:
+  the system runner and `WstsSystem.links_up()` therefore wait for stream links only.
+
+Both ends may send, as with a stream link; `a`/`b` only decide which path is `.a.sock` and
+which is `.b.sock`. Faults and recording apply as on any byte stream endpoint.
+
+Links join byte streams, GPIO discretes and datagrams. A register block is not linked
+between elements: a register interface component is replaced inside its own element, and the
+model behind it lives there (in-process, or attached through that element's bridge). Two
+computers that share a dual-port memory or an FPGA need one external model attached to both
+elements' bridges.
 
 The surrogate accepts the set-up calls topology code makes on the socket drivers
 (`configure`, `configureSend`, `configureRecv`, `start`, `stop`, `join`), so that code
@@ -310,5 +342,3 @@ for the session; the `wsts_system` fixture is a `WstsSystem`, and fprime-gds's
   `delay` fault. Bytes sent while the peer is not connected are lost (in lockstep they wait
   for it). In lockstep what a link brings arrives at the receiver's next tick, a latency of
   up to one of its tick periods that the wire does not have.
-- **Not built yet:** GPIO links (discretes between computers), datagram semantics and
-  connection state for socket links.

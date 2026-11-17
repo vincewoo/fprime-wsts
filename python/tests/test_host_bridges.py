@@ -487,6 +487,31 @@ def test_compiler_flags_are_applied_by_the_generated_project(default, tmp_path):
         generate(MISSION, payload(cxx_flags={"lib/sensor-lib/SensorLib/Unit": ["-include cstring"]}), tmp_path / "out2")
 
 
+@needs_fpp
+def test_bits_add_m32_to_the_root_cmakelists(default, tmp_path):
+    """`cmake.bits: 32` writes the three string(APPEND ... -m32) lines; 64 or absent writes none"""
+    project_line = "project(PayloadSim VERSION 1.0.0 LANGUAGES C CXX)"
+    assert "-m32" not in root_of(default), "absent: exactly the output of main"
+    wide = generate(MISSION, payload(bits=64), tmp_path / "wide")
+    assert root_of(wide) == root_of(default), "64 is the default: byte for byte"
+    narrow = generate(MISSION, payload(bits=32), tmp_path / "narrow")
+    lines = root_of(narrow).splitlines()
+    flags = [line for line in lines if "-m32" in line]
+    assert flags == ['string(APPEND CMAKE_C_FLAGS " -m32")',
+                     'string(APPEND CMAKE_CXX_FLAGS " -m32")',
+                     'string(APPEND CMAKE_EXE_LINKER_FLAGS " -m32")']
+    assert all(lines.index(line) > lines.index(project_line) for line in flags), \
+        "after project(), which has cached the flags already"
+    assert not [line for line in lines if "-m32" in line and "CACHE" in line], "not through cmake.cache"
+    assert narrow.report["host_requirements"]["bits"] == 32
+    assert "bits" not in wide.report["host_requirements"] and "bits" not in default.report["host_requirements"]
+    assert "A 32-bit executable (`cmake.bits: 32`)" in (narrow.output / "wsts-report.md").read_text()
+    both = generate(MISSION, payload(bits=32, cxx_flags=["-include cstring"]), tmp_path / "both")
+    text = root_of(both)
+    assert 'string(APPEND CMAKE_CXX_FLAGS " -include cstring")' in text
+    assert 'string(APPEND CMAKE_CXX_FLAGS " -m32")' in text, "cmake.cxx_flags still applies on top"
+
+
 FLAGS_PROJECT = '''
 cmake_minimum_required(VERSION 3.16)
 project(Flags LANGUAGES C CXX)
@@ -805,6 +830,39 @@ def test_sanitizer_runtime_is_checked_only_when_enabled():
         assert item["name"] == "-fsanitize=address,undefined" and "cmake.stub_variants" in " ".join(item["remedies"])
     missing = hostcheck.probe({**base, "sanitizers": ["wsts-no-such-sanitizer"]}, Path.cwd())
     assert not missing["ok"] and missing["missing"][0]["kind"] == "sanitizer runtime"
+
+
+def test_probe_bits_uses_the_compiler_and_the_flags(monkeypatch):
+    seen = {}
+
+    def fake_run(command, *args, **kwargs):
+        seen["command"] = command
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(hostcheck, "_run", fake_run)
+    ok, detail = hostcheck.probe_bits("cc -std=c++17", ["-include cstring", "-fPIC"])
+    assert ok and "-m32" in detail
+    assert seen["command"][:3] == ["cc", "-std=c++17", "-m32"]
+    assert seen["command"][3:5] == ["-include", "cstring"] and "-fPIC" in seen["command"]
+    assert not hostcheck.probe_bits("", [])[0], "no compiler: not ok"
+
+
+@needs_compiler
+def test_host_check_asks_for_the_32bit_runtime():
+    base = {"modules": [], "system_headers": {}, "libraries": {}, "packages": {}, "sdk_paths": [], "ignore": []}
+    result = hostcheck.probe({**base, "bits": 32}, Path.cwd())
+    assert result["bits"]["bits"] == 32 and isinstance(result["bits"]["ok"], bool)
+    assert [item["kind"] for item in result["missing"]] in ([], ["32-bit build"]), \
+        "the answer is about -m32 and nothing else"
+    text = hostcheck.render(result, {**base, "bits": 32})
+    if result["bits"]["ok"]:
+        assert "32-bit build (-m32): yes" in text
+    else:
+        item = result["missing"][0]
+        assert item["name"] == "-m32" and "gcc-multilib" in " ".join(item["remedies"])
+        assert "32-bit build (-m32): no: " in text
+        assert hostcheck.summary(result)[0].startswith(
+            "this host lacks 1 thing(s) the build needs (32-bit build: -m32)")
 
 
 def test_flight_compiler_from_a_flight_build_directory(tmp_path):

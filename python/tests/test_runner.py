@@ -4,7 +4,9 @@ says the browser GUI can be reached. The GDS itself is never started here."""
 import json
 from pathlib import Path
 
-from fprime_wsts.runner import Simulation, gds_command
+import socket
+
+from fprime_wsts.runner import Simulation, _wait_until_listening, gds_command
 
 DICTIONARY = Path("/d/MissionDictionary.json")
 LOGS = Path("/l/gds")
@@ -19,6 +21,19 @@ def test_command_is_headless_by_default():
     assert command[command.index("--dictionary") + 1] == str(DICTIONARY)
     assert command[command.index("--ip-port") + 1] == "50000"
     assert command[command.index("--logs") + 1] == str(LOGS)
+
+
+def test_command_listens_unless_the_deployment_does():
+    command = gds_command("fprime-gds", DICTIONARY, 50000, LOGS)
+    assert "--ip-client" not in command and "--ip-address" not in command
+
+
+def test_command_connects_to_a_deployment_that_listens():
+    # a kept Drv.TcpServer ground link: the deployment listens on the port, the GDS is the client
+    command = gds_command("fprime-gds", DICTIONARY, 50000, LOGS, client=True)
+    assert "--ip-client" in command
+    assert command[command.index("--ip-address") + 1] == "127.0.0.1"
+    assert command[command.index("--ip-port") + 1] == "50000"
 
 
 def test_command_serves_the_browser_gui_on_its_own_port():
@@ -51,6 +66,30 @@ def test_gui_url_needs_a_gui(tmp_path):
     assert Simulation(tmp_path, gds=True).gds_gui_url is None
     assert Simulation(tmp_path, gds=True, gds_gui=5000).gds_gui_url == "http://127.0.0.1:5000/"
     assert Simulation(tmp_path, gds=True, gds_gui=8080, gds_gui_addr="0.0.0.0").gds_gui_url == "http://0.0.0.0:8080/"
+
+
+def test_gds_is_the_client_of_a_ground_link_that_listens(tmp_path):
+    make_deployment(tmp_path)
+    assert Simulation(tmp_path, gds=True).gds_is_client is False
+    (tmp_path / "wsts-report.json").write_text(json.dumps(
+        {"bridge": "tcp:50100", "ground_link": {"instance": "FcFlight.comDriver", "component": "Drv.TcpServer"}}))
+    assert Simulation(tmp_path, gds=True).gds_is_client is True
+
+
+def test_wait_until_listening_does_not_take_the_clients_place():
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+        assert _wait_until_listening(port, 0.5) is False  # bound, not listening yet
+        listener.listen(1)
+        assert _wait_until_listening(port, 2) is True
+        listener.settimeout(0.3)
+        try:
+            listener.accept()
+            accepted = True
+        except socket.timeout:
+            accepted = False
+        assert accepted is False, "the wait must not have connected to the listener"
 
 
 # ----------------------------------------------------------------------

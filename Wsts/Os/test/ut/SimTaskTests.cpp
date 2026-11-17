@@ -87,3 +87,67 @@ TEST(SimTask, InRealTimeTasksRunAsTheHostSchedulesThem) {
     EXPECT_EQ(s_order.size(), 6u);
     EXPECT_GT(s_mostAtOnce.load(), 1) << "six tasks of 5 ms each were not held apart";
 }
+
+// ----------------------------------------------------------------------
+// Os::Task::delay does not keep the turn
+// ----------------------------------------------------------------------
+
+namespace {
+
+std::atomic<bool> s_sleeping{false};
+std::atomic<bool> s_sleeperBack{false};
+std::atomic<bool> s_hadTurnAfter{false};
+
+void sleeper(void*) {
+    // A socket driver's reconnect loop: it polls with delay()
+    s_sleeping.store(true);
+    (void)Os::Task::delay(Fw::TimeInterval(0, 300000));  // 300 ms
+    s_hadTurnAfter.store(Activity::get().hasTurn());
+    s_sleeperBack.store(true);
+}
+
+}  // namespace
+
+TEST(SimTask, ASleepingTaskDoesNotKeepTheTurn) {
+    Activity::get().reset();
+    Activity::get().setExclusive(true);
+    Activity::get().holdTasks(false);
+    s_sleeping.store(false);
+    s_sleeperBack.store(false);
+    s_hadTurnAfter.store(false);
+    Os::Task task;
+    const Os::Task::Arguments arguments(Fw::String("sleeper"), sleeper, nullptr);
+    ASSERT_EQ(task.start(arguments), Os::Task::Status::OP_OK);
+    while (!s_sleeping.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));  // it is in delay() by now
+    ASSERT_FALSE(s_sleeperBack.load());
+    // The test's thread, a thread of the simulation like the tick source, takes the turn
+    // while the task sleeps: with the old delay it would wait the whole 300 ms
+    const auto before = std::chrono::steady_clock::now();
+    ASSERT_TRUE(Activity::get().enter());
+    const auto waited = std::chrono::steady_clock::now() - before;
+    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(waited).count(), 100);
+    EXPECT_FALSE(s_sleeperBack.load()) << "the turn was taken while the task was still asleep";
+    Activity::get().leave();
+    ASSERT_EQ(task.join(), Os::Task::Status::OP_OK);
+    EXPECT_TRUE(s_sleeperBack.load());
+    EXPECT_TRUE(s_hadTurnAfter.load()) << "the task has the turn again when delay() returns";
+    EXPECT_FALSE(Activity::get().hasTurn());
+    Activity::get().reset();
+}
+
+TEST(SimTask, InRealTimeDelayIsThePosixOne) {
+    Activity::get().reset();  // not one at a time
+    s_sleeping.store(false);
+    s_sleeperBack.store(false);
+    Os::Task task;
+    const Os::Task::Arguments arguments(Fw::String("sleeper"), sleeper, nullptr);
+    const auto before = std::chrono::steady_clock::now();
+    ASSERT_EQ(task.start(arguments), Os::Task::Status::OP_OK);
+    ASSERT_EQ(task.join(), Os::Task::Status::OP_OK);
+    const auto took = std::chrono::steady_clock::now() - before;
+    EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(took).count(), 290);
+    EXPECT_TRUE(s_sleeperBack.load());
+}

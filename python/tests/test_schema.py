@@ -47,6 +47,7 @@ def test_the_system_schema_has_the_keys_the_parser_accepts():
     assert keys(top) == system.SYSTEM_KEYS
     assert keys(top["properties"]["elements"]["additionalProperties"]["oneOf"][1]) == system.ELEMENT_KEYS
     assert keys(top["properties"]["links"]["items"]) == system.LINK_KEYS
+    assert set(top["properties"]["links"]["items"]["properties"]["kind"]["enum"]) == system.LINK_KINDS
 
 
 @pytest.mark.parametrize("file, name", [("cdh.yaml", "wsts"), ("payload.yaml", "wsts"), ("wsts-system.yaml", "wsts-system")])
@@ -55,6 +56,17 @@ def test_the_example_manifests_fit_the_schemas(file, name):
     text = (SIM / file).read_text()
     assert text.startswith(f"# yaml-language-server: $schema=../../schemas/{name}.schema.json")
     jsonschema.validate(yaml.safe_load(text), schema(name))
+
+
+def test_the_cmake_bits_property_is_32_or_64():
+    cmake = schema("wsts")["properties"]["cmake"]["properties"]
+    assert [branch["enum"] for branch in cmake["bits"]["oneOf"]] == [[32, 64], ["32", "64"]]
+    jsonschema = pytest.importorskip("jsonschema")
+    for value in (32, 64, "32", "64"):
+        jsonschema.validate({"deployment": "D", "cmake": {"bits": value}}, schema("wsts"))
+    for value in (16, 8, "wide"):
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate({"deployment": "D", "cmake": {"bits": value}}, schema("wsts"))
 
 
 def test_the_schema_flags_what_the_parser_refuses():

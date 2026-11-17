@@ -34,13 +34,14 @@
 
 #include <Wsts/Core/Bus.hpp>
 #include <Wsts/Core/Control.hpp>
+#include <Wsts/Core/LinkRegistry.hpp>
 
 namespace Wsts {
 
 //! One end of a byte stream link to another simulated deployment.
 //! Parameters: endpoint, link (name), role ("listen" or "connect"), address (socket path;
 //! default <WSTS_LINK_DIR>/<link>.sock).
-class LinkByteStream : public Model, public ByteStreamDevice, public Inbound {
+class LinkByteStream : public Model, public ByteStreamDevice, public Inbound, public LinkEnd {
   public:
     LinkByteStream() = default;
     ~LinkByteStream() override;
@@ -62,16 +63,22 @@ class LinkByteStream : public Model, public ByteStreamDevice, public Inbound {
     std::uint64_t dropped() const { return m_dropped.load(); }
 
     //! Messages sent to the peer (or waiting for it, in lockstep), and received from it
-    std::uint64_t sent() const { return m_sent.load(); }
-    std::uint64_t received() const;
+    std::uint64_t sent() const override { return m_sent.load(); }
+    std::uint64_t received() const override;
     //! Lockstep: this many messages will have arrived before the next tick takes what is due
-    void expect(std::uint64_t received);
+    void expect(std::uint64_t received) override;
     std::string deliverDue(std::uint64_t beforeNs, std::chrono::steady_clock::time_point limit) override;
 
-    //! Links started in this process, and how many of them are up (bridge status)
+    bool isUp() const override { return m_up.load(); }
+    const std::string& name() const override { return m_name; }
+    LinkByteStream* byteStream() override { return this; }
+
+    //! Links started in this process, and how many of them have a connected peer (bridge
+    //! status). Every kind of link counts, not only stream links.
     static std::uint32_t started();
     static std::uint32_t connected();
-    //! The link of this name started in this process, or null
+    //! The stream link of this name started in this process, or null (any link kind: see
+    //! LinkRegistry::find)
     static LinkByteStream* find(const std::string& name);
     //! What each link started in this process sent and received, as `link.<name>.sent` and
     //! `link.<name>.received` (bridge status)

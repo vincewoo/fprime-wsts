@@ -300,7 +300,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         return 0
     for name, status in answers.items():
         state = "paused" if status.get("paused") else "running"
-        links = f", links {status['links_up']}/{status['links']} up" if status.get("links") else ""
+        links = (f", links {status['links']} started, {status['links_up']} up" if status.get("links") else "")
         mode = ", lockstep" if status.get("lockstep") else ", stepped" if status.get("stepped") else ""
         print(f"{name}: {state} at tick {status.get('tick')} ({status.get('sim_seconds', 0):g} s){mode}, "
               f"rate {status.get('rate')}{links}")

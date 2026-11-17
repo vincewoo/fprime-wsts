@@ -77,6 +77,30 @@ def link_traffic(response: dict) -> dict:
     return response
 
 
+def links_expected_up(description: dict) -> Dict[str, int]:
+    """The link ends of each element that have a connection and so can come up. A datagram
+    link has none: it is started, and counted in `links`, but has nothing to wait for."""
+    expected: Dict[str, int] = {}
+    for link in description.get("links", []):
+        if link.get("kind", "bytestream") == "datagram":
+            continue
+        for side in ("a", "b"):
+            element = link[side]["element"]
+            expected[element] = expected.get(element, 0) + 1
+    return expected
+
+
+def links_expected_started(description: dict) -> Dict[str, int]:
+    """The link ends of each element, of every kind: what `links` counts once they have all
+    been started (a datagram link has bound its socket then, and can receive at once)"""
+    expected: Dict[str, int] = {}
+    for link in description.get("links", []):
+        for side in ("a", "b"):
+            element = link[side]["element"]
+            expected[element] = expected.get(element, 0) + 1
+    return expected
+
+
 class PendingRequest:
     """A request sent to a simulation whose answer has not been waited for yet"""
 
@@ -591,8 +615,10 @@ class WstsSystem:
         return {name: bridge.status() for name, bridge in self.elements.items()}
 
     def links_up(self) -> bool:
-        """Every link end of every element is connected to its peer"""
-        return all(status.get("links_up", 0) >= status.get("links", 0) for status in self.status().values())
+        """Every link end that has a connection is connected to its peer. A datagram link
+        has none, and is left out."""
+        expected = links_expected_up(self.description)
+        return all(status.get("links_up", 0) >= expected.get(name, 0) for name, status in self.status().items())
 
     def subscribe(self) -> None:
         for bridge in self.elements.values():

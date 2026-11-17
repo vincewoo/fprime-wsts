@@ -14,7 +14,9 @@ A system manifest names the elements and the links between them:
 
 A link joins a byte stream driver instance of one element to one of another. The instance
 at each end is replaced by a surrogate (a link is itself a reason to substitute), and a
-`Wsts::LinkByteStream` model carries the bytes between the two processes.
+`Wsts::LinkByteStream` model carries the bytes between the two processes. A link of kind
+`datagram` carries them the same way over connectionless sockets instead
+(`Wsts::LinkDatagram`): same endpoints, same delivery to flight software, no connection.
 
 `ids` is the range of IDs that reaches the element, as the flight software routes commands
 (for example the opcode ranges either side of a `Svc.CmdSplitter`). Each element's WSTS
@@ -40,7 +42,7 @@ SYSTEM_FILE = "wsts-system.json"
 SYSTEM_KEYS = {"system", "ground", "elements", "links", "output"}
 ELEMENT_KEYS = {"manifest", "bridge", "ids"}
 LINK_KEYS = {"name", "kind", "a", "b"}
-LINK_KINDS = {"bytestream"}
+LINK_KINDS = {"bytestream", "gpio", "datagram"}
 FIRST_BRIDGE_PORT = 50100
 ELEMENT_NAME = re.compile(r"[A-Za-z_]\w*")
 LINK_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]*")
@@ -213,7 +215,8 @@ def _element_manifests(system: SystemManifest) -> Dict[str, Manifest]:
         for link in system.links:
             for (name, instance), role, peer in ((link.a, "listen", link.b), (link.b, "connect", link.a)):
                 if name == element.name:
-                    manifest.links.append(LinkEnd(link=link.name, instance=instance, role=role, peer=".".join(peer)))
+                    manifest.links.append(LinkEnd(link=link.name, kind=link.kind, instance=instance, role=role,
+                                                  peer=".".join(peer)))
         manifests[element.name] = manifest
     return manifests
 

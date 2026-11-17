@@ -23,6 +23,7 @@
 #include <Wsts/Core/Bus.hpp>
 #include <Wsts/Core/Control.hpp>
 #include <Wsts/Core/Link.hpp>
+#include <Wsts/Core/LinkRegistry.hpp>
 
 namespace Wsts {
 
@@ -272,7 +273,7 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
             if (key.rfind(prefix, 0) != 0) {
                 continue;
             }
-            LinkByteStream* link = LinkByteStream::find(key.substr(prefix.size()));
+            LinkEnd* link = LinkRegistry::find(key.substr(prefix.size()));
             if (link == nullptr) {
                 error = "no link '" + key.substr(prefix.size()) + "' in this element";
                 return false;

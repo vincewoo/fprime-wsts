@@ -146,6 +146,7 @@ cmake:
   include_early: [options.cmake]     # CMake included before the framework and libraries are read
   stub_variants: [Components/Imager] # modules read with BUILD_TESTING set: their stub variant (see "Bridging the host")
   cxx_flags: ["-include cstring"]    # flags of the host C++ compiler; or {<module directory>: [flags]}
+  bits: 32                           # 32-bit executable (x86 -m32); default 64
 libraries:
   keep: [...]                        # flight libraries to build although nothing in the model uses them
   drop: [...]
@@ -473,6 +474,14 @@ Recipes and reasons:
 - **`cmake.cxx_flags`** is a list of flags for every C++ source of the build, or a mapping
   from a module directory to its flags (`"*"` for every module). One entry is one flag
   with its argument. Report: `cxx_flags`.
+- **`cmake.bits`** builds the simulated deployment as a 32-bit executable (x86 `-m32`).
+  The generated root `CMakeLists.txt` appends `-m32` to `CMAKE_C_FLAGS`,
+  `CMAKE_CXX_FLAGS` and `CMAKE_EXE_LINKER_FLAGS` after `project()`, not through
+  `cmake.cache`: `project()` has cached those variables already. Absent or 64, none of the
+  lines are written. `check-host` compiles a trivial program with the host compiler,
+  `-m32` and `cmake.cxx_flags`; when that fails it lists a missing 32-bit runtime
+  (`gcc-multilib`/`g++-multilib` on Debian/Ubuntu). Report: `host_requirements.bits`, only
+  when it is 32.
 - **`BUILD_TESTING` for the whole build** (`cmake.cache`, the flight root `CMakeLists.txt`,
   the flight `default_cmake_options`) is a warning that says what it turns on.
 - **`host.ignore`** names what `check-host` should not report.
@@ -480,7 +489,8 @@ Recipes and reasons:
   text alone, so that it is the same on every machine: `modules`, `system_headers:
   {<header>: [{module, file, line, condition?}]}`, `libraries`, `packages: {<name>:
   {required, components, needed_by}}`, `sdk_paths`, `search` (include and link directories
-  from the simulation's CMake files, `cxx_flags`), `sanitizers`, `flight_toolchain`,
+  from the simulation's CMake files, `cxx_flags`), `sanitizers`, `bits` (when the manifest
+  asks for 32), `flight_toolchain`,
   `flight_compiler`, `ignore`. What a machine answers is in `wsts-host.json` beside the
   report (`compiler`, `flight_compiler`, `missing: [{kind, name, needed_by, remedies,
   hint?}]`, `notes`, `warnings`, `ok`); that file is not compared by `--check` and is not
@@ -570,7 +580,7 @@ elements:                        # required: element name -> deployment manifest
   payload: payload.yaml         # short form
 links:
   - name: hub                    # also the name faults are addressed by
-    kind: bytestream             # default
+    kind: bytestream             # default; datagram: connectionless, one message per datagram
     a: cdh.hubDriver             # <element>.<instance>: a byte stream driver instance;
                                  # qualified names work too (cdh.RadioLink.uart)
     b: payload.hubDriver
@@ -579,6 +589,14 @@ links:
 An instance at the end of a link is substituted even if no catalog entry replaces its
 component (with `Wsts.SimByteStream`, chosen by `link`). It cannot be listed under `keep`,
 and its endpoint cannot also have a `bytestream` model.
+
+A `datagram` link carries the same traffic over connectionless Unix datagram sockets: a
+`Wsts::LinkDatagram` model instead of `Wsts::LinkByteStream`, one `sendto()` per message
+(length, `Control::elapsedNs()`, bytes), each end bound at
+`<WSTS_LINK_DIR>/<link>.a.sock` (`a`) and `<link>.b.sock` (`b`) — `address` and
+`address_b` set the two paths. It has no connection: a send with no peer's socket is
+dropped in real time and held in an outbox in lockstep. Faults, recording and replay apply
+as on a stream link; it counts in `links` but never in `links_up`.
 
 ## Surrogate catalog
 
@@ -710,7 +728,7 @@ Newline-delimited JSON. A client sends `{"id": n, "op": …}` and receives
 
 | `op` | Purpose |
 |---|---|
-| `status` | Tick, run state, fault and scenario state, bus counters, endpoint names, and `links` / `links_up` (link ends of a system element, and how many are connected). Also what flight software has been given and not finished: `counting` (the deployment's queue counts it), `activity` (messages waiting for a task or being handled, and work of the simulation's own threads, now), `work` (the total since start-up) and `busy_ticks` (ticks taken while work of an earlier one was outstanding). For stepped time: `lockstep`, `settled` (start-up has settled), and for each link `link.<name>.sent` and `link.<name>.received`, the messages its end sent (or holds for a peer not yet connected, in lockstep) and received (`WstsBridge.status()` gathers them into `link_traffic`) |
+| `status` | Tick, run state, fault and scenario state, bus counters, endpoint names, and `links` / `links_up` (link ends of a system element, and how many have a connected peer: a datagram link counts in `links` and never in `links_up`). Also what flight software has been given and not finished: `counting` (the deployment's queue counts it), `activity` (messages waiting for a task or being handled, and work of the simulation's own threads, now), `work` (the total since start-up) and `busy_ticks` (ticks taken while work of an earlier one was outstanding). For stepped time: `lockstep`, `settled` (start-up has settled), and for each link `link.<name>.sent` and `link.<name>.received`, the messages its end sent (or holds for a peer not yet connected, in lockstep) and received (`WstsBridge.status()` gathers them into `link_traffic`) |
 | `advance` (`ticks`=1, `expect.<link>`, `timeout_ms`=30000) | Lockstep only: the conductor of a system grants ticks and waits until they are taken and finished. `expect.<link>`: the messages that link will have received before the tick (what the other end had sent); the tick waits for them, and if they do not come within `WSTS_STEP_LIMIT_MS` it does not finish (`stuck` names the link). Answers the status, with `done` |
 | `wait_quiescent` (`timeout_ms`=1000) | Wait until `activity` is zero: flight software has finished everything it was given. Answers `quiescent`, `activity` and, when it is not, `holding`: the queues with work outstanding, as `<queue>: <messages>, …`. Meaningful while paused |
 | `subscribe` | Start receiving `{"ev": "rec", …}`, `{"ev": "action", …}` and `{"ev": "sim_event", …}` |
@@ -773,7 +791,7 @@ lines starting with `#` are skipped.
 | `WSTS_STEP_LIMIT_MS` | Stepped time: wall-clock milliseconds a tick may take to finish before it is reported and the simulation pauses (default 10000) |
 | `WSTS_START_PAUSED` | `1`: start paused. `fprime-wsts run` sets it for a deployment with `run.models`, and resumes once they are attached |
 | any in `run.env` or `--env` | Set by `fprime-wsts run` and the pytest plugin for the simulator components' phase code |
-| `WSTS_LINK_DIR` | Directory of the link sockets of a system (`<link>.sock`). Set by `fprime-wsts run`; without it links stay down |
+| `WSTS_LINK_DIR` | Directory of the link sockets of a system. A stream link is `<link>.sock`; a datagram link binds `<link>.a.sock` at its `a` end and `<link>.b.sock` at its `b` end. Set by `fprime-wsts run`; without it links stay down |
 
 ## `Wsts.SimControl`
 

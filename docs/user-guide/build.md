@@ -147,6 +147,18 @@ or pass the option when configuring:
 fprime-wsts build my-mission-sim/wsts/MyDeployment -D CMAKE_BUILD_TYPE=Debug
 ```
 
+### A 32-bit executable
+
+```yaml
+cmake:
+  bits: 32
+```
+
+The generated root `CMakeLists.txt` adds `-m32` to the C, C++ and link flags of the
+deployment. `check-host` compiles a trivial program that way and says whether this host can:
+if it cannot, install the 32-bit runtime (`gcc-multilib` and `g++-multilib` on
+Debian/Ubuntu), or leave `bits` out to build 64-bit. `cmake.cxx_flags` still applies on top.
+
 ### More CMake keys
 
 | Key | Use |
@@ -155,6 +167,7 @@ fprime-wsts build my-mission-sim/wsts/MyDeployment -D CMAKE_BUILD_TYPE=Debug
 | `cmake.exclude_subdirectories` | Modules to leave out wherever they are added |
 | `cmake.depends` | Extra link dependencies of the topology module (your models' module) |
 | `cmake.include` | CMake included after every module is added: aliases, link edges |
+| `cmake.bits` | Build a 32-bit executable (x86 `-m32`); `check-host` says whether the host can |
 | `libraries.keep`, `libraries.drop` | Flight libraries to force in or out |
 | `defines` | Compile definitions, in addition to `WSTS_SIM=1` |
 
