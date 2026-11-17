@@ -231,6 +231,35 @@ def test_status_of_a_running_simulation_and_of_none(tmp_path, sim, capsys):
     assert main(["status", str(tmp_path)]) == 2
 
 
+def test_status_counts_a_started_link_as_not_up(tmp_path, sim, capsys):
+    """A datagram link is started and counted in `links`, but never comes up: the status
+    line says both, rather than reading as a link that failed"""
+    from fprime_wsts.cli import main
+
+    sim.answer_status = lambda message: {"id": message["id"], "ok": True, "links": 2, "links_up": 1}
+    out = generated(tmp_path / "Dep", sim)
+    assert main(["status", str(out)]) == 0
+    assert "links 2 started, 1 up" in capsys.readouterr().out
+
+
+def test_links_up_does_not_wait_for_a_datagram_link():
+    """`links_up` counts the link ends that have a connection: a datagram end is started
+    but never up, so a system with one must not be reported as not yet linked"""
+    from fprime_wsts.bridge import links_expected_started, links_expected_up
+
+    description = {
+        "system": "Demo", "ground": "cdh", "elements": [],
+        "links": [
+            {"name": "hub", "kind": "bytestream",
+             "a": {"element": "cdh", "endpoint": "hubDriver"}, "b": {"element": "payload", "endpoint": "hubDriver"}},
+            {"name": "telem", "kind": "datagram",
+             "a": {"element": "cdh", "endpoint": "tlmDriver"}, "b": {"element": "payload", "endpoint": "tlmDriver"}},
+        ],
+    }
+    assert links_expected_up(description) == {"cdh": 1, "payload": 1}, "only the stream link has a connection"
+    assert links_expected_started(description) == {"cdh": 2, "payload": 2}, "a run waits for both to be started"
+
+
 def test_an_action_for_one_element_of_a_system_needs_its_name(tmp_path, capsys):
     from fprime_wsts.cli import main
 

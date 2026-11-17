@@ -127,14 +127,8 @@ void LinkGpio::start() {
     }
     m_running.store(true);
     // The shared registry is what the bridge status reports as `link.<name>.sent` and
-    // `link.<name>.received` (LinkRegistry::traffic()), for both kinds of link.
-    LinkRegistry::get().add(LinkRegistry::Entry{
-        LinkRegistry::Kind::GPIO, m_name, this,
-        [this]() { return this->sent(); },
-        [this]() { return this->received(); },
-        [this]() { return this->up(); },
-        [this](std::uint64_t received) { this->expect(received); },
-    });
+    // `link.<name>.received` (LinkRegistry::traffic()), for every kind of link.
+    LinkRegistry::add(this);
     Control::get().addInbound(this);
     m_thread = std::thread([this]() { this->run(); });
 }
@@ -147,7 +141,7 @@ void LinkGpio::stop() {
         m_thread.join();
     }
     Control::get().removeInbound(this);
-    LinkRegistry::get().remove(LinkRegistry::Kind::GPIO, this);
+    LinkRegistry::remove(this);
     if (m_listen) {
         (void)::unlink(m_address.c_str());
     }

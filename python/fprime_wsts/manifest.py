@@ -226,7 +226,7 @@ class LinkEnd:
     instance: str  # the driver instance the link ends at
     role: str  # listen or connect
     peer: str  # the far end, "<element>.<instance>", for the report
-    kind: str = "bytestream"  # what the link carries: bytestream or gpio
+    kind: str = "bytestream"  # what the link carries: bytestream, gpio or datagram
 
 
 @dataclass

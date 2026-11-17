@@ -839,8 +839,13 @@ class SystemSimulation:
         return found
 
     def _wait_for_links(self, timeout: float = 20.0) -> None:
-        from .bridge import BridgeError, WstsBridge
+        from .bridge import BridgeError, WstsBridge, links_expected_started, links_expected_up
 
+        # A datagram link has nothing to connect: it is started (its socket bound, so it can
+        # receive) and never "comes up". A stream link has to be connected before the
+        # system's first instant, which in lockstep must not race the other end's start-up.
+        started = links_expected_started(self.description)
+        up = links_expected_up(self.description)
         deadline = time.monotonic() + timeout
         for name, simulation in self.elements.items():
             if simulation.bridge == "none":
@@ -849,11 +854,12 @@ class SystemSimulation:
                 with WstsBridge(simulation.bridge) as bridge:
                     while True:
                         status = bridge.status()
-                        if status.get("links_up", 0) >= status.get("links", 0):
+                        if (status.get("links", 0) >= started.get(name, 0)
+                                and status.get("links_up", 0) >= up.get(name, 0)):
                             break
                         if time.monotonic() >= deadline:
                             raise WstsError(
-                                f"element '{name}': {status.get('links_up', 0)} of {status.get('links', 0)} link(s) "
+                                f"element '{name}': {status.get('links_up', 0)} of {up.get(name, 0)} link(s) "
                                 f"came up; see {simulation.log_dir / 'sim.log'}"
                             )
                         time.sleep(0.1)

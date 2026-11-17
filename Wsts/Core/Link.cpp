@@ -15,7 +15,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <utility>
 #include <vector>
 
 namespace Wsts {
@@ -26,9 +25,6 @@ const int POLL_MS = 100;                           //!< How often blocked calls 
 const std::uint32_t MAX_MESSAGE = 16 * 1024 * 1024;  //!< Larger lengths mean a corrupted stream
 const std::size_t MAX_WAITING = 65536;               //!< Lockstep: messages kept for a peer not yet connected
 const std::size_t HEADER = 12;                       //!< Length (4 bytes), then the time it was sent at (8)
-
-std::mutex s_registryMutex;
-std::vector<LinkRegistry::Entry> s_links;  //!< started, in the order they were started
 
 bool unixAddress(const std::string& path, sockaddr_un& address) {
     std::memset(&address, 0, sizeof(address));
@@ -54,96 +50,25 @@ bool writeFully(int fd, const std::uint8_t* data, std::size_t size) {
 
 }  // namespace
 
-LinkRegistry& LinkRegistry::get() {
-    static LinkRegistry registry;
-    return registry;
-}
-
-void LinkRegistry::add(Entry entry) {
-    std::lock_guard<std::mutex> lock(s_registryMutex);
-    s_links.push_back(std::move(entry));
-}
-
-void LinkRegistry::remove(Kind kind, const void* owner) {
-    std::lock_guard<std::mutex> lock(s_registryMutex);
-    s_links.erase(std::remove_if(s_links.begin(), s_links.end(),
-                                 [kind, owner](const Entry& entry) {
-                                     return entry.kind == kind && entry.owner == owner;
-                                 }),
-                  s_links.end());
-}
-
-std::uint32_t LinkRegistry::started() const {
-    std::lock_guard<std::mutex> lock(s_registryMutex);
-    return static_cast<std::uint32_t>(s_links.size());
-}
-
-std::uint32_t LinkRegistry::connected() const {
-    std::uint32_t up = 0;
-    std::lock_guard<std::mutex> lock(s_registryMutex);
-    for (const Entry& entry : s_links) {
-        if (entry.up()) {
-            up++;
-        }
-    }
-    return up;
-}
-
-void LinkRegistry::traffic(JsonObj& out) const {
-    std::lock_guard<std::mutex> lock(s_registryMutex);
-    for (const Entry& entry : s_links) {
-        out.setNum("link." + entry.name + ".sent", static_cast<std::int64_t>(entry.sent()));
-        out.setNum("link." + entry.name + ".received", static_cast<std::int64_t>(entry.received()));
-    }
-}
-
-bool LinkRegistry::expect(const std::string& name, std::uint64_t received) const {
-    std::function<void(std::uint64_t)> target;
-    {
-        std::lock_guard<std::mutex> lock(s_registryMutex);
-        for (const Entry& entry : s_links) {
-            if (entry.name == name) {
-                target = entry.expect;
-                break;
-            }
-        }
-    }
-    if (!target) {
-        return false;
-    }
-    target(received);
-    return true;
-}
-
-const void* LinkRegistry::find(Kind kind, const std::string& name) const {
-    std::lock_guard<std::mutex> lock(s_registryMutex);
-    for (const Entry& entry : s_links) {
-        if (entry.kind == kind && entry.name == name) {
-            return entry.owner;
-        }
-    }
-    return nullptr;
-}
-
 LinkByteStream::~LinkByteStream() {
     this->stop();
 }
 
 std::uint32_t LinkByteStream::started() {
-    return LinkRegistry::get().started();
+    return LinkRegistry::started();
 }
 
 std::uint32_t LinkByteStream::connected() {
-    return LinkRegistry::get().connected();
+    return LinkRegistry::connected();
 }
 
 LinkByteStream* LinkByteStream::find(const std::string& name) {
-    return static_cast<LinkByteStream*>(
-        const_cast<void*>(LinkRegistry::get().find(LinkRegistry::Kind::BYTESTREAM, name)));
+    LinkEnd* link = LinkRegistry::find(name);
+    return link == nullptr ? nullptr : link->byteStream();
 }
 
 void LinkByteStream::traffic(JsonObj& out) {
-    LinkRegistry::get().traffic(out);
+    LinkRegistry::traffic(out);
 }
 
 std::uint64_t LinkByteStream::received() const {
@@ -216,13 +141,7 @@ void LinkByteStream::start() {
         return;
     }
     m_running.store(true);
-    LinkRegistry::get().add(LinkRegistry::Entry{
-        LinkRegistry::Kind::BYTESTREAM, m_name, this,
-        [this]() { return this->sent(); },
-        [this]() { return this->received(); },
-        [this]() { return this->up(); },
-        [this](std::uint64_t received) { this->expect(received); },
-    });
+    LinkRegistry::add(this);
     Control::get().addInbound(this);
     m_thread = std::thread([this]() { this->run(); });
 }
@@ -235,7 +154,7 @@ void LinkByteStream::stop() {
         m_thread.join();
     }
     Control::get().removeInbound(this);
-    LinkRegistry::get().remove(LinkRegistry::Kind::BYTESTREAM, this);
+    LinkRegistry::remove(this);
     if (m_listen) {
         (void)::unlink(m_address.c_str());
     }

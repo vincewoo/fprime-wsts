@@ -33,13 +33,14 @@
 #include <Wsts/Core/Bus.hpp>
 #include <Wsts/Core/Control.hpp>
 #include <Wsts/Core/Link.hpp>
+#include <Wsts/Core/LinkRegistry.hpp>
 
 namespace Wsts {
 
 //! One end of a GPIO link to another simulated deployment.
 //! Parameters: endpoint, link (name), role ("listen" or "connect"), address (socket path;
 //! default <WSTS_LINK_DIR>/<link>.sock).
-class LinkGpio : public Model, public GpioDevice, public Inbound {
+class LinkGpio : public Model, public GpioDevice, public Inbound, public LinkEnd {
   public:
     LinkGpio() = default;
     ~LinkGpio() override;
@@ -62,10 +63,14 @@ class LinkGpio : public Model, public GpioDevice, public Inbound {
     std::uint64_t dropped() const { return m_dropped.load(); }
 
     //! Levels sent to the peer (or waiting for it, in lockstep), and received from it
-    std::uint64_t sent() const { return m_sent.load(); }
-    std::uint64_t received() const;
+    std::uint64_t sent() const override { return m_sent.load(); }
+    std::uint64_t received() const override;
     //! Lockstep: this many messages will have arrived before the next tick takes what is due
-    void expect(std::uint64_t received);
+    void expect(std::uint64_t received) override;
+
+    //! LinkEnd: how the bridge and the conductor see this link
+    bool isUp() const override { return m_up.load(); }
+    const std::string& name() const override { return m_name; }
 
   private:
     void run();
