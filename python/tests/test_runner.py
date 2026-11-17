@@ -125,6 +125,133 @@ def test_scenarios_and_recordings_of_a_system_are_per_element():
         one_value("record", ["a", "b"])
 
 
+def test_a_merged_recording_keeps_every_element_in_element_order(tmp_path):
+    from fprime_wsts.runner import merge_recordings
+
+    cdh = tmp_path / "cdh.jsonl"
+    payload = tmp_path / "payload.jsonl"
+    cdh.write_text('{"rec":"bs_tx","tick":3,"endpoint":"hub"}\n'
+                   '{"op":"inject_bytes","tick":7,"endpoint":"uart","text":"hi"}\n')
+    payload.write_text('{"rec":"bs_rx","tick":1,"endpoint":"sensor"}\n')
+    target = tmp_path / "merged.jsonl"
+    assert merge_recordings({"cdh": cdh, "payload": payload}, target) == 3
+    lines = [json.loads(line) for line in target.read_text().splitlines()]
+    assert [line["element"] for line in lines] == ["cdh", "cdh", "payload"], "element order, not tick order"
+    assert [line.get("tick") for line in lines] == [3, 7, 1], "ticks are left as each element recorded them"
+    assert lines[0] == {"element": "cdh", "rec": "bs_tx", "tick": 3, "endpoint": "hub"}
+    # Blank lines contribute nothing
+    payload.write_text('\n{"rec":"bs_rx","tick":1}\n\n')
+    assert merge_recordings({"cdh": cdh, "payload": payload}, target) == 3
+
+
+def test_a_merged_recording_reports_an_element_that_never_recorded(tmp_path):
+    import pytest
+
+    from fprime_wsts.fpp import WstsError
+    from fprime_wsts.runner import merge_recordings
+
+    cdh = tmp_path / "cdh.jsonl"
+    cdh.write_text('{"rec":"bs_tx","tick":0}\n')
+    target = tmp_path / "merged.jsonl"
+    with pytest.raises(WstsError, match="payload") as raised:
+        merge_recordings({"cdh": cdh, "payload": tmp_path / "payload.jsonl"}, target)
+    assert "no recording to merge" in str(raised.value) and str(tmp_path / "payload.jsonl") in str(raised.value)
+    assert not target.exists(), "nothing is written when a source is missing"
+
+
+def test_a_merged_recording_round_trips(tmp_path):
+    from fprime_wsts.runner import merge_recordings, split_recording
+
+    # Two synthetic per-element recordings, with the fields a recording line has
+    originals = {
+        "cdh": '{"rec":"bs_tx","tick":3,"endpoint":"hub","src":"flight","data":"00ff"}\n'
+               '{"op":"inject_bytes","tick":7,"endpoint":"uart","text":"$TEMP,48.0\\n"}\n',
+        "payload": '{"rec":"reg_wr","tick":1,"endpoint":"fpgaRegs","src":"flight","offset":"0x10","width":4,'
+                   '"write":"2a000000"}\n'
+                   '{"rec":"gpio_out","tick":2,"endpoint":"leds","src":"flight","value":1}\n'
+                   '{"rec":"bs_rx","tick":9,"endpoint":"sensor","src":"link","data":""}\n',
+    }
+    sources = {}
+    for name, text in originals.items():
+        sources[name] = tmp_path / f"{name}.jsonl"
+        sources[name].write_text(text)
+    merged = tmp_path / "merged.jsonl"
+    assert merge_recordings(sources, merged) == sum(len(text.splitlines()) for text in originals.values())
+    assert all("element" in json.loads(line) for line in merged.read_text().splitlines())
+
+    split = split_recording(merged, ["cdh", "payload"], tmp_path / "split")
+    assert set(split) == set(originals)
+    for name, text in originals.items():
+        assert Path(split[name]).read_text() == text, "byte for byte what the element recorded, minus the key"
+    # Line sets per element equal, and the line count preserved
+    assert sum(len(Path(path).read_text().splitlines()) for path in split.values()) == len(merged.read_text().splitlines())
+
+
+def test_splitting_a_merged_recording_rejects_a_line_from_another_system(tmp_path):
+    import pytest
+
+    from fprime_wsts.fpp import WstsError
+    from fprime_wsts.runner import split_recording
+
+    merged = tmp_path / "merged.jsonl"
+    merged.write_text('{"element":"cdh","rec":"bs_tx","tick":0}\n'
+                      '{"element":"gateway","rec":"bs_tx","tick":1}\n')
+    with pytest.raises(WstsError, match=":2: element 'gateway' is not one of this system's"):
+        split_recording(merged, ["cdh", "payload"], tmp_path / "split")
+    # An element with no lines gets no file
+    merged.write_text('{"element":"cdh","rec":"bs_tx","tick":0}\n')
+    assert set(split_recording(merged, ["cdh", "payload"], tmp_path / "split2")) == {"cdh"}
+
+
+def test_the_merged_options_are_checked_against_the_per_element_ones(tmp_path, capsys):
+    from fprime_wsts.cli import main
+
+    system = tmp_path / "S"
+    for name in ("a", "b"):
+        (system / name).mkdir(parents=True)
+        (system / name / "wsts-report.json").write_text(json.dumps({"time": {"mode": "realtime"}}))
+    (system / "wsts-system.json").write_text(json.dumps({"system": "S", "ground": "a", "links": [], "elements": [
+        {"name": "a", "directory": "a", "bridge": "none"}, {"name": "b", "directory": "b", "bridge": "none"}]}))
+    assert main(["run", str(system), "--record-merged", "m.jsonl", "--record", "a=x.jsonl"]) == 2
+    assert "--record cannot be given with it" in capsys.readouterr().err
+    assert main(["run", str(system), "--scenario-merged", "m.jsonl", "--scenario", "a=x.jsonl"]) == 2
+    assert "--scenario cannot be given with it" in capsys.readouterr().err
+    # Both are for a system: a single deployment has one file per kind already
+    (tmp_path / "one").mkdir()
+    make_deployment(tmp_path / "one")
+    assert main(["run", str(tmp_path / "one"), "--record-merged", "m.jsonl"]) == 2
+    assert "is for a system" in capsys.readouterr().err
+    assert main(["run", str(tmp_path / "one"), "--scenario-merged", "m.jsonl"]) == 2
+    assert "is for a system" in capsys.readouterr().err
+
+
+def test_a_failed_merged_recording_keeps_the_elements_recordings(tmp_path):
+    system = tmp_path / "S"
+    for name in ("a", "b"):
+        (system / name).mkdir(parents=True)
+        (system / name / "wsts-report.json").write_text(json.dumps({"time": {"mode": "realtime"}}))
+    (system / "wsts-system.json").write_text(json.dumps({"system": "S", "ground": "a", "links": [], "elements": [
+        {"name": "a", "directory": "a", "bridge": "none"}, {"name": "b", "directory": "b", "bridge": "none"}]}))
+
+    from fprime_wsts.runner import SystemSimulation
+
+    simulation = SystemSimulation(system, record_merged=str(tmp_path / "merged.jsonl"))
+    simulation.log_dir.mkdir(parents=True, exist_ok=True)
+    temporary = simulation.log_dir / "record-merged"
+    temporary.mkdir()
+    simulation._merged_dir = temporary
+    (temporary / "a.jsonl").write_text('{"rec":"bs_tx","tick":0}\n')
+    simulation.records = {"a": str(temporary / "a.jsonl"), "b": str(temporary / "b.jsonl")}
+    simulation._merge()
+    assert simulation.merge_error and "b" in simulation.merge_error, "the element that recorded nothing is named"
+    assert (temporary / "a.jsonl").is_file(), "a failed merge leaves the files it could not merge"
+    # And one that succeeds removes them
+    (temporary / "b.jsonl").write_text('{"rec":"bs_tx","tick":1}\n')
+    simulation._merge()
+    assert simulation.merge_error is None and simulation.merged_lines == 2
+    assert not temporary.exists()
+
+
 def test_elements_built_from_different_states_are_named_before_the_merge(tmp_path):
     from fprime_wsts.runner import dictionary_mismatch
 
