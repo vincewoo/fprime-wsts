@@ -6,6 +6,7 @@
 
 #include <atomic>
 
+#include <Drv/Ip/SocketComponentHelper.hpp>
 #include <Os/Task.hpp>
 #include <Wsts/Core/Activity.hpp>
 
@@ -20,6 +21,18 @@ struct Started {
 };
 
 std::atomic<std::uint64_t> s_started{0};
+
+// The routines of the framework's socket drivers (Drv.TcpClient, Drv.TcpServer, Drv.Udp). Their
+// own threads block in the host (accept, recv) with nothing to do until bytes arrive from
+// outside, so they cannot take the turn: a thread that blocks in a system call with the turn
+// held keeps every other task, and the tick, from running. What they receive is outside input
+// (docs/stepped-time.md): it reaches flight software through queues, which count it. The
+// routines are protected members of the helper, reachable from a class derived from it.
+struct SocketRoutines : Drv::SocketComponentHelper {
+    static bool isSocketRoutine(Os::TaskInterface::taskRoutine routine) {
+        return routine == &SocketComponentHelper::readTask || routine == &SocketComponentHelper::reconnectTask;
+    }
+};
 
 void run(void* pointer) {
     Started* started = static_cast<Started*>(pointer);
@@ -43,6 +56,9 @@ Os::TaskInterface::Status SimTask::start(const Arguments& arguments) {
         return Os::Posix::Task::PosixTask::start(arguments);
     }
     auto* wrapper = static_cast<Os::Task::TaskRoutineWrapper*>(arguments.m_routine_argument);
+    if (SocketRoutines::isSocketRoutine(wrapper->m_user_function)) {
+        return Os::Posix::Task::PosixTask::start(arguments);  // outside the turn: see SocketRoutines
+    }
     Started* started = new Started{wrapper->m_user_function, wrapper->m_user_argument, s_started.fetch_add(1)};
     wrapper->m_user_function = run;
     wrapper->m_user_argument = started;
@@ -56,6 +72,22 @@ Os::TaskInterface::Status SimTask::start(const Arguments& arguments) {
         wrapper->m_user_function = started->routine;
         wrapper->m_user_argument = started->argument;
         delete started;
+    }
+    return status;
+}
+
+Os::TaskInterface::Status SimTask::_delay(const Fw::TimeInterval& interval) {
+    Activity& activity = Activity::get();
+    // Only where flight code runs one at a time, and only a thread that has the turn: in real
+    // time, or for a thread that never took it, this is the POSIX delay as it was
+    const bool hadTurn = activity.exclusive() && activity.hasTurn();
+    const std::uint64_t rank = hadTurn ? activity.rank() : 0;
+    if (hadTurn) {
+        activity.abandon();  // however often this thread took it: it takes it back once
+    }
+    const Status status = Os::Posix::Task::PosixTask::_delay(interval);
+    if (hadTurn) {
+        (void)activity.enter(rank);
     }
     return status;
 }
