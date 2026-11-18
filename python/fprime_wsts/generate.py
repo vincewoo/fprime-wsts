@@ -75,6 +75,8 @@ class PlannedSubstitution:
     # The surrogate serves registers through ports of another shape (`register_endpoint` in the manifest or
     # the catalog): the endpoint takes a register block, and there are no roles to report
     register_endpoint: bool = False
+    # The surrogate serves a byte stream endpoint through ports of another shape (`bytestream_endpoint`)
+    bytestream_endpoint: bool = False
 
     @property
     def is_register_endpoint(self) -> bool:
@@ -106,7 +108,9 @@ class Plan:
 
 
 def _host_restriction(text: str) -> Optional[re.Match]:
-    """The first restrict_platforms() call in CMake text that leaves a Linux host out"""
+    """The first restrict_platforms() call in CMake text that leaves a Linux host out. A call in a
+    comment is not one: the same length of text is kept, so the match positions stay right."""
+    text = re.sub(r"(?m)#.*$", lambda comment: " " * len(comment.group(0)), text)
     for match in re.finditer(r"restrict_platforms\(([^)]*)\)", text):
         platforms = {p.strip().strip('"').lower() for p in match.group(1).split() if p.strip()}
         if platforms and not (platforms & HOST_PLATFORMS):
@@ -398,6 +402,7 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
         entry_no_endpoint = False
         entry_endpoint = False
         entry_register = False
+        entry_bytestream = False
         kept = name in keep
 
         for entry in manifest.substitutions:
@@ -412,6 +417,7 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
                 entry_no_endpoint = entry.no_endpoint
                 entry_endpoint = bool(entry.endpoint)
                 entry_register = entry.register_endpoint
+                entry_bytestream = entry.bytestream_endpoint
                 reason = "manifest"
                 break
         if chosen is None and not kept and original.name in replaces:
@@ -514,7 +520,7 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
             )
         plan.substitutions.append(PlannedSubstitution(
             instance, original, surrogate, chosen, endpoint if bind else "", options, reason, port_map, attributes, bind,
-            roles, register_endpoint))
+            roles, register_endpoint, entry_bytestream or chosen.bytestream_endpoint))
 
     # Base IDs for the WSTS instances: above everything the flight topology uses
     highest = 0
@@ -602,9 +608,11 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
             continue
         wanted, what = ({"gpioWrite", "gpioRead"}, "a GPIO driver (no gpioWrite and gpioRead ports)") \
             if end.kind == "gpio" else ({"send", "recv"}, "a byte stream driver (no send and recv ports)")
-        if not wanted <= set(sub.surrogate.ports):
+        if not wanted <= set(sub.surrogate.ports) and not (end.kind != "gpio" and sub.bytestream_endpoint):
             raise WstsError(
-                f"link '{end.link}' ends at {sub.instance.name}, but its surrogate {sub.surrogate.name} is not {what}"
+                f"link '{end.link}' ends at {sub.instance.name}, but its surrogate {sub.surrogate.name} is not {what}. "
+                "A project surrogate that serves a byte stream endpoint through ports of its own shape says so with "
+                "'bytestream_endpoint: true' in its 'substitute' entry or catalog entry"
             )
         for spec in manifest.models:
             if spec.endpoint == sub.endpoint and spec.kind in {"bytestream", "gpio"}:
@@ -696,7 +704,8 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
                             f"{no_endpoint_hint(device.endpoint)}")
     sims.plan_devices(
         plan.sim, model, manifest, topology,
-        {sub.endpoint: (sub.instance.name, sims.endpoint_kind(sub.surrogate.ports))
+        {sub.endpoint: (sub.instance.name, "bytestream" if sub.bytestream_endpoint
+                                       else sims.endpoint_kind(sub.surrogate.ports))
          for sub in plan.substitutions if sub.bind},
         {link.endpoint: link.end.link for link in plan.links},
     )
@@ -897,8 +906,32 @@ def pin_pattern_targets(text: str, pattern: fpp.Pattern, targets: List[str], top
             "change ping port numbers (generated)\n" + listing + "    }" + text[match.end():])
 
 
-def patch_packets(text: str, line: int, col: int, channels: List[str]) -> str:
-    """Omit the WSTS channels from a telemetry packet set"""
+def _drop_channels(text: str, line: int, col: int, dropped: List[str]) -> str:
+    """Remove from a telemetry packet set (its packets and its omit list) the channels of replaced
+    drivers that the surrogate does not have. Each is written relative to some enclosing module of
+    its instance, so every trailing part of the qualified name is accepted."""
+    masked = _mask(text)
+    opening = masked.find("{", _offset(text, line, col))
+    end = _matching_brace(masked, opening) + 1
+    tail = re.match(r"\s*omit\s*\{", masked[end:])
+    if tail:
+        end = _matching_brace(masked, end + tail.end() - 1) + 1
+    region = masked[opening:end]
+    spans = []
+    for name in dropped:
+        parts = name.split(".")
+        spellings = "|".join(re.escape(".".join(parts[i:])) for i in range(len(parts) - 1))
+        for match in re.finditer(rf"(?<![\w$.])(?:{spellings})(?![\w$])\s*,?", region):
+            spans.append((opening + match.start(), opening + match.end()))
+    for start, stop in sorted(spans, reverse=True):
+        text = text[:start] + text[stop:]
+    return text
+
+
+def patch_packets(text: str, line: int, col: int, channels: List[str], dropped: Optional[List[str]] = None) -> str:
+    """Omit the WSTS channels from a telemetry packet set, and drop the `dropped` channels of it"""
+    if dropped:
+        text = _drop_channels(text, line, col, dropped)
     masked = _mask(text)
     opening = masked.find("{", _offset(text, line, col))
     closing = _matching_brace(masked, opening)
@@ -2524,13 +2557,19 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
             edit(sub.instance.file, sub.instance.type_line, sub.instance.type_col,
                  lambda text, sub=sub: patch_instance(text, sub), f"instance {sub.instance.name}")
         added_instances = [SETUP_INSTANCE] + ([CONTROL_INSTANCE] if manifest.control_enabled else [])
-        if manifest.control_enabled and topology.packet_sets:
+        if topology.packet_sets:
             # Named relative to the topology's module, as the topology's own packets are: a
             # topology that shares its module's name would capture a fully qualified name
-            channels = [f"{CONTROL_INSTANCE}.{c}" for c in model.components[CONTROL_COMPONENT].channels]
-            for file, line, col in topology.packet_sets:
-                edit(file, line, col, lambda text, line=line, col=col: patch_packets(text, line, col, channels),
-                     "telemetry packets")
+            channels = ([f"{CONTROL_INSTANCE}.{c}" for c in model.components[CONTROL_COMPONENT].channels]
+                        if manifest.control_enabled else [])
+            # Channels of replaced drivers that the surrogate lacks (a UART's byte counts, say)
+            dropped = [f"{sub.instance.name}.{c}" for sub in plan.substitutions
+                       for c in sorted(set(sub.original.channels) - set(sub.surrogate.channels))]
+            if channels or dropped:
+                for file, line, col in topology.packet_sets:
+                    edit(file, line, col,
+                         lambda text, line=line, col=col: patch_packets(text, line, col, channels, dropped),
+                         "telemetry packets")
         for file, line, col, change, what in port_edits(plan, model, topology):
             edit(file, line, col, change, what)
         if plan.sim.health_pattern is not None:

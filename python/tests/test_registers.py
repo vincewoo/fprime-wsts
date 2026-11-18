@@ -382,6 +382,21 @@ def test_register_endpoint_is_read_from_a_substitute_entry_and_a_catalog_entry(t
     assert adc.register_endpoint is True and other.register_endpoint is False
 
 
+def test_bytestream_endpoint_is_read_from_a_substitute_entry_and_a_catalog_entry(tmp_path):
+    entry = {"instance": "uart", "with": "Proj.SimPolledUart", "bytestream_endpoint": True}
+    assert parse_manifest({"deployment": "Payload", "substitute": [entry]}).substitutions[0].bytestream_endpoint is True
+    assert parse_manifest({"deployment": "Payload", "substitute": [{**entry, "bytestream_endpoint": None}]}) \
+        .substitutions[0].bytestream_endpoint is False
+    with pytest.raises(WstsError, match="bytestream_endpoint must be true or false, not 'yes please'"):
+        parse_manifest({"deployment": "Payload", "substitute": [{**entry, "bytestream_endpoint": "yes please"}]})
+    catalog = tmp_path / "catalog.yaml"
+    catalog.write_text("surrogates:\n  - surrogate: Proj.SimPolledUart\n    replaces: [Proj.Uart]\n    bytestream_endpoint: true\n"
+                       "  - surrogate: Proj.SimOther\n    replaces: [Proj.Other]\n")
+    from fprime_wsts.manifest import load_catalog
+    uart, other = load_catalog(catalog)
+    assert uart.bytestream_endpoint is True and other.bytestream_endpoint is False
+
+
 @needs_fpp
 def test_a_surrogate_with_ports_of_its_own_shape_takes_a_register_model(tmp_path):
     """Wsts.SimI2c has no register-shaped port, which the error below says. With the flag the same

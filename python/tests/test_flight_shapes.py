@@ -189,6 +189,15 @@ def test_build_on_host_adds_a_module_that_restrict_platforms_keeps_off_a_linux_h
         payload(cmake={"build_on_host": "Components/ImuManager"})
 
 
+def test_a_restrict_platforms_call_in_a_comment_restricts_nothing():
+    from fprime_wsts.generate import _host_restriction
+    assert _host_restriction('# via restrict_platforms("baremetal"), leaving their tests\nregister_fprime_module()\n') is None
+    text = 'register_fprime_module()  # not restrict_platforms("baremetal")\nrestrict_platforms("baremetal")  # but this is\n'
+    match = _host_restriction(text)
+    assert match is not None and match.start() == text.index('restrict_platforms("baremetal")  # but')
+    assert _host_restriction('restrict_platforms("linux")\n') is None
+
+
 def test_flight_cmake_reader_goes_past_a_restriction_of_a_hosted_module(tmp_path):
     module = tmp_path / "Mod"
     (module / "Sub").mkdir(parents=True)

@@ -975,7 +975,27 @@ class SystemSimulation:
         element = self.elements.get(self.ground)
         return element.gds_gui_url if element else None
 
+    def _pause_everything(self) -> None:
+        """Pause every element before any is stopped, so that nothing is being sent while the first one
+        shuts down. The elements stop one after another, and one that is still running keeps sending
+        what its tick makes it send into the queues of the one that has stopped its own: flight
+        software that asserts on a full queue (Svc-style `FW_ASSERT(send == OP_OK)`) then aborts in
+        its teardown, with an exit code that says the run failed. Best effort: an element that has no
+        bridge, or does not answer, is stopped as it is."""
+        from .bridge import BridgeError, WstsBridge
+
+        for simulation in self.elements.values():
+            if simulation.sim is None or simulation.sim.poll() is not None or not simulation.bridge.startswith(
+                    ("tcp:", "unix:")):
+                continue
+            try:
+                with WstsBridge(simulation.bridge, connect_timeout=1.0, request_timeout=2.0) as bridge:
+                    bridge.pause()
+            except (BridgeError, OSError):
+                pass
+
     def stop(self) -> Dict[str, Optional[int]]:
+        self._pause_everything()
         codes = {name: simulation.stop() for name, simulation in reversed(list(self.elements.items()))}
         if self._merge_pending:
             self._merge_pending = False

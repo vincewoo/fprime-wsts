@@ -96,6 +96,36 @@ def test_packets_gain_an_omit_list_when_there_is_none():
     assert "} omit {" in patched and "Demo.wstsControl.SimTicks" in patched
 
 
+def test_packets_lose_channels_the_surrogate_lacks():
+    text = '''module Demo {
+  deployment topology Demo {
+    telemetry packets P {
+      packet A id 1 group 1 {
+        uart.BytesRecv, uart.BytesSent
+        Demo.uart.Other
+        other.BytesRecv
+        other.uart.BytesRecv
+      }
+    } omit {
+      uart.BytesRecv
+    }
+  }
+}
+'''
+    patched = patch_packets(text, 3, 5, ["Demo.wstsControl.SimTicks"], ["Demo.uart.BytesRecv", "Demo.uart.BytesSent"])
+    assert "BytesSent" not in patched
+    assert patched.count("uart.BytesRecv") == 1, "only the other instance's spelling is left"
+    assert "other.uart.BytesRecv" in patched and "other.BytesRecv" in patched and "Demo.uart.Other" in patched
+    assert "Demo.wstsControl.SimTicks" in patched
+    assert patched.count("{") == text.count("{"), "the omit list was already there"
+
+
+def test_packets_without_wsts_channels_still_lose_dropped_ones():
+    text = TOPOLOGY.replace("uart.Bytes", "uart.Bytes\n uart.Gone")
+    patched = patch_packets(text, 5, 5, [], ["Demo.uart.Gone"])
+    assert "uart.Gone" not in patched and "uart.Bytes" in patched and "uart.Other" in patched
+
+
 def test_read_registration(tmp_path):
     cmake = tmp_path / "CMakeLists.txt"
     cmake.write_text('''# register_fprime_module(SOURCES commented.cpp)

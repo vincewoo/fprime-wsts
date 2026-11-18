@@ -68,6 +68,9 @@ class Surrogate:
     # analog-to-digital driver that returns a conversion, not a register value): its endpoint takes a
     # register block (`kind: register`) all the same
     register_endpoint: bool = False
+    # True for a surrogate that serves a byte stream endpoint through ports of its own shape (a polled UART
+    # with a poll port and a send port): a link of a system may end at it all the same
+    bytestream_endpoint: bool = False
 
     @property
     def cpp_name(self) -> str:
@@ -169,6 +172,8 @@ def load_catalog(path: Path) -> List[Surrogate]:
                 attributes=_attributes(entry, str(path)),
                 bind=not _no_endpoint(entry.get("endpoint", ""), f"{path}: {entry['surrogate']}", catalog=True),
                 register_endpoint=_flag(entry.get("register_endpoint"), f"{path}: {entry['surrogate']}: register_endpoint"),
+                bytestream_endpoint=_flag(entry.get("bytestream_endpoint"),
+                                          f"{path}: {entry['surrogate']}: bytestream_endpoint"),
             )
         )
     return surrogates
@@ -190,6 +195,7 @@ class Substitution:
     attributes: Dict[str, str] = field(default_factory=dict)
     no_endpoint: bool = False  # `endpoint: none`
     register_endpoint: bool = False  # the endpoint takes a register block although the ports are not register-shaped
+    bytestream_endpoint: bool = False  # the endpoint is a byte stream although the ports are not send and recv
 
 
 @dataclass
@@ -388,7 +394,8 @@ RUN_KEYS = {"env", "models"}
 FILES_KEYS = {"sandbox"}
 MAX_CLOCK_HZ = 100000.0  # Wsts::CycleClock::MAX_HZ
 ENV_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
-SUBSTITUTE_KEYS = {"instance", "component", "with", "endpoint", "options", "ports", "register_endpoint", *ATTRIBUTE_KEYS}
+SUBSTITUTE_KEYS = {"instance", "component", "with", "endpoint", "options", "ports", "register_endpoint", "bytestream_endpoint",
+                   *ATTRIBUTE_KEYS}
 SIMULATOR_KEYS = {"instances", "topologies", "connections", "headers"}
 DEVICE_KEYS = {"instance", "endpoint", "options"}
 CMAKE_KEYS = {"extra_subdirectories", "exclude_subdirectories", "build_on_host", "depends", "cache", "include", "include_early",
@@ -543,6 +550,7 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
                 attributes=_attributes(entry, where),
                 no_endpoint=_no_endpoint(entry.get("endpoint"), where),
                 register_endpoint=_flag(entry.get("register_endpoint"), f"{where}: substitute: register_endpoint"),
+                bytestream_endpoint=_flag(entry.get("bytestream_endpoint"), f"{where}: substitute: bytestream_endpoint"),
             )
         )
 

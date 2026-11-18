@@ -73,6 +73,8 @@ substitute:                      # explicit choices; override the catalog
     options: "chunk=256"         # passed to the surrogate's wstsBind()
     register_endpoint: true      # the surrogate reads registers through ports of its own shape: its endpoint
                                  # takes a `kind: register` model (see "Register blocks")
+    bytestream_endpoint: true    # the surrogate serves a byte stream through ports of its own shape (a polled
+                                 # UART): a link of a system may end at it (see "Links" in systems.md)
     ports: {runIn: schedIn, regOut: }   # flight port -> surrogate port; empty = the surrogate has none
     queue_size: 10               # for a queued or active surrogate replacing an instance without one
     stack_size: 64 * 1024        # active surrogates only, as are priority and cpu

@@ -56,6 +56,10 @@
             "type": "boolean",
             "description": "The surrogate serves registers through ports of its own shape (a driver that returns a conversion, not a register value): its endpoint takes a register block (kind: register)"
           },
+          "bytestream_endpoint": {
+            "type": "boolean",
+            "description": "The surrogate serves a byte stream through ports of its own shape (a polled UART with a poll port and a send port): a link of a system may end at it"
+          },
           "ports": {
             "type": "object",
             "additionalProperties": {

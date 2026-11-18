@@ -291,6 +291,62 @@ def test_a_failed_merged_recording_keeps_the_elements_recordings(tmp_path):
     assert not temporary.exists()
 
 
+def test_a_system_is_paused_throughout_before_any_element_is_stopped(tmp_path, monkeypatch):
+    system = tmp_path / "S"
+    for name in ("a", "b", "c"):
+        (system / name).mkdir(parents=True)
+        (system / name / "wsts-report.json").write_text(json.dumps({"time": {"mode": "realtime"}}))
+    (system / "wsts-system.json").write_text(json.dumps({"system": "S", "ground": "a", "links": [], "elements": [
+        {"name": "a", "directory": "a", "bridge": "tcp:1"}, {"name": "b", "directory": "b", "bridge": "tcp:2"},
+        {"name": "c", "directory": "c", "bridge": "none"}]}))
+    events = []
+
+    class Alive:
+        def poll(self):
+            return None
+
+    class Gone:
+        def poll(self):
+            return 0
+
+    class FakeBridge:
+        def __init__(self, address, **_):
+            if address == "tcp:2":
+                from fprime_wsts.bridge import BridgeError
+                raise BridgeError("not answering")
+            self.address = address
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def pause(self):
+            events.append(("pause", self.address))
+
+    monkeypatch.setattr("fprime_wsts.bridge.WstsBridge", FakeBridge)
+
+    from fprime_wsts.runner import SystemSimulation
+
+    simulation = SystemSimulation(system)
+
+    class Element:
+        def __init__(self, bridge, sim, name):
+            self.bridge, self.sim, self.name = bridge, sim, name
+
+        def stop(self):
+            events.append(("stop", self.name))
+            return 0
+
+    simulation.elements = {"b": Element("tcp:2", Alive(), "b"), "c": Element("none", Alive(), "c"),
+                           "a": Element("tcp:1", Alive(), "a"), "d": Element("tcp:4", Gone(), "d")}
+    simulation.stop()
+    assert events == [("pause", "tcp:1"), ("stop", "d"), ("stop", "a"), ("stop", "c"), ("stop", "b")], \
+        "only a running element with a bridge is paused, a silent one does not hold the others up, and all " \
+        "of it happens before the first stop"
+
+
 def test_elements_built_from_different_states_are_named_before_the_merge(tmp_path):
     from fprime_wsts.runner import dictionary_mismatch
 

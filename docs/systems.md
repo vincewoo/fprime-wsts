@@ -159,6 +159,11 @@ a second link with `a` and `b` swapped. Because the link is a model behind the b
   goes to the other element, which is running live, so a replaying element keeps its
   downlink through the link.
 
+A link may also end at a project surrogate whose ports are not `send` and `recv` (a polled
+UART, for instance) when it says so with `bytestream_endpoint: true`, on its `substitute`
+entry or its catalog entry. It then has to serve its endpoint through the bus's byte stream
+calls (`Bus::bindByteStream`, `Bus::byteStreamSend`), as `Wsts.SimByteStream` does.
+
 An endpoint has either a device model or a link, not both.
 
 #### Datagram links
