@@ -424,3 +424,28 @@ def test_a_register_endpoint_needs_an_endpoint(tmp_path):
     with pytest.raises(WstsError, match=r"substituted with 'register_endpoint: true' and 'endpoint: none'"):
         generate(MISSION, payload(substitute=[*SUBSTITUTE, {**I2C_AS_REGISTERS, "endpoint": "none"}], models=[]),
                  tmp_path / "out")
+
+
+def test_gpio_endpoint_is_read_from_a_substitute_entry_and_a_catalog_entry(tmp_path):
+    entry = {"instance": "pps", "with": "Proj.SimPulseCapture", "gpio_endpoint": True}
+    assert parse_manifest({"deployment": "Payload", "substitute": [entry]}).substitutions[0].gpio_endpoint is True
+    assert parse_manifest({"deployment": "Payload", "substitute": [{**entry, "gpio_endpoint": None}]}) \
+        .substitutions[0].gpio_endpoint is False
+    with pytest.raises(WstsError, match="gpio_endpoint must be true or false, not 'yes please'"):
+        parse_manifest({"deployment": "Payload", "substitute": [{**entry, "gpio_endpoint": "yes please"}]})
+    catalog = tmp_path / "catalog.yaml"
+    catalog.write_text("surrogates:\n  - surrogate: Proj.SimPulseCapture\n    replaces: [Proj.PulseCapture]\n    gpio_endpoint: true\n"
+                       "  - surrogate: Proj.SimOther\n    replaces: [Proj.Other]\n")
+    from fprime_wsts.manifest import load_catalog
+    pulse, other = load_catalog(catalog)
+    assert pulse.gpio_endpoint is True and other.gpio_endpoint is False
+
+
+def test_gpio_endpoints_are_a_list_of_endpoint_names():
+    assert parse_manifest({"deployment": "Payload", "gpio_endpoints": ["ppsOut", "sync"]}).gpio_endpoints == ["ppsOut", "sync"]
+    assert parse_manifest({"deployment": "Payload"}).gpio_endpoints == []
+    for bad in ("ppsOut", [1], [""], {"a": 1}):
+        with pytest.raises(WstsError, match="gpio_endpoints must be a list of endpoint names"):
+            parse_manifest({"deployment": "Payload", "gpio_endpoints": bad})
+    with pytest.raises(WstsError, match="gpio_endpoints names an endpoint twice"):
+        parse_manifest({"deployment": "Payload", "gpio_endpoints": ["ppsOut", "ppsOut"]})

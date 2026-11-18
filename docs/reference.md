@@ -65,6 +65,8 @@ topology: Payload.Payload        # only needed if Top/ defines more than one top
 output: wsts/Payload              # default: wsts/<deployment> in the simulation project, else in the flight project
 
 keep: [comDriver]                # instances never substituted (see "Instance names")
+gpio_endpoints: [ppsOut]         # GPIO endpoints with no surrogate: a model or `setup` code drives them through the
+                                 # bus, and a gpio link of a system may end at one (see "Links" in systems.md)
 substitute:                      # explicit choices; override the catalog
   - instance: radioUart          # an instance name ...
     with: Wsts.SimByteStream
@@ -75,6 +77,8 @@ substitute:                      # explicit choices; override the catalog
                                  # takes a `kind: register` model (see "Register blocks")
     bytestream_endpoint: true    # the surrogate serves a byte stream through ports of its own shape (a polled
                                  # UART): a link of a system may end at it (see "Links" in systems.md)
+    gpio_endpoint: true          # the surrogate serves a GPIO pin through ports of its own shape (a pulse-capture
+                                 # driver): a gpio link of a system may end at it (see "Links" in systems.md)
     ports: {runIn: schedIn, regOut: }   # flight port -> surrogate port; empty = the surrogate has none
     queue_size: 10               # for a queued or active surrogate replacing an instance without one
     stack_size: 64 * 1024        # active surrogates only, as are priority and cpu

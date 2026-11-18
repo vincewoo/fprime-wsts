@@ -77,12 +77,12 @@
           "a": {
             "type": "string",
             "pattern": "^[A-Za-z_][A-Za-z0-9_]*\\..+$",
-            "description": "<element>.<instance>: a byte stream driver instance"
+            "description": "<element>.<instance>: a byte stream or GPIO driver instance (qualified names work too). A gpio link may instead end at an endpoint the element declares under gpio_endpoints"
           },
           "b": {
             "type": "string",
             "pattern": "^[A-Za-z_][A-Za-z0-9_]*\\..+$",
-            "description": "<element>.<instance>: a byte stream driver instance"
+            "description": "<element>.<instance>: a byte stream or GPIO driver instance (qualified names work too). A gpio link may instead end at an endpoint the element declares under gpio_endpoints"
           }
         },
         "additionalProperties": false,

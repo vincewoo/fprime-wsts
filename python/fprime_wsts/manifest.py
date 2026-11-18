@@ -71,6 +71,9 @@ class Surrogate:
     # True for a surrogate that serves a byte stream endpoint through ports of its own shape (a polled UART
     # with a poll port and a send port): a link of a system may end at it all the same
     bytestream_endpoint: bool = False
+    # True for a surrogate that serves a GPIO endpoint through ports of its own shape (a pulse-capture driver
+    # with no gpioWrite and gpioRead): a gpio link of a system may end at it all the same
+    gpio_endpoint: bool = False
 
     @property
     def cpp_name(self) -> str:
@@ -174,6 +177,7 @@ def load_catalog(path: Path) -> List[Surrogate]:
                 register_endpoint=_flag(entry.get("register_endpoint"), f"{path}: {entry['surrogate']}: register_endpoint"),
                 bytestream_endpoint=_flag(entry.get("bytestream_endpoint"),
                                           f"{path}: {entry['surrogate']}: bytestream_endpoint"),
+                gpio_endpoint=_flag(entry.get("gpio_endpoint"), f"{path}: {entry['surrogate']}: gpio_endpoint"),
             )
         )
     return surrogates
@@ -196,6 +200,7 @@ class Substitution:
     no_endpoint: bool = False  # `endpoint: none`
     register_endpoint: bool = False  # the endpoint takes a register block although the ports are not register-shaped
     bytestream_endpoint: bool = False  # the endpoint is a byte stream although the ports are not send and recv
+    gpio_endpoint: bool = False  # the endpoint is a GPIO pin although the ports are not gpioWrite and gpioRead
 
 
 @dataclass
@@ -291,6 +296,9 @@ class Manifest:
     output: Optional[str] = None
     substitutions: List[Substitution] = field(default_factory=list)
     keep: List[str] = field(default_factory=list)
+    # GPIO endpoints that exist without a surrogate: a model or setup code drives them through the bus, and a
+    # gpio link of a system may end at one
+    gpio_endpoints: List[str] = field(default_factory=list)
     models: List[ModelSpec] = field(default_factory=list)
     control_enabled: bool = True
     control_base_id: Optional[int] = None
@@ -376,7 +384,7 @@ class Manifest:
 KNOWN_KEYS = {
     "project", "deployment", "topology", "output", "substitute", "keep", "models", "control", "bridge", "tick_hz",
     "catalogs", "sources", "main", "cmake", "libraries", "fpp_exclude", "defines", "simulators", "devices",
-    "clocks", "run", "host", "setup", "time", "shims", "files", "ids",
+    "clocks", "run", "host", "setup", "time", "shims", "files", "ids", "gpio_endpoints",
 }
 #: Operating system APIs the toolkit implements for project code that calls them (`shims`)
 SHIMS = {"vxworks": "Wsts/VxWorks"}
@@ -395,7 +403,7 @@ FILES_KEYS = {"sandbox"}
 MAX_CLOCK_HZ = 100000.0  # Wsts::CycleClock::MAX_HZ
 ENV_NAME = r"[A-Za-z_][A-Za-z0-9_]*"
 SUBSTITUTE_KEYS = {"instance", "component", "with", "endpoint", "options", "ports", "register_endpoint", "bytestream_endpoint",
-                   *ATTRIBUTE_KEYS}
+                   "gpio_endpoint", *ATTRIBUTE_KEYS}
 SIMULATOR_KEYS = {"instances", "topologies", "connections", "headers"}
 DEVICE_KEYS = {"instance", "endpoint", "options"}
 CMAKE_KEYS = {"extra_subdirectories", "exclude_subdirectories", "build_on_host", "depends", "cache", "include", "include_early",
@@ -509,6 +517,12 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
     manifest.topology = data.get("topology")
     manifest.output = data.get("output")
     manifest.keep = [str(k) for k in data.get("keep", [])]
+    gpio_endpoints = data.get("gpio_endpoints") or []
+    if not isinstance(gpio_endpoints, list) or not all(isinstance(name, str) and name for name in gpio_endpoints):
+        raise WstsError(f"{where}: gpio_endpoints must be a list of endpoint names")
+    if len(set(gpio_endpoints)) != len(gpio_endpoints):
+        raise WstsError(f"{where}: gpio_endpoints names an endpoint twice")
+    manifest.gpio_endpoints = list(gpio_endpoints)
     manifest.bridge = str(data.get("bridge", "none"))
     time = data.get("time") or {}
     unknown = set(time) - TIME_KEYS if isinstance(time, dict) else {"(not a mapping)"}
@@ -551,6 +565,7 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
                 no_endpoint=_no_endpoint(entry.get("endpoint"), where),
                 register_endpoint=_flag(entry.get("register_endpoint"), f"{where}: substitute: register_endpoint"),
                 bytestream_endpoint=_flag(entry.get("bytestream_endpoint"), f"{where}: substitute: bytestream_endpoint"),
+                gpio_endpoint=_flag(entry.get("gpio_endpoint"), f"{where}: substitute: gpio_endpoint"),
             )
         )
 

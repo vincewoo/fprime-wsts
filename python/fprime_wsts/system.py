@@ -281,7 +281,9 @@ def generate_system(system: SystemManifest, output: Optional[Path] = None, check
                 "name": link.name,
                 "kind": link.kind,
                 **{
-                    side: {"element": element, "instance": endpoints[element][link.name]["instance"],
+                    side: {"element": element,
+                           # An end declared under `gpio_endpoints` has no instance: the name the system names
+                           "instance": endpoints[element][link.name]["instance"] or endpoints[element][link.name]["endpoint"],
                            "endpoint": endpoints[element][link.name]["endpoint"]}
                     for side, (element, _) in (("a", link.a), ("b", link.b))
                 },
