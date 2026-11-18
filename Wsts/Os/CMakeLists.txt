@@ -85,6 +85,7 @@ register_fprime_module(
         "${CMAKE_CURRENT_LIST_DIR}/SimFileSystem.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/SimDirectory.cpp"
     HEADERS
+        "${CMAKE_CURRENT_LIST_DIR}/FilePathUtilsCompat.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/SimPath.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/SimFile.hpp"
         "${CMAKE_CURRENT_LIST_DIR}/SimFileSystem.hpp"

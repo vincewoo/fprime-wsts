@@ -12,12 +12,21 @@
 
 #include <Os/Posix/RawTime.hpp>
 
+// F Prime 4.4 gives getDelegate() a RawTimeSource; 4.2 has none
+#if defined(__has_include) && __has_include(<config/RawTimeSource.hpp>)
+#define WSTS_HAS_RAWTIME_SOURCE 1
+#else
+#define WSTS_HAS_RAWTIME_SOURCE 0
+#endif
+
 namespace Wsts {
 
 class SimRawTime : public Os::Posix::RawTime::PosixRawTime {
   public:
     SimRawTime() = default;
+#if WSTS_HAS_RAWTIME_SOURCE
     explicit SimRawTime(Os::RawTimeSource source) : Os::Posix::RawTime::PosixRawTime(source) {}
+#endif
     ~SimRawTime() override = default;
 
     Status now() override;

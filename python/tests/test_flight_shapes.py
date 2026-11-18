@@ -157,6 +157,76 @@ def test_configuration_library_without_a_platform_guard_is_reported(tmp_path):
 
 
 # ----------------------------------------------------------------------
+# A module that restrict_platforms() keeps off the host
+# ----------------------------------------------------------------------
+
+IMU_MANAGER = "Components/ImuManager"
+
+
+@needs_fpp
+def test_build_on_host_adds_a_module_that_restrict_platforms_keeps_off_a_linux_host(tmp_path):
+    project = copy_flight(tmp_path)
+    cmake = project / IMU_MANAGER / "CMakeLists.txt"
+    cmake.write_text('restrict_platforms("baremetal")  # its unit tests need the target\'s types\n' + cmake.read_text())
+
+    with pytest.raises(WstsError, match=r"cannot build on Linux \[restrict_platforms\(\"baremetal\"\)"):
+        generate(project, payload(), tmp_path / "out")
+
+    result = generate(project, payload(cmake={"build_on_host": [IMU_MANAGER]}), tmp_path / "out2")
+    root = (result.output / "CMakeLists.txt").read_text()
+    assert "set(WSTS_HOST_MODULES\n" in root and f"{IMU_MANAGER}\"\n)" in root
+    assert "macro(restrict_platforms)\n" in root and "_restrict_platforms(${ARGN})" in root
+    assert root.index("macro(restrict_platforms)") < root.index("fprime_setup_included_code()"), \
+        "in place before a module reads it"
+    assert [m.endswith(IMU_MANAGER) for m in result.report["built_on_host"]] == [True]
+    assert "## Modules built although restricted" in (result.output / "wsts-report.md").read_text()
+    assert not [w for w in result.report["warnings"] if "although it is restricted" in w]
+
+    # The key has to name a module directory of the build, and is a list of them
+    with pytest.raises(WstsError, match="which is not a module directory"):
+        generate(project, payload(cmake={"build_on_host": [IMU_MANAGER, "Components/Nowhere"]}), tmp_path / "out3")
+    with pytest.raises(WstsError, match="cmake.build_on_host must be a list"):
+        payload(cmake={"build_on_host": "Components/ImuManager"})
+
+
+def test_a_restrict_platforms_call_in_a_comment_restricts_nothing():
+    from fprime_wsts.generate import _host_restriction
+    assert _host_restriction('# via restrict_platforms("baremetal"), leaving their tests\nregister_fprime_module()\n') is None
+    text = 'register_fprime_module()  # not restrict_platforms("baremetal")\nrestrict_platforms("baremetal")  # but this is\n'
+    match = _host_restriction(text)
+    assert match is not None and match.start() == text.index('restrict_platforms("baremetal")  # but')
+    assert _host_restriction('restrict_platforms("linux")\n') is None
+
+
+def test_flight_cmake_reader_goes_past_a_restriction_of_a_hosted_module(tmp_path):
+    module = tmp_path / "Mod"
+    (module / "Sub").mkdir(parents=True)
+    (module / "CMakeLists.txt").write_text(
+        'restrict_platforms("baremetal")\nadd_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Sub")\n')
+    (module / "Sub" / "CMakeLists.txt").write_text("register_fprime_module()\n")
+    assert (module / "Sub") not in flight_cmake.read_tree(module / "CMakeLists.txt").directories
+    assert (module / "Sub").resolve() in flight_cmake.read_tree(module / "CMakeLists.txt", hosted=[module.resolve()]).directories
+
+
+def test_flight_cmake_reader_follows_a_library_manifest_that_adds_its_own_directory(tmp_path):
+    """A library.cmake of one line, add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}"), puts the whole
+    library in one module: its CMakeLists.txt is read, and a stub variant can be chosen for it"""
+    library = tmp_path / "lib"
+    (library / "Sub").mkdir(parents=True)
+    (library / "library.cmake").write_text('add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}")\n')
+    (library / "CMakeLists.txt").write_text(
+        'if (BUILD_TESTING)\n    add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Sub")\nendif()\n')
+    (library / "Sub" / "CMakeLists.txt").write_text("register_fprime_module()\n")
+    plain = flight_cmake.read_tree(library / "library.cmake")
+    assert library.resolve() in plain.directories and (library / "Sub").resolve() not in plain.directories
+    stub = flight_cmake.read_tree(library / "library.cmake", stub_variants=[library.resolve()])
+    assert (library / "Sub").resolve() in stub.directories
+    # A module's own CMakeLists.txt that adds its own directory does not loop
+    (library / "Sub" / "CMakeLists.txt").write_text('add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}")\n')
+    assert flight_cmake.read_tree(library / "Sub" / "CMakeLists.txt").directories == {}
+
+
+# ----------------------------------------------------------------------
 # Headers of replaced drivers
 # ----------------------------------------------------------------------
 

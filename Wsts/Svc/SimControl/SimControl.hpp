@@ -11,6 +11,14 @@
 #include <Wsts/Core/Control.hpp>
 #include <Wsts/Svc/SimControl/SimControlComponentAc.hpp>
 
+// FPP 3.2 passes the enumerations of a command to its handler by value, 3.4 by const reference.
+// The module's CMake file says which (WSTS_FPP_ENUM_BY_VALUE, public)
+#ifdef WSTS_FPP_ENUM_BY_VALUE
+#define WSTS_ENUM_ARG(T) T
+#else
+#define WSTS_ENUM_ARG(T) const T&
+#endif
+
 namespace Wsts {
 
 class SimControl final : public SimControlComponentBase {
@@ -32,8 +40,8 @@ class SimControl final : public SimControlComponentBase {
     void FAULT_SET_cmdHandler(FwOpcodeType opCode,
                               U32 cmdSeq,
                               const Fw::CmdStringArg& endpoint,
-                              const Wsts::SimFaultKind& kind,
-                              const Wsts::SimFaultDir& direction,
+                              WSTS_ENUM_ARG(Wsts::SimFaultKind) kind,
+                              WSTS_ENUM_ARG(Wsts::SimFaultDir) direction,
                               U32 arg,
                               U32 count,
                               U32 ticks) override;
@@ -49,7 +57,7 @@ class SimControl final : public SimControlComponentBase {
     void GPIO_FORCE_cmdHandler(FwOpcodeType opCode,
                                U32 cmdSeq,
                                const Fw::CmdStringArg& endpoint,
-                               const Fw::Logic& level) override;
+                               WSTS_ENUM_ARG(Fw::Logic) level) override;
     void I2C_REG_SET_cmdHandler(FwOpcodeType opCode,
                                 U32 cmdSeq,
                                 const Fw::CmdStringArg& endpoint,
@@ -70,7 +78,7 @@ class SimControl final : public SimControlComponentBase {
     void SCENARIO_LOAD_cmdHandler(FwOpcodeType opCode,
                                   U32 cmdSeq,
                                   const Fw::CmdStringArg& path,
-                                  const Wsts::SimReplayMode& mode) override;
+                                  WSTS_ENUM_ARG(Wsts::SimReplayMode) mode) override;
     void SCENARIO_START_cmdHandler(FwOpcodeType opCode, U32 cmdSeq) override;
     void SCENARIO_STOP_cmdHandler(FwOpcodeType opCode, U32 cmdSeq) override;
     void RECORD_START_cmdHandler(FwOpcodeType opCode, U32 cmdSeq, const Fw::CmdStringArg& path) override;

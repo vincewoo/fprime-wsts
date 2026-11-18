@@ -89,6 +89,22 @@ TEST(SimTask, InRealTimeTasksRunAsTheHostSchedulesThem) {
 }
 
 // ----------------------------------------------------------------------
+// A pin to a core the host does not have
+// ----------------------------------------------------------------------
+
+TEST(SimTask, ATaskPinnedToACoreTheHostLacksStartsUnpinned) {
+    Activity::get().reset();
+    s_order.clear();
+    Os::Task task;
+    // Far above any host's cores, but below the size of a cpu set (1024), so the pin itself can be built
+    const Os::Task::Arguments arguments(Fw::String("pinned"), routine, reinterpret_cast<void*>(7),
+                                        Os::Task::TASK_PRIORITY_DEFAULT, Os::Task::TASK_DEFAULT, 1000);
+    ASSERT_EQ(task.start(arguments), Os::Task::Status::OP_OK);
+    ASSERT_EQ(task.join(), Os::Task::Status::OP_OK);
+    EXPECT_EQ(s_order, (std::vector<int>{7}));
+}
+
+// ----------------------------------------------------------------------
 // Os::Task::delay does not keep the turn
 // ----------------------------------------------------------------------
 

@@ -71,6 +71,10 @@ substitute:                      # explicit choices; override the catalog
     endpoint: radio              # bus endpoint name; default is the instance's base name.
                                  # `endpoint: none`: the surrogate does not use the bus
     options: "chunk=256"         # passed to the surrogate's wstsBind()
+    register_endpoint: true      # the surrogate reads registers through ports of its own shape: its endpoint
+                                 # takes a `kind: register` model (see "Register blocks")
+    bytestream_endpoint: true    # the surrogate serves a byte stream through ports of its own shape (a polled
+                                 # UART): a link of a system may end at it (see "Links" in systems.md)
     ports: {runIn: schedIn, regOut: }   # flight port -> surrogate port; empty = the surrogate has none
     queue_size: 10               # for a queued or active surrogate replacing an instance without one
     stack_size: 64 * 1024        # active surrogates only, as are priority and cpu
@@ -143,6 +147,7 @@ setup:                           # C++ run by the generated set-up once the surr
 cmake:
   extra_subdirectories: [Lib/Math]   # modules with no FPP model that components depend on
   exclude_subdirectories: [...]      # modules to leave out, wherever they are added (project, library, framework)
+  build_on_host: [...]               # modules that restrict_platforms() keeps off a Linux host, built anyway
   depends: [Proj_Math]               # extra link dependencies of the topology module
   cache:                             # CMake cache variables, set before F´ reads the libraries
     SIM_COMPONENTS: [SerialSensorSim, Top]   # a list becomes a CMake list
@@ -297,6 +302,26 @@ flight read or write (`onRead`, `onWrite`), `setBits()` and `raise()`.
 
 The report has a "Register blocks" section: each replaced instance, its endpoint and
 model, which instances read and write through it, and where its interrupt goes.
+
+**A project surrogate with ports of its own shape.** A driver that is not a register
+interface can still read its values from registers: an analog-to-digital driver whose
+port takes a channel and returns a conversion, not a register value, for instance. Its
+surrogate reads the endpoint with `Wsts::Bus::get().registerRead()` itself, and says so with
+`register_endpoint: true` on its `substitute` entry, or on its catalog entry:
+
+```yaml
+substitute:
+  - {instance: adc, with: Proj.SimAdc, register_endpoint: true}
+models:
+  - {name: adcBlock, class: Wsts::RegisterFile, endpoint: adc, kind: register,
+     params: {"reg.0x14": "2034"}}
+```
+
+The generator then attaches the model to the endpoint as it does for a register interface
+component. It cannot check the register map: what an offset means is the surrogate's and the
+model's. There are no ports to report as register accesses and no interrupt (the report lists
+every input port of the surrogate that the topology connects as an access). `register_endpoint`
+with `endpoint: none` is an error: the block is attached to an endpoint.
 
 ### Set-up code
 
@@ -460,6 +485,17 @@ Design and reasons: [design.md](design.md#what-is-taken-from-the-flight-build).
   the report). Something else must then provide whatever depended on it: a module of the
   simulation, given the original's target name with `add_library(<name> ALIAS <target>)` in a
   file named under `cmake.include`.
+- **`cmake.build_on_host`** lists module directories (relative to the flight project) whose
+  `CMakeLists.txt` calls `restrict_platforms()` for a platform other than Linux, and that
+  the simulated build adds anyway. Flight's own build of such a module is a unit-test
+  build or a cross build, so they are often flight logic that a hardware-driven test left
+  off the host: a device manager whose test harness needs the target's types. The overlay
+  defines `restrict_platforms()` ahead of F´'s, which passes the call through for every
+  module but these, and the planner no longer asks for a surrogate for an instance of one.
+  Whatever the module needs from the target's toolchain has to exist on the host: this
+  does not supply it, and `check-host` and the build say what is missing. Errors: a path
+  that is no module directory, the deployment's own directories, and one that
+  `cmake.exclude_subdirectories` leaves out. Report: `built_on_host`.
 - **Link dependencies that are files of the target's SDK** are reported as warnings, with
   the ways out: take the module's stub variant if it has one, substitute the instances that
   need the module, drop the library, exclude the module, or point the variable at a host

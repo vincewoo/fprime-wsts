@@ -5,6 +5,12 @@
 #include <Wsts/Os/SimTask.hpp>
 
 #include <atomic>
+#include <cstddef>
+#include <cstdio>
+
+#if defined(__linux__)
+#include <sched.h>
+#endif
 
 #include <Drv/Ip/SocketComponentHelper.hpp>
 #include <Os/Task.hpp>
@@ -48,7 +54,34 @@ void run(void* pointer) {
 
 }  // namespace
 
-Os::TaskInterface::Status SimTask::start(const Arguments& arguments) {
+Os::TaskInterface::Status SimTask::start(const Arguments& requested) {
+#if defined(__linux__)
+    // Flight pins a task to a core of its target (which may have more cores than a workstation or a
+    // container offers): the kernel refuses a thread whose only allowed core does not exist (EINVAL), and the task
+    // would not start. Which core a thread runs on is not part of what is simulated, so the task is
+    // started without the pin, and the first time it is said.
+    if (requested.m_cpuAffinity != Os::Task::TASK_DEFAULT) {
+        cpu_set_t allowed;
+        CPU_ZERO(&allowed);
+        const bool known = sched_getaffinity(0, sizeof(allowed), &allowed) == 0;
+        if (known && (requested.m_cpuAffinity >= CPU_SETSIZE ||
+                      !CPU_ISSET(static_cast<int>(requested.m_cpuAffinity), &allowed))) {
+            static std::atomic<bool> s_said{false};
+            if (!s_said.exchange(true)) {
+                std::fprintf(stderr,
+                             "[WSTS] task %s is pinned to cpu %zu, which this host does not offer to the process "
+                             "(%d cpus): it, and any other task in that case, starts without the pin\n",
+                             requested.m_name.toChar(), static_cast<std::size_t>(requested.m_cpuAffinity),
+                             CPU_COUNT(&allowed));
+            }
+            const Arguments unpinned(requested.m_name, requested.m_routine, requested.m_routine_argument,
+                                     requested.m_priority, requested.m_stackSize, Os::Task::TASK_DEFAULT,
+                                     requested.m_identifier);
+            return this->start(unpinned);
+        }
+    }
+#endif
+    const Arguments& arguments = requested;
     // Os::Task hands its delegate a wrapper object, which the POSIX task passes to the new
     // thread and which calls the routine the task was given. That routine is exchanged
     // here for one that takes the turn first. Anything else is started as it is.

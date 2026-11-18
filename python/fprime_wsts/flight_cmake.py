@@ -773,13 +773,15 @@ def _loop_values(command: Command, variables: Dict[str, List[str]]) -> List[Dict
 
 
 def read_tree(start: Path, stub_variants: Iterable[Path] = (), excluded: Iterable[Path] = (),
-              tree: Optional[BuildTree] = None, variables: Optional[Dict[str, List[str]]] = None) -> BuildTree:
+              tree: Optional[BuildTree] = None, variables: Optional[Dict[str, List[str]]] = None,
+              hosted: Iterable[Path] = ()) -> BuildTree:
     """Follow a CMake file (a `library.cmake`, or a module's `CMakeLists.txt`) through the
     directories and files it adds with literal paths, or in a `foreach()` over a list in
     `variables`. Reading of a file stops at a `restrict_platforms()` that leaves the host
     out, as F Prime's does. A directory in `stub_variants` is read with BUILD_TESTING on,
-    the others with it off; one in `excluded` is not read."""
-    stub_variants, excluded = set(stub_variants), set(excluded)
+    the others with it off; one in `excluded` is not read. A module in `hosted` is read past
+    its `restrict_platforms()`: the build adds it anyway (`cmake.build_on_host`)."""
+    stub_variants, excluded, hosted = set(stub_variants), set(excluded), set(hosted)
     tree = tree if tree is not None else BuildTree()
     variables = variables or {}
 
@@ -792,7 +794,7 @@ def read_tree(start: Path, stub_variants: Iterable[Path] = (), excluded: Iterabl
         for command in read_commands(cmake_file.read_text(errors="replace")):
             if not in_variant(command, testing):
                 continue
-            if restricts_host(command):
+            if restricts_host(command) and cmake_file.parent not in hosted:
                 break
             applied.append(command)
             if command.name in ("add_fprime_subdirectory", "add_subdirectory", "include") and command.args:
@@ -811,7 +813,11 @@ def read_tree(start: Path, stub_variants: Iterable[Path] = (), excluded: Iterabl
                     if command.name == "include":
                         if target.is_file():
                             read(target, testing)
-                    elif target.is_dir() and target != cmake_file.parent and target not in excluded:
+                    # A module's own directory is not read again, but a library.cmake that adds the
+                    # directory it is in (a library whose modules hang off a root CMakeLists.txt) does
+                    # reach it
+                    elif target.is_dir() and (target != cmake_file.parent or cmake_file.name != "CMakeLists.txt") \
+                            and target not in excluded:
                         tree.directories.setdefault(target, cmake_file)
                         read(target / "CMakeLists.txt", target in stub_variants)
 

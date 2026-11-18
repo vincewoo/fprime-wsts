@@ -72,6 +72,15 @@ class PlannedSubstitution:
     # For a surrogate of a register interface component: its ports that are register
     # accesses or interrupts, port name -> role (read32, write32, read64, write64, interrupt)
     register_roles: Dict[str, str] = field(default_factory=dict)
+    # The surrogate serves registers through ports of another shape (`register_endpoint` in the manifest or
+    # the catalog): the endpoint takes a register block, and there are no roles to report
+    register_endpoint: bool = False
+    # The surrogate serves a byte stream endpoint through ports of another shape (`bytestream_endpoint`)
+    bytestream_endpoint: bool = False
+
+    @property
+    def is_register_endpoint(self) -> bool:
+        return self.bind and (self.register_endpoint or bool(self.register_roles))
 
 
 @dataclass
@@ -99,7 +108,9 @@ class Plan:
 
 
 def _host_restriction(text: str) -> Optional[re.Match]:
-    """The first restrict_platforms() call in CMake text that leaves a Linux host out"""
+    """The first restrict_platforms() call in CMake text that leaves a Linux host out. A call in a
+    comment is not one: the same length of text is kept, so the match positions stay right."""
+    text = re.sub(r"(?m)#.*$", lambda comment: " " * len(comment.group(0)), text)
     for match in re.finditer(r"restrict_platforms\(([^)]*)\)", text):
         platforms = {p.strip().strip('"').lower() for p in match.group(1).split() if p.strip()}
         if platforms and not (platforms & HOST_PLATFORMS):
@@ -107,11 +118,18 @@ def _host_restriction(text: str) -> Optional[re.Match]:
     return None
 
 
-def _restricted_from_host(component: fpp.Component, stop_at: List[Path]) -> Optional[str]:
-    """If the component's module is platform-restricted away from Linux, say how"""
+def _restricted_from_host(component: fpp.Component, stop_at: List[Path],
+                          unrestricted: Iterable[Path] = ()) -> Optional[str]:
+    """If the component's module is platform-restricted away from Linux, say how. The walk
+    up stops at a directory in `unrestricted`: a module the manifest lists under
+    `cmake.build_on_host`, which is built anyway, and the deployment's own directories, whose
+    CMake files the generator writes itself instead of reading flight's."""
     directory = component.file.parent
     roots = {r.resolve() for r in stop_at}
+    allowed = {d.resolve() for d in unrestricted}
     while True:
+        if directory.resolve() in allowed:
+            return None
         for name in ("CMakeLists.txt", "library.cmake"):
             candidate = directory / name
             if not candidate.is_file():
@@ -328,7 +346,8 @@ def adapt_register_surrogates(model: fpp.Model, manifest: Manifest, topology: fp
 
 def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], topology: fpp.Topology, roots: List[Path],
               framework: Optional[Path] = None,
-              adapted: Optional[Dict[str, registers.AdaptedSurrogate]] = None) -> Plan:
+              adapted: Optional[Dict[str, registers.AdaptedSurrogate]] = None,
+              unrestricted: Iterable[Path] = ()) -> Plan:
     plan = Plan(topology)
     plan.adapted = adapted or {}
     plan.sim = sims.collect_added(model, manifest, topology)
@@ -382,6 +401,8 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
         entry_attributes: Dict[str, str] = {}
         entry_no_endpoint = False
         entry_endpoint = False
+        entry_register = False
+        entry_bytestream = False
         kept = name in keep
 
         for entry in manifest.substitutions:
@@ -395,6 +416,8 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
                 entry_attributes = entry.attributes
                 entry_no_endpoint = entry.no_endpoint
                 entry_endpoint = bool(entry.endpoint)
+                entry_register = entry.register_endpoint
+                entry_bytestream = entry.bytestream_endpoint
                 reason = "manifest"
                 break
         if chosen is None and not kept and original.name in replaces:
@@ -410,7 +433,7 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
                              LINK_DATAGRAM_SURROGATE if link_ends[name].kind == "datagram" else LINK_SURROGATE)
                 chosen = by_surrogate.get(surrogate) or Surrogate(name=surrogate, source="link")
                 reason = "link"
-        restriction = None if chosen else _restricted_from_host(original, roots)
+        restriction = None if chosen else _restricted_from_host(original, roots, unrestricted)
         if chosen is None and restriction and not kept:
             # Nothing was named for a component that cannot build on the host: accept a
             # surrogate only if exactly one fits the ports the topology actually uses.
@@ -489,9 +512,15 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
         roles = registers.register_roles(surrogate, model.port_defs)
         if not any(role != "interrupt" for role in roles.values()):
             roles = {}  # an output port alone does not make a register interface
+        register_endpoint = entry_register or chosen.register_endpoint
+        if register_endpoint and not bind:
+            raise WstsError(
+                f"{name} is substituted with 'register_endpoint: true' and 'endpoint: none': a register block is "
+                "attached to an endpoint, so the surrogate needs one"
+            )
         plan.substitutions.append(PlannedSubstitution(
             instance, original, surrogate, chosen, endpoint if bind else "", options, reason, port_map, attributes, bind,
-            roles))
+            roles, register_endpoint, entry_bytestream or chosen.bytestream_endpoint))
 
     # Base IDs for the WSTS instances: above everything the flight topology uses
     highest = 0
@@ -579,9 +608,11 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
             continue
         wanted, what = ({"gpioWrite", "gpioRead"}, "a GPIO driver (no gpioWrite and gpioRead ports)") \
             if end.kind == "gpio" else ({"send", "recv"}, "a byte stream driver (no send and recv ports)")
-        if not wanted <= set(sub.surrogate.ports):
+        if not wanted <= set(sub.surrogate.ports) and not (end.kind != "gpio" and sub.bytestream_endpoint):
             raise WstsError(
-                f"link '{end.link}' ends at {sub.instance.name}, but its surrogate {sub.surrogate.name} is not {what}"
+                f"link '{end.link}' ends at {sub.instance.name}, but its surrogate {sub.surrogate.name} is not {what}. "
+                "A project surrogate that serves a byte stream endpoint through ports of its own shape says so with "
+                "'bytestream_endpoint: true' in its 'substitute' entry or catalog entry"
             )
         for spec in manifest.models:
             if spec.endpoint == sub.endpoint and spec.kind in {"bytestream", "gpio"}:
@@ -598,14 +629,17 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
         if spec.kind != "register":
             continue
         sub = bound[spec.endpoint]
-        if not sub.register_roles or all(role == "interrupt" for role in sub.register_roles.values()):
+        if not sub.register_endpoint and (
+                not sub.register_roles or all(role == "interrupt" for role in sub.register_roles.values())):
             raise WstsError(
                 f"model '{spec.name}' is a register block (kind: register) on endpoint '{spec.endpoint}', which "
                 f"{sub.instance.name} is bound to as {sub.surrogate.name}: that is not a surrogate for a register "
                 "interface component (it has no port that reads or writes a register). Substitute the register "
                 f"interface component with {registers.SURROGATE}, or with a mirror of it, and attach the model to "
-                "that instance's endpoint. Register endpoints: "
-                + (", ".join(sorted(e for e, s in bound.items() if s.register_roles)) or "none") + "."
+                "that instance's endpoint. A project surrogate that serves registers through ports of its own "
+                "shape (a driver that returns a conversion, not a register value) says so with "
+                "'register_endpoint: true' in its 'substitute' entry or catalog entry. Register endpoints: "
+                + (", ".join(sorted(e for e, s in bound.items() if s.is_register_endpoint)) or "none") + "."
             )
         if spec.endpoint in register_models:
             raise WstsError(
@@ -615,6 +649,17 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
             )
         register_models[spec.endpoint] = spec.name
     for sub in plan.substitutions:
+        if sub.register_endpoint and sub.bind and not sub.register_roles:
+            plan.fidelity_notes.append(
+                f"{sub.instance.name} is replaced by {sub.surrogate.name}, which reads its values from the register "
+                f"endpoint '{sub.endpoint}' through ports of its own shape: "
+                + (f"the model '{register_models[sub.endpoint]}'" if sub.endpoint in register_models
+                   else "whatever attaches to the endpoint through the bridge (no model is attached in the manifest: "
+                        "until one is, reads fail and the surrogate gives the flight software what it gives for a "
+                        "failed read)")
+                + " answers them. What a register means is the surrogate's and the model's: the toolkit only "
+                "carries the access."
+            )
         if sub.register_roles and sub.bind:
             plan.fidelity_notes.append(
                 f"{sub.instance.name} is a register interface component, replaced by {sub.surrogate.name}: the flight "
@@ -659,7 +704,8 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
                             f"{no_endpoint_hint(device.endpoint)}")
     sims.plan_devices(
         plan.sim, model, manifest, topology,
-        {sub.endpoint: (sub.instance.name, sims.endpoint_kind(sub.surrogate.ports))
+        {sub.endpoint: (sub.instance.name, "bytestream" if sub.bytestream_endpoint
+                                       else sims.endpoint_kind(sub.surrogate.ports))
          for sub in plan.substitutions if sub.bind},
         {link.endpoint: link.end.link for link in plan.links},
     )
@@ -860,8 +906,32 @@ def pin_pattern_targets(text: str, pattern: fpp.Pattern, targets: List[str], top
             "change ping port numbers (generated)\n" + listing + "    }" + text[match.end():])
 
 
-def patch_packets(text: str, line: int, col: int, channels: List[str]) -> str:
-    """Omit the WSTS channels from a telemetry packet set"""
+def _drop_channels(text: str, line: int, col: int, dropped: List[str]) -> str:
+    """Remove from a telemetry packet set (its packets and its omit list) the channels of replaced
+    drivers that the surrogate does not have. Each is written relative to some enclosing module of
+    its instance, so every trailing part of the qualified name is accepted."""
+    masked = _mask(text)
+    opening = masked.find("{", _offset(text, line, col))
+    end = _matching_brace(masked, opening) + 1
+    tail = re.match(r"\s*omit\s*\{", masked[end:])
+    if tail:
+        end = _matching_brace(masked, end + tail.end() - 1) + 1
+    region = masked[opening:end]
+    spans = []
+    for name in dropped:
+        parts = name.split(".")
+        spellings = "|".join(re.escape(".".join(parts[i:])) for i in range(len(parts) - 1))
+        for match in re.finditer(rf"(?<![\w$.])(?:{spellings})(?![\w$])\s*,?", region):
+            spans.append((opening + match.start(), opening + match.end()))
+    for start, stop in sorted(spans, reverse=True):
+        text = text[:start] + text[stop:]
+    return text
+
+
+def patch_packets(text: str, line: int, col: int, channels: List[str], dropped: Optional[List[str]] = None) -> str:
+    """Omit the WSTS channels from a telemetry packet set, and drop the `dropped` channels of it"""
+    if dropped:
+        text = _drop_channels(text, line, col, dropped)
     masked = _mask(text)
     opening = masked.find("{", _offset(text, line, col))
     closing = _matching_brace(masked, opening)
@@ -971,7 +1041,38 @@ def port_edits(plan: Plan, model: fpp.Model, topology: fpp.Topology) -> List[Tup
 def read_registration(cmake_file: Path, function: str) -> Dict[str, List[str]]:
     """Arguments of the first register_fprime_<function>(...) call, grouped by directive"""
     calls = fpp.read_calls(cmake_file, function)
-    return calls[0] if calls else {}
+    if not calls:
+        return {}
+    registration = calls[0]
+    if not any(registration.values()):
+        registration = _old_style_registration(cmake_file)
+    return registration
+
+
+BUILDABLE_SUFFIXES = (".c", ".cc", ".cpp", ".cxx", ".S", ".s", ".asm")
+
+
+def _old_style_registration(cmake_file: Path) -> Dict[str, List[str]]:
+    """What `set(SOURCE_FILES ...)` and `set(MOD_DEPS ...)` say for a bare `register_fprime_module()`:
+    the old way of listing a module, which F Prime still reads. Sources and FPP files are told
+    apart as F Prime does, by the suffix; a module name written `Fw/Types` is `Fw_Types`."""
+    registration: Dict[str, List[str]] = {}
+    for call in fpp.read_calls(cmake_file, "set"):
+        values = call.get("_", [])
+        if not values:
+            continue
+        name, items = values[0], values[1:]
+        if name == "SOURCE_FILES":
+            for item in items:
+                if item.endswith(BUILDABLE_SUFFIXES):
+                    registration.setdefault("SOURCES", []).append(item)
+                elif item.endswith((".h", ".hpp")):
+                    registration.setdefault("HEADERS", []).append(item)
+                else:
+                    registration.setdefault("AUTOCODER_INPUTS", []).append(item)
+        elif name == "MOD_DEPS":
+            registration.setdefault("DEPENDS", []).extend(i.replace("/", "_") for i in items)
+    return registration
 
 
 def module_dir(fpp_file: Path, root: Path) -> Optional[Path]:
@@ -1110,6 +1211,32 @@ EXCLUDED_CHECK = """
         endif()
     endforeach()"""
 
+HOST_MODULES = """
+# From `cmake.build_on_host` in the manifest: modules that restrict_platforms() keeps off a Linux
+# host, and that this build adds anyway. F Prime's macro returns from the module's CMakeLists.txt;
+# here it does so for every module but these.
+set(WSTS_HOST_MODULES
+{modules}
+)
+if (COMMAND _restrict_platforms)
+    message(FATAL_ERROR "restrict_platforms() is already overridden: fprime-wsts cannot build restricted modules")
+endif()
+macro(restrict_platforms)
+    get_filename_component(WSTS_RESTRICTED_DIR "${{CMAKE_CURRENT_LIST_DIR}}" REALPATH)
+    set(WSTS_RESTRICTED_ALLOWED FALSE)
+    foreach (WSTS_MODULE IN LISTS WSTS_HOST_MODULES)
+        get_filename_component(WSTS_MODULE "${{WSTS_MODULE}}" REALPATH)
+        if (WSTS_MODULE STREQUAL WSTS_RESTRICTED_DIR)
+            set(WSTS_RESTRICTED_ALLOWED TRUE)
+        endif()
+    endforeach()
+    if (WSTS_RESTRICTED_ALLOWED)
+        message(STATUS "[WSTS] ${{WSTS_RESTRICTED_DIR}} is built on the host (cmake.build_on_host)")
+    else()
+        _restrict_platforms(${{ARGN}})
+    endif()
+endmacro()"""
+
 STUB_SETS = """
 # From `cmake.stub_variants` in the manifest: modules that are read with BUILD_TESTING set, so that
 # they take the variant they have for unit tests (a stub in place of code that needs the target's
@@ -1186,6 +1313,11 @@ if (COMMAND _add_fprime_subdirectory)
     message(FATAL_ERROR "add_fprime_subdirectory() is already overridden: fprime-wsts cannot redirect modules")
 endif()
 function(add_fprime_subdirectory FP_SOURCE_DIR)
+    # F Prime clears the variables that module lists are set in (old style) from the scope of the module
+    # that adds a directory, with PARENT_SCOPE. This function is one scope more, so it clears them there too
+    foreach (WSTS_VARIABLE IN ITEMS SOURCE_FILES MOD_DEPS UT_SOURCE_FILES UT_MOD_DEPS EXECUTABLE_NAME)
+        set(${{WSTS_VARIABLE}} PARENT_SCOPE)
+    endforeach()
     get_filename_component(WSTS_REQUESTED "${{FP_SOURCE_DIR}}" REALPATH){deferred_check}{excluded_check}{duplicate_check}{stub_check}
     get_filename_component(WSTS_HERE "${{CMAKE_CURRENT_SOURCE_DIR}}" REALPATH)
     set(WSTS_SOURCE "")
@@ -1630,11 +1762,14 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
         })
     register_blocks = []
     for sub in plan.substitutions:
-        if not sub.register_roles or not sub.bind:
+        if not sub.is_register_endpoint:
             continue
         flight_name = {surrogate_port: flight_port for flight_port, surrogate_port in sub.port_map.items() if surrogate_port}
         interrupt_ports = {flight_name.get(port, port) for port, role in sub.register_roles.items() if role == "interrupt"}
         access_ports = {flight_name.get(port, port) for port, role in sub.register_roles.items() if role != "interrupt"}
+        if not sub.register_roles:
+            # Ports of the surrogate's own shape: every input port is an access
+            access_ports = {flight_name.get(port.name, port.name) for port in sub.surrogate.ports.values() if port.is_input}
         item = plan.adapted.get(sub.original.name)
         register_blocks.append({
             "instance": sub.instance.name,
@@ -2076,6 +2211,11 @@ def render_report(report: dict) -> str:
         for module in report.get("excluded_modules", []):
             lines.append(f"- `{module}` is left out where a library, the framework or another module adds it "
                          "(`cmake.exclude_subdirectories`)")
+    if report.get("built_on_host"):
+        lines += ["", "## Modules built although restricted to another platform", "",
+                  "`restrict_platforms()` keeps these off a Linux host in flight's build. The simulated build adds "
+                  "them (`cmake.build_on_host`), so whatever they need from the target's toolchain has to exist here.", ""]
+        lines += [f"- `{module}`" for module in report["built_on_host"]]
     if report.get("flight_cmake"):
         flight = report["flight_cmake"]
         lines += ["", "## Flight root CMakeLists.txt", "",
@@ -2390,7 +2530,8 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
 
         # Wsts.SimRegister named for a component with port types of its own is written for it
         manifest, adapted = adapt_register_surrogates(model, manifest, topology, output)
-        plan = make_plan(model, manifest, catalog, topology, roots, settings.framework_path, adapted)
+        plan = make_plan(model, manifest, catalog, topology, roots, settings.framework_path, adapted,
+                         [*(manifest.resolve(d, project_root) for d in manifest.build_on_host), deployment_dir, top_dir])
         plan.warnings[:0] = early_warnings
         capacity: Dict[str, dict] = {}
         if plan.sim.added:
@@ -2416,13 +2557,19 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
             edit(sub.instance.file, sub.instance.type_line, sub.instance.type_col,
                  lambda text, sub=sub: patch_instance(text, sub), f"instance {sub.instance.name}")
         added_instances = [SETUP_INSTANCE] + ([CONTROL_INSTANCE] if manifest.control_enabled else [])
-        if manifest.control_enabled and topology.packet_sets:
+        if topology.packet_sets:
             # Named relative to the topology's module, as the topology's own packets are: a
             # topology that shares its module's name would capture a fully qualified name
-            channels = [f"{CONTROL_INSTANCE}.{c}" for c in model.components[CONTROL_COMPONENT].channels]
-            for file, line, col in topology.packet_sets:
-                edit(file, line, col, lambda text, line=line, col=col: patch_packets(text, line, col, channels),
-                     "telemetry packets")
+            channels = ([f"{CONTROL_INSTANCE}.{c}" for c in model.components[CONTROL_COMPONENT].channels]
+                        if manifest.control_enabled else [])
+            # Channels of replaced drivers that the surrogate lacks (a UART's byte counts, say)
+            dropped = [f"{sub.instance.name}.{c}" for sub in plan.substitutions
+                       for c in sorted(set(sub.original.channels) - set(sub.surrogate.channels))]
+            if channels or dropped:
+                for file, line, col in topology.packet_sets:
+                    edit(file, line, col,
+                         lambda text, line=line, col=col: patch_packets(text, line, col, channels, dropped),
+                         "telemetry packets")
         for file, line, col, change, what in port_edits(plan, model, topology):
             edit(file, line, col, change, what)
         if plan.sim.health_pattern is not None:
@@ -2707,6 +2854,7 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         return directory
 
     stub_dirs: List[Path] = list(dict.fromkeys(build_module(entry, "cmake.stub_variants") for entry in manifest.stub_variants))
+    hosted_dirs: List[Path] = list(dict.fromkeys(build_module(entry, "cmake.build_on_host") for entry in manifest.build_on_host))
     name_roots = [settings.framework_path, *settings.library_locations, project_root, *sim_roots]
     module_flags: Dict[Path, Tuple[str, List[str]]] = {}  # module directory -> (its target, flags)
     for entry, flags in manifest.cxx_flags.items():
@@ -2720,13 +2868,14 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
     trees: Dict[Path, flight_cmake.BuildTree] = {project_root: flight_cmake.BuildTree()}
     for directory in order.roots:
         trees[project_root].directories.setdefault(directory, project_root / "CMakeLists.txt")
-        flight_cmake.read_tree(directory / "CMakeLists.txt", stub_dirs, excluded, trees[project_root], set_variables)
+        flight_cmake.read_tree(directory / "CMakeLists.txt", stub_dirs, excluded, trees[project_root], set_variables,
+                               hosted=hosted_dirs)
     unread_roots: List[str] = []
     for library in library_paths:
         start = next((f for f in (library / "library.cmake", library / f"{library.name}.cmake") if f.is_file()), None)
         if library in (TOOLKIT_ROOT, project_root) or start is None:
             continue
-        tree = flight_cmake.read_tree(start, stub_dirs, excluded, None, set_variables)
+        tree = flight_cmake.read_tree(start, stub_dirs, excluded, None, set_variables, hosted=hosted_dirs)
         if tree.unread:
             # A directory is added through a variable: take every module directory below the root
             cmake_file, command = tree.unread[0]
@@ -2739,7 +2888,7 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
                     and (here / d) not in roots)
                 if here != library and "CMakeLists.txt" in files:
                     tree.directories.setdefault(here, start)
-                    flight_cmake.read_tree(here / "CMakeLists.txt", stub_dirs, excluded, tree, set_variables)
+                    flight_cmake.read_tree(here / "CMakeLists.txt", stub_dirs, excluded, tree, set_variables, hosted=hosted_dirs)
         trees[library] = tree
     for directory in dict.fromkeys([*stub_dirs, *module_flags]):
         root = owner(directory / "CMakeLists.txt")
@@ -2946,6 +3095,9 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
     if includes["early"]:
         redirect += ["", "# From `cmake.include_early` in the manifest: before any framework or library module exists",
                      *[f"include({cmake_file(file)})" for file in includes["early"]]]
+    if hosted_dirs:
+        redirect += HOST_MODULES.format(
+            modules="\n".join(f"    {cmake_file(d)}" for d in hosted_dirs)).rstrip("\n").split("\n")
     if replaced or deferred_modules or skipped_dirs or stub_dirs:
         redirect += REDIRECT_TEMPLATE.format(
             originals="\n".join(f'    "${{CMAKE_CURRENT_LIST_DIR}}/{rel(m.original)}"' for m in replaced.values()),
@@ -2960,9 +3112,9 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
             stub_check=STUB_CHECK if stub_dirs else "",
             duplicate_check=DUPLICATE_CHECK,
         ).rstrip("\n").split("\n")
-    elif includes["early"]:
+    elif includes["early"] or hosted_dirs:
         redirect.append("fprime_setup_included_code()")
-    own_setup = bool(replaced or deferred_modules or skipped_dirs or stub_dirs or includes["early"])
+    own_setup = bool(replaced or deferred_modules or skipped_dirs or stub_dirs or includes["early"] or hosted_dirs)
     if flight_root.defines_late:
         redirect += [
             "",
@@ -3133,6 +3285,8 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
             "file": rel(flight_root.file), "carried_over": flight_root.carried, "not_carried_over": flight_root.not_carried}
     if skipped_dirs:
         report["excluded_modules"] = [rel(d) for d in skipped_dirs]
+    if hosted_dirs:
+        report["built_on_host"] = [rel(d) for d in hosted_dirs]
     # ---- Code that waits on the host: what may keep stepped time from working ----
     waiting = hostwait.describe(
         waits_on_host(plan, model, topology, owner, settings.framework_path, sim_roots, stub_dirs, manifest.shims), rel)
@@ -3228,7 +3382,7 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
     host_sources += [(s, deployment) for s in main_sources]
     extra = flight_cmake.BuildTree()
     for file in [*includes["early"], *includes["late"]]:
-        flight_cmake.read_tree(file, stub_dirs, excluded, extra)
+        flight_cmake.read_tree(file, stub_dirs, excluded, extra, hosted=hosted_dirs)
     for tree, module_of in [*[(t, lambda f: shown_module(f.parent)) for t in trees.values()],
                             (extra, lambda f: f"{f.name} (the simulation's CMake)")]:
         host_sources += hostcheck.module_sources(tree, module_of) if tree is not extra else []
