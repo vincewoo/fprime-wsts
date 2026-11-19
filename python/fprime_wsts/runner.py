@@ -96,7 +96,7 @@ def topology_instances(directory: Path) -> List[dict]:
     """Instances of the built topology and the header of each one's class, read from the
     autocoded `<Name>TopologyAc.hpp`: [{"instance", "type", "header"}]"""
     found: List[dict] = []
-    for header in sorted(Path(directory).glob("build-fprime-*/*/Top/*TopologyAc.hpp")):
+    for header in sorted(Path(directory).glob("build-fprime-*/*/*/*TopologyAc.hpp")):
         try:
             text = header.read_text(errors="replace")
         except OSError:

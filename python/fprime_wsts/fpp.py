@@ -164,6 +164,7 @@ class Topology:
     exported: Dict[str, Tuple[str, str]] = field(default_factory=dict)
     exported_loc: Dict[str, Tuple[Path, int, int]] = field(default_factory=dict)  # where each is written
     patterns: List[Pattern] = field(default_factory=list)
+    deployment: bool = False  # written `deployment topology`, as opposed to a subtopology
 
     @property
     def base_name(self) -> str:
@@ -272,16 +273,40 @@ CMAKE_CALL_DIRECTIVES = {
 }
 
 
+def file_variables(cmake_file: Path, text: str) -> Dict[str, List[str]]:
+    """What a CMake file's own `set(NAME values...)` commands give a variable, in the variant
+    a simulated build takes: BUILD_TESTING off, so a value set under `if(BUILD_TESTING)` is not
+    seen, and the last one set wins. Values with a variable of their own are left out."""
+    from .flight_cmake import in_variant, read_commands  # flight_cmake imports this module
+
+    found: Dict[str, List[str]] = {}
+    if not re.search(r"\bset\s*\(", text, re.I):
+        return found
+    for command in read_commands(text):
+        if command.name != "set" or len(command.args) < 1 or not in_variant(command, False):
+            continue
+        values = [a.replace("${CMAKE_CURRENT_LIST_DIR}", str(cmake_file.parent))
+                   .replace("${CMAKE_CURRENT_SOURCE_DIR}", str(cmake_file.parent))
+                  for a in command.args[1:] if a not in ("CACHE", "PARENT_SCOPE", "FORCE")]
+        if "CACHE" in command.args:
+            values = values[:1]
+        if all("${" not in v for v in values):
+            found[command.args[0]] = values
+    return found
+
+
 def read_calls(cmake_file: Path, function: str) -> List[Dict[str, List[str]]]:
     """Arguments of every `function(...)` call in a CMake file, grouped by directive.
 
     This reads the text, it does not evaluate CMake: `${CMAKE_CURRENT_LIST_DIR}` and
-    `${CMAKE_CURRENT_SOURCE_DIR}` are replaced, any other variable is left as written, and a
-    call inside `if()` counts whether or not its condition holds.
+    `${CMAKE_CURRENT_SOURCE_DIR}` are replaced, an argument that is a variable the same file
+    sets with literal values (`file_variables`) is replaced by them, any other variable is left
+    as written, and a call inside `if()` counts whether or not its condition holds.
     """
     if not cmake_file.is_file():
         return []
     text = re.sub(r"#[^\n]*", "", cmake_file.read_text(errors="replace"))
+    variables: Optional[Dict[str, List[str]]] = None
     calls = []
     for match in re.finditer(r"\b" + re.escape(function) + r"\s*\(([^)]*)\)", text, re.S):
         groups: Dict[str, List[str]] = {}
@@ -294,9 +319,43 @@ def read_calls(cmake_file: Path, function: str) -> List[Dict[str, List[str]]]:
             else:
                 token = token.replace("${CMAKE_CURRENT_LIST_DIR}", str(cmake_file.parent))
                 token = token.replace("${CMAKE_CURRENT_SOURCE_DIR}", str(cmake_file.parent))
+                alone = re.fullmatch(r"\$\{(\w+)\}", token)
+                if alone:
+                    if variables is None:
+                        variables = file_variables(cmake_file, text)
+                    if alone.group(1) in variables:
+                        groups.setdefault(current, []).extend(variables[alone.group(1)])
+                        continue
                 groups.setdefault(current, []).append(token)
         calls.append(groups)
     return calls
+
+
+TOPOLOGY_DEFINITION = re.compile(r"^\s*(?:deployment\s+)?topology\s+\w+", re.M)
+
+
+def topology_directory(deployment: Path, named: Optional[str] = None) -> Optional[Path]:
+    """The directory of a deployment that holds its topology: `named`, else `Top/`, else the one
+    directory the deployment's CMakeLists.txt adds that defines a topology (`Payload/Payload/` for
+    deployment `Payload`). None when there is not exactly one."""
+    if named:
+        directory = (deployment / named).resolve()
+        return directory if directory.is_dir() else None
+    top = deployment / "Top"
+    if top.is_dir():
+        return top
+    cmake = deployment / "CMakeLists.txt"
+    if not cmake.is_file() or "register_fprime_deployment" not in cmake.read_text(errors="replace"):
+        return None
+    found: List[Path] = []
+    for call in read_calls(cmake, "add_fprime_subdirectory"):
+        for item in call.get("_", []):
+            directory = Path(item)
+            directory = (directory if directory.is_absolute() else deployment / directory).resolve()
+            if directory.is_dir() and directory not in found and any(
+                    TOPOLOGY_DEFINITION.search(f.read_text(errors="replace")) for f in directory.glob("*.fpp")):
+                found.append(directory)
+    return found[0] if len(found) == 1 else None
 
 
 def find_config_overrides(roots: Iterable[Path], suffixes: Tuple[str, ...] = (".fpp",)) -> Tuple[List[ConfigOverride], List[str]]:
@@ -635,6 +694,20 @@ def _port_def(name: str, data: dict) -> PortDef:
     return PortDef(name, params, _type_text(_some(data.get("returnType"))))
 
 
+def deployment_topologies(local: List[Topology]) -> List[Topology]:
+    """The topologies of a deployment's directory that the deployment can mean: when the directory also
+    defines subtopologies, the one written `deployment topology`"""
+    deployments = [t for t in local if t.deployment]
+    return deployments if len(local) > 1 and len(deployments) == 1 else local
+
+
+def _instance_node(interface_instance: dict) -> Optional[int]:
+    """The AST node of the component instance an interface instance names. FPP 3 writes it as
+    `{"astNodeId": n}`, FPP 4 as the bare number"""
+    ref = interface_instance.get("InterfaceComponentInstance")
+    return ref.get("astNodeId") if isinstance(ref, dict) else ref
+
+
 def _build_model(ast: list, locations: dict, analysis: dict, files: List[Path]) -> Model:
     names: Dict[int, str] = {}  # definition node id -> qualified name
     port_defs: Dict[str, PortDef] = {}
@@ -737,11 +810,11 @@ def _build_model(ast: list, locations: dict, analysis: dict, files: List[Path]) 
         if name is None:
             continue
         file, line, col = _position(locations, node_id)
-        topology = Topology(name, file, line, col)
+        topology = Topology(name, file, line, col, deployment=bool(topology_defs.get(node_id, {}).get("isDeployment")))
         for instance_ref, _ in entry["instanceMap"]:
-            ref = instance_ref.get("InterfaceComponentInstance")
-            if ref is not None and ref["astNodeId"] in instance_by_node:
-                topology.instances.append(instance_by_node[ref["astNodeId"]])
+            ref = _instance_node(instance_ref)
+            if ref in instance_by_node:
+                topology.instances.append(instance_by_node[ref])
         def written(end: dict) -> Tuple[Optional[Tuple[Path, int, int]], bool, Optional[int]]:
             loc = end.get("loc") or {}
             where = None
@@ -756,8 +829,7 @@ def _build_model(ast: list, locations: dict, analysis: dict, files: List[Path]) 
                 ends = []
                 for side in ("from", "to"):
                     port = connection[side]["port"]
-                    ref = port["interfaceInstance"].get("InterfaceComponentInstance")
-                    ends.append((instance_by_node.get(ref["astNodeId"]) if ref else None, _port_name(port["portInstance"])))
+                    ends.append((instance_by_node.get(_instance_node(port["interfaceInstance"])), _port_name(port["portInstance"])))
                 if ends[0][0] and ends[1][0]:
                     from_loc, from_exported, from_index = written(connection["from"])
                     to_loc, to_exported, to_index = written(connection["to"])
@@ -773,15 +845,14 @@ def _build_model(ast: list, locations: dict, analysis: dict, files: List[Path]) 
             ends = []
             for side in ("from", "to"):
                 port = connection[side]["port"]
-                ref = port["interfaceInstance"].get("InterfaceComponentInstance")
-                ends.append((instance_by_node.get(ref["astNodeId"]) if ref else None, _port_name(port["portInstance"])))
+                ends.append((instance_by_node.get(_instance_node(port["interfaceInstance"])), _port_name(port["portInstance"])))
             if ends[0][0] and ends[1][0]:
                 topology.numbered.append(Numbered(ends[0][0], ends[0][1], from_index, ends[1][0], ends[1][1], to_index))
         for port_name, exported in entry.get("portMap", {}).items():
             pii = exported.get("pii", {})
-            ref = pii.get("interfaceInstance", {}).get("InterfaceComponentInstance")
-            if ref and ref["astNodeId"] in instance_by_node and "portInstance" in pii:
-                topology.exported[port_name] = (instance_by_node[ref["astNodeId"]], _port_name(pii["portInstance"]))
+            ref = _instance_node(pii.get("interfaceInstance", {}))
+            if ref in instance_by_node and "portInstance" in pii:
+                topology.exported[port_name] = (instance_by_node[ref], _port_name(pii["portInstance"]))
                 try:
                     topology.exported_loc[port_name] = _position(locations, exported["aNode"]["astNodeId"])
                 except (KeyError, TypeError):

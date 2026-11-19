@@ -153,3 +153,33 @@ def test_module_dir_and_name(tmp_path):
     assert module_dir(component / "Imu.fpp", tmp_path) == component
     assert module_dir(tmp_path / "Components" / "loose.fpp", tmp_path) is None
     assert module_name(component, [tmp_path]) == "Components_Imu"
+
+
+def test_read_calls_expands_a_variable_the_file_sets_in_the_simulated_variant(tmp_path):
+    """The overrides of a project that adds some only when it is not a test build"""
+    cmake = tmp_path / "CMakeLists.txt"
+    cmake.write_text(
+        'if(BUILD_TESTING)\n    set(EXTRA "")\nelse()\n    set(EXTRA "${CMAKE_CURRENT_LIST_DIR}/A.fpp"\n'
+        '            "${CMAKE_CURRENT_LIST_DIR}/B.hpp")\nendif()\n'
+        'register_fprime_config(cfg CONFIGURATION_OVERRIDES "${CMAKE_CURRENT_LIST_DIR}/C.fpp" ${EXTRA} ${OTHER} INTERFACE)\n')
+    (group,) = fpp.read_calls(cmake, "register_fprime_config")
+    assert group["CONFIGURATION_OVERRIDES"] == [str(tmp_path / "C.fpp"), str(tmp_path / "A.fpp"), str(tmp_path / "B.hpp"), "${OTHER}"]
+
+
+def test_instance_references_read_from_fpp_3_and_fpp_4_analyses():
+    """FPP 3 writes the instance of an interface instance as {"astNodeId": n}, FPP 4 as n"""
+    assert fpp._instance_node({"InterfaceComponentInstance": {"astNodeId": 17}}) == 17
+    assert fpp._instance_node({"InterfaceComponentInstance": 17}) == 17
+    assert fpp._instance_node({}) is None
+
+
+def test_the_deployment_topology_is_chosen_among_the_subtopologies_of_its_directory():
+    def topology(name, deployment):
+        return fpp.Topology(name, Path("t.fpp"), 1, 1, deployment=deployment)
+
+    sub_a, sub_b, main = topology("M.A", False), topology("M.B", False), topology("M.D", True)
+    assert fpp.deployment_topologies([sub_a, main, sub_b]) == [main]
+    assert fpp.deployment_topologies([sub_a, sub_b]) == [sub_a, sub_b]  # none is the deployment: the manifest decides
+    assert fpp.deployment_topologies([main]) == [main]
+    other = topology("M.E", True)
+    assert fpp.deployment_topologies([main, other]) == [main, other]  # two deployments: the manifest decides
