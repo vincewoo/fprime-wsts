@@ -27,6 +27,13 @@
       },
       "description": "Instances never substituted, e.g. the ground link (comDriver)"
     },
+    "gpio_endpoints": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "GPIO endpoints that exist without a surrogate: a model or setup code drives them through the bus, and a gpio link of a system may end at one (e.g. a pulse a register model raises)"
+    },
     "substitute": {
       "type": "array",
       "items": {
@@ -59,6 +66,10 @@
           "bytestream_endpoint": {
             "type": "boolean",
             "description": "The surrogate serves a byte stream through ports of its own shape (a polled UART with a poll port and a send port): a link of a system may end at it"
+          },
+          "gpio_endpoint": {
+            "type": "boolean",
+            "description": "The surrogate serves a GPIO pin through ports of its own shape (a pulse-capture driver with no gpioWrite and gpioRead): a gpio link of a system may end at it"
           },
           "ports": {
             "type": "object",

@@ -303,6 +303,97 @@ def test_gpio_link_description(tmp_path):
     }]
 
 
+def pulse_system(tmp_path, endpoints=("pulseOut",), a="one.pulseOut", **changes):
+    """Element `one` declares a gpio endpoint no flight instance has; its pulse goes to a pin of element `two`"""
+    elements = {
+        "one": {"manifest": standalone(tmp_path, "one", "Payload", gpio_endpoints=list(endpoints)),
+                "ids": [0x20000000, 0x2FFFFFFF]},
+        "two": {"manifest": standalone(tmp_path, "two", "Payload", bridge="tcp:50107"),
+                "ids": [0x30000000, 0x3FFFFFFF]},
+    }
+    data = {"system": "Pulse", "elements": elements,
+            "links": [{"name": "pulse", "kind": "gpio", "a": a, "b": "two.Payload.switchPin"}]}
+    data.update(changes)
+    path = tmp_path / "wsts-system.yaml"
+    path.write_text(yaml.safe_dump(data))
+    return load_system(path)
+
+
+@needs_fpp
+def test_gpio_link_may_end_at_a_declared_endpoint_without_an_instance(tmp_path):
+    result = generate_system(pulse_system(tmp_path), tmp_path / "out")
+    one = result.elements["one"].report
+    # Nothing is substituted for the declared end: no surrogate has the endpoint
+    assert all(sub["endpoint"] != "pulseOut" for sub in one["substitutions"])
+    assert one["links"] == [{"link": "pulse", "instance": None, "endpoint": "pulseOut", "role": "listen",
+                             "peer": "two.Payload.switchPin"}]
+    setup = (tmp_path / "out" / "one" / "Payload" / "Top" / "WstsSetup.cpp").read_text()
+    assert "Wsts::LinkGpio link_pulse;" in setup
+    assert 'Wsts::Bus::get().attachGpio("pulseOut", &link_pulse);' in setup
+    assert 'Wsts::configureModel(&link_pulse, "endpoint", "pulseOut")' in setup
+    assert setup.index("Wsts::Runtime::start(config);") < setup.index("link_pulse.start();")
+    # The other end is the pin of a flight driver, as for any gpio link
+    two = next(sub for sub in result.elements["two"].report["substitutions"] if sub["endpoint"] == "switchPin")
+    assert two["surrogate"] == "Wsts.SimGpio"
+    description = json.loads((tmp_path / "out" / "wsts-system.json").read_text())
+    assert description["links"][0]["a"] == {"element": "one", "instance": "pulseOut", "endpoint": "pulseOut"}
+    assert "endpoint `pulseOut` (declared in `gpio_endpoints`, listens) to `two.Payload.switchPin`" in (
+        tmp_path / "out" / "one" / "wsts-report.md").read_text()
+
+
+@needs_fpp
+def test_an_undeclared_endpoint_is_not_an_instance_and_the_error_says_what_is_declared(tmp_path):
+    system = pulse_system(tmp_path, a="one.noSuchPulse")
+    with pytest.raises(WstsError, match=r"ends at instance 'noSuchPulse', which is not in topology .*gpio_endpoints.*pulseOut"):
+        generate_system(system, tmp_path / "out")
+
+
+@needs_fpp
+def test_a_declared_endpoint_cannot_also_name_an_instance(tmp_path):
+    system = pulse_system(tmp_path, endpoints=("heaterPin",), a="one.heaterPin")
+    with pytest.raises(WstsError, match="both a gpio endpoint of the manifest and an instance of the topology"):
+        generate_system(system, tmp_path / "out")
+
+
+@needs_fpp
+def test_a_declared_gpio_endpoint_is_for_gpio_links_only(tmp_path):
+    system = pulse_system(tmp_path, links=[{"name": "pulse", "kind": "bytestream", "a": "one.pulseOut",
+                                            "b": "two.Payload.sensorUart"}])
+    with pytest.raises(WstsError, match="ends at instance 'pulseOut', which is not in topology"):
+        generate_system(system, tmp_path / "out")
+
+
+def test_a_declared_gpio_endpoint_is_the_end_of_one_link_only(tmp_path):
+    # The system manifest refuses it before anything is generated
+    with pytest.raises(WstsError, match=r"one\.pulseOut is an end of both link 'pulse' and link 'again'"):
+        pulse_system(tmp_path, links=[
+            {"name": "pulse", "kind": "gpio", "a": "one.pulseOut", "b": "two.Payload.switchPin"},
+            {"name": "again", "kind": "gpio", "a": "two.Payload.heaterPin", "b": "one.pulseOut"}])
+
+
+@needs_fpp
+def test_a_surrogate_with_ports_of_its_own_shape_is_a_gpio_link_end_when_it_says_so(tmp_path):
+    """Wsts.SimByteStream has send and recv, not gpioWrite and gpioRead: `gpio_endpoint` is what lets a gpio link end at it"""
+    def element(flag):
+        return standalone(tmp_path, f"flag{int(flag)}", "Payload",
+                          substitute=[{"instance": "Payload.sensorUart", "with": "Wsts.SimByteStream",
+                                       **({"gpio_endpoint": True} if flag else {})}])
+
+    for flag, ok in ((False, False), (True, True)):
+        elements = {"one": {"manifest": element(flag), "ids": [0x20000000, 0x2FFFFFFF]},
+                    "two": {"manifest": standalone(tmp_path, f"two{int(flag)}", "Payload", bridge="tcp:50107"),
+                            "ids": [0x30000000, 0x3FFFFFFF]}}
+        path = tmp_path / f"wsts-system{int(flag)}.yaml"
+        path.write_text(yaml.safe_dump({"system": "Shape", "elements": elements, "links": [
+            {"name": "pulse", "kind": "gpio", "a": "one.Payload.sensorUart", "b": "two.Payload.switchPin"}]}))
+        if ok:
+            result = generate_system(load_system(path), tmp_path / f"out{int(flag)}")
+            assert result.elements["one"].report["links"][0]["instance"] == "Payload.sensorUart"
+        else:
+            with pytest.raises(WstsError, match=r"is not a GPIO driver.*'gpio_endpoint: true'"):
+                generate_system(load_system(path), tmp_path / f"out{int(flag)}")
+
+
 @needs_fpp
 def test_gpio_link_end_without_gpio_ports_is_an_error(tmp_path):
     system = gpio_system(tmp_path, links=[{"name": "sep", "kind": "gpio",

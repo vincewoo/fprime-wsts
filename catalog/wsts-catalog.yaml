@@ -15,6 +15,8 @@
 #                its endpoint takes a `kind: register` model
 #   bytestream_endpoint  true: the surrogate serves a byte stream through ports of its own shape (a
 #                polled UART), and a link of a system may end at it
+#   gpio_endpoint  true: the surrogate serves a GPIO pin through ports of its own shape (a pulse-capture
+#                driver), and a gpio link of a system may end at it
 surrogates:
   - surrogate: Wsts.SimByteStream
     replaces:

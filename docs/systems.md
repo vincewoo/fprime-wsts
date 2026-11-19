@@ -164,6 +164,22 @@ UART, for instance) when it says so with `bytestream_endpoint: true`, on its `su
 entry or its catalog entry. It then has to serve its endpoint through the bus's byte stream
 calls (`Bus::bindByteStream`, `Bus::byteStreamSend`), as `Wsts.SimByteStream` does.
 
+A gpio link may likewise end at a project surrogate whose ports are not `gpioWrite` and
+`gpioRead` (a driver that captures a pulse, for instance) when it says so with
+`gpio_endpoint: true`. It then has to serve its endpoint through the bus's GPIO calls
+(`Bus::bindGpio`, which receives the level that arrives, as `Wsts.SimGpio` does).
+
+A gpio link may also end where there is no flight instance at all: at an endpoint the
+element's manifest lists under `gpio_endpoints`. A model of the simulation (a register block
+that raises a pulse once a second, for example) drives that endpoint with
+`Bus::gpioWrite`, and the link carries the level to the other element. Name the endpoint, not
+an instance, in the system manifest:
+
+```yaml
+links:
+  - {name: pps, kind: gpio, a: cdh.ppsOut, b: payload.PpsCapture.pulseIn}   # ppsOut is under gpio_endpoints of cdh's manifest
+```
+
 An endpoint has either a device model or a link, not both.
 
 #### Datagram links

@@ -77,6 +77,8 @@ class PlannedSubstitution:
     register_endpoint: bool = False
     # The surrogate serves a byte stream endpoint through ports of another shape (`bytestream_endpoint`)
     bytestream_endpoint: bool = False
+    # The surrogate serves a GPIO endpoint through ports of another shape (`gpio_endpoint`)
+    gpio_endpoint: bool = False
 
     @property
     def is_register_endpoint(self) -> bool:
@@ -86,7 +88,7 @@ class PlannedSubstitution:
 @dataclass
 class PlannedLink:
     end: LinkEnd
-    instance: str  # qualified instance name
+    instance: Optional[str]  # qualified instance name; None for a link that ends at a declared `gpio_endpoints` entry
     endpoint: str
     kind: str  # bytestream, gpio or datagram: what the link carries
 
@@ -373,15 +375,30 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
     keep = {named(spec) for spec in manifest.keep}
     entry_instance = {id(entry): named(entry.instance) for entry in manifest.substitutions if entry.instance}
 
-    # Links of a multi-element system end at byte stream driver instances of this topology
+    # Links of a multi-element system end at driver instances of this topology, or (a gpio link) at an
+    # endpoint the manifest declares in `gpio_endpoints`, which a model or setup code drives through the bus
     link_ends: Dict[str, LinkEnd] = {}
+    endpoint_ends: Dict[str, LinkEnd] = {}
     for end in manifest.links:
+        if end.kind == "gpio" and end.instance in manifest.gpio_endpoints:
+            if end.instance in endpoint_ends:
+                raise WstsError(f"gpio endpoint '{end.instance}' is an end of both link "
+                                f"'{endpoint_ends[end.instance].link}' and link '{end.link}'")
+            if resolve_instance(end.instance, topology.instances) is not None:
+                raise WstsError(f"link '{end.link}': '{end.instance}' is both a gpio endpoint of the manifest and an "
+                                "instance of the topology. Name the instance with its qualified name, or give the "
+                                "endpoint another name")
+            endpoint_ends[end.instance] = end
+            continue
         try:
             found = resolve_instance(end.instance, topology.instances)
         except WstsError as error:
             raise WstsError(f"link '{end.link}': {error}") from None
         if found is None:
-            raise WstsError(f"link '{end.link}' ends at instance '{end.instance}', which is not in topology {topology.name}")
+            hint = (f" (a gpio link may also end at a gpio endpoint the manifest declares under 'gpio_endpoints': "
+                    f"{', '.join(manifest.gpio_endpoints)})" if end.kind == "gpio" and manifest.gpio_endpoints else "")
+            raise WstsError(f"link '{end.link}' ends at instance '{end.instance}', which is not in topology "
+                            f"{topology.name}{hint}")
         if found in link_ends:
             raise WstsError(f"instance {found} is an end of both link '{link_ends[found].link}' and link '{end.link}'")
         link_ends[found] = end
@@ -403,6 +420,7 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
         entry_endpoint = False
         entry_register = False
         entry_bytestream = False
+        entry_gpio = False
         kept = name in keep
 
         for entry in manifest.substitutions:
@@ -418,6 +436,7 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
                 entry_endpoint = bool(entry.endpoint)
                 entry_register = entry.register_endpoint
                 entry_bytestream = entry.bytestream_endpoint
+                entry_gpio = entry.gpio_endpoint
                 reason = "manifest"
                 break
         if chosen is None and not kept and original.name in replaces:
@@ -520,7 +539,8 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
             )
         plan.substitutions.append(PlannedSubstitution(
             instance, original, surrogate, chosen, endpoint if bind else "", options, reason, port_map, attributes, bind,
-            roles, register_endpoint, entry_bytestream or chosen.bytestream_endpoint))
+            roles, register_endpoint, entry_bytestream or chosen.bytestream_endpoint,
+            entry_gpio or chosen.gpio_endpoint))
 
     # Base IDs for the WSTS instances: above everything the flight topology uses
     highest = 0
@@ -608,11 +628,13 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
             continue
         wanted, what = ({"gpioWrite", "gpioRead"}, "a GPIO driver (no gpioWrite and gpioRead ports)") \
             if end.kind == "gpio" else ({"send", "recv"}, "a byte stream driver (no send and recv ports)")
-        if not wanted <= set(sub.surrogate.ports) and not (end.kind != "gpio" and sub.bytestream_endpoint):
+        flagged = sub.gpio_endpoint if end.kind == "gpio" else sub.bytestream_endpoint
+        if not wanted <= set(sub.surrogate.ports) and not flagged:
+            flag = "gpio_endpoint" if end.kind == "gpio" else "bytestream_endpoint"
             raise WstsError(
                 f"link '{end.link}' ends at {sub.instance.name}, but its surrogate {sub.surrogate.name} is not {what}. "
-                "A project surrogate that serves a byte stream endpoint through ports of its own shape says so with "
-                "'bytestream_endpoint: true' in its 'substitute' entry or catalog entry"
+                f"A project surrogate that serves a {'GPIO pin' if end.kind == 'gpio' else 'byte stream'} endpoint "
+                f"through ports of its own shape says so with '{flag}: true' in its 'substitute' entry or catalog entry"
             )
         for spec in manifest.models:
             if spec.endpoint == sub.endpoint and spec.kind in {"bytestream", "gpio"}:
@@ -622,6 +644,18 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
                     f"a {endpoint_kind} endpoint takes one or the other"
                 )
         plan.links.append(PlannedLink(end, sub.instance.name, sub.endpoint, end.kind))
+    # A gpio link that ends at an endpoint of the manifest's own: nothing is substituted, the endpoint is
+    # driven through the bus by a model or by setup code
+    bound_endpoints = {sub.endpoint for sub in plan.substitutions if sub.bind}
+    for endpoint, end in endpoint_ends.items():
+        if endpoint in bound_endpoints:
+            raise WstsError(f"link '{end.link}': '{endpoint}' is listed under 'gpio_endpoints', but a surrogate is "
+                            "bound to an endpoint of that name. Name the instance in the link instead")
+        for spec in manifest.models:
+            if spec.endpoint == endpoint and spec.kind in {"bytestream", "gpio"}:
+                raise WstsError(f"endpoint '{endpoint}' has both the model '{spec.name}' and the link '{end.link}': "
+                                "a GPIO endpoint takes one or the other")
+        plan.links.append(PlannedLink(end, None, endpoint, "gpio"))
     # ---- Register blocks ----
     bound = {sub.endpoint: sub for sub in plan.substitutions if sub.bind}
     register_models: Dict[str, str] = {}
@@ -705,6 +739,7 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
     sims.plan_devices(
         plan.sim, model, manifest, topology,
         {sub.endpoint: (sub.instance.name, "bytestream" if sub.bytestream_endpoint
+                                       else "gpio" if sub.gpio_endpoint
                                        else sims.endpoint_kind(sub.surrogate.ports))
          for sub in plan.substitutions if sub.bind},
         {link.endpoint: link.end.link for link in plan.links},
@@ -719,7 +754,7 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
             )
     for device in plan.sim.devices:
         for link in plan.links:
-            if link.instance == device.instance:
+            if link.instance is not None and link.instance == device.instance:
                 raise WstsError(f"devices: {device.instance} is also an end of the system link '{link.end.link}'")
     return plan
 
@@ -2086,8 +2121,9 @@ def render_report(report: dict) -> str:
     if report.get("system"):
         lines += ["", f"## Links (element `{report['system']['element']}` of system `{report['system']['name']}`)", ""]
         for link in report["links"]:
-            lines.append(f"- `{link['link']}`: `{link['instance']}` (endpoint `{link['endpoint']}`, {link['role']}s) "
-                         f"to `{link['peer']}`")
+            where = (f"`{link['instance']}` (endpoint `{link['endpoint']}`" if link["instance"]
+                     else f"endpoint `{link['endpoint']}` (declared in `gpio_endpoints`")
+            lines.append(f"- `{link['link']}`: {where}, {link['role']}s) to `{link['peer']}`")
         if not report["links"]:
             lines.append("- none")
     if report.get("simulators"):
