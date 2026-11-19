@@ -186,3 +186,56 @@ def test_simulation_project_needs_a_library_cmake_for_its_modules(tmp_path):
 def test_planned_link_construction_sets_its_kind():
     link = PlannedLink(LinkEnd(link="l", instance="i", role="listen", peer="p", kind="gpio"), "i", "e", "gpio")
     assert link.kind == "gpio"
+
+
+def move_topology(project, name):
+    """The deployment Payload with its topology in Payload/<name>/ instead of Payload/Top/, as a
+    project that names the directory after the deployment has it"""
+    deployment = project / "Payload"
+    (deployment / "Top").rename(deployment / name)
+    for path in deployment.rglob("*"):
+        if path.is_file() and path.suffix in (".cpp", ".hpp", ".fpp", ".txt"):
+            text = path.read_text()
+            text = text.replace("Payload/Top/", f"Payload/{name}/").replace("/Top/", f"/{name}/")
+            text = text.replace("${FPRIME_CURRENT_MODULE}_Top", "${FPRIME_CURRENT_MODULE}_" + name)
+            path.write_text(text)
+
+
+@needs_fpp
+def test_topology_in_a_directory_other_than_top(tmp_path):
+    """Found from the deployment's CMakeLists.txt, or named with `topology_dir`; the overlay keeps the name"""
+    from mission import copy_flight
+    from fprime_wsts.fpp import topology_directory
+
+    project = copy_flight(tmp_path)
+    move_topology(project, "Payload")
+    assert topology_directory(project / "Payload") == project / "Payload" / "Payload"
+    assert topology_directory(project / "Payload", "Payload") == project / "Payload" / "Payload"
+    assert topology_directory(project / "Payload", "Missing") is None
+    result = generate(project, flight_manifest("Payload", keep=["hubDriver"], models=PAYLOAD_MODELS),
+                      tmp_path / "out")
+    overlay = tmp_path / "out" / "Payload"
+    assert not (overlay / "Top").exists()
+    assert (overlay / "Payload" / "CMakeLists.txt").is_file() and (overlay / "Payload" / "WstsSetup.cpp").is_file()
+    cmake = (overlay / "CMakeLists.txt").read_text()
+    assert 'CMAKE_CURRENT_LIST_DIR}/Payload/"' in cmake and "${FPRIME_CURRENT_MODULE}_Payload" in cmake
+    assert "Payload/Payload/PayloadTopologyAc.hpp" in (overlay / "Payload" / "WstsSetup.cpp").read_text()
+    assert {s["instance"] for s in result.report["substitutions"]} >= {"Payload.i2cBus", "Payload.sensorUart"}
+
+
+def test_topology_directory_is_found_without_a_top_directory(tmp_path):
+    from fprime_wsts.fpp import topology_directory
+
+    deployment = tmp_path / "Dep"
+    (deployment / "Dep").mkdir(parents=True)
+    (deployment / "Config").mkdir()
+    (deployment / "Config" / "constants.fpp").write_text("constant A = 1\n")
+    (deployment / "Dep" / "topology.fpp").write_text("module Dep {\n  topology Dep {\n  }\n}\n")
+    cmake = deployment / "CMakeLists.txt"
+    assert topology_directory(deployment) is None  # no register_fprime_deployment()
+    cmake.write_text('add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Config/")\n'
+                     'add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/Dep/")\nregister_fprime_deployment(SOURCES Main.cpp)\n')
+    assert topology_directory(deployment) == deployment / "Dep"
+    (deployment / "Config" / "other.fpp").write_text("topology Other {\n}\n")
+    assert topology_directory(deployment) is None  # two directories define one: the manifest must say
+    assert topology_directory(deployment, "Config") == deployment / "Config"

@@ -16,6 +16,10 @@
       "type": "string",
       "description": "Qualified topology name; only needed if Top/ defines more than one"
     },
+    "topology_dir": {
+      "type": "string",
+      "description": "Directory of the topology, relative to the deployment, when it is not Top/ (default: Top/, else the one directory the deployment's CMakeLists.txt adds that defines a topology)"
+    },
     "output": {
       "type": "string",
       "description": "Output directory. Default: wsts/<deployment> in the simulation project, else in the flight project"

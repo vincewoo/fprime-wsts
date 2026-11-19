@@ -162,20 +162,19 @@ def framework_pins(framework: Path) -> Dict[str, str]:
 
 
 def find_deployments(project: Path, settings: fpp.ProjectSettings) -> List[Path]:
-    """Deployment directories of a project: a Top/ with topology FPP, outside the framework
-    and the libraries"""
+    """Deployment directories of a project: a Top/ with topology FPP, or a directory its
+    CMakeLists.txt adds that defines a topology, outside the framework and the libraries"""
     excluded = {settings.framework_path.resolve(), *(p.resolve() for p in settings.library_locations)}
     deployments = []
     for directory in walk(project):
         if directory.resolve() in excluded or any(e in directory.resolve().parents for e in excluded):
             continue
-        top = directory / "Top"
-        if not top.is_dir():
+        top = fpp.topology_directory(directory)
+        if top is None:
             continue
         cmake = directory / "CMakeLists.txt"
         registers_deployment = cmake.is_file() and "register_fprime_deployment" in cmake.read_text(errors="replace")
-        has_topology = any(re.search(r"^\s*topology\s+\w+", f.read_text(errors="replace"), re.M)
-                           for f in top.glob("*.fpp"))
+        has_topology = any(fpp.TOPOLOGY_DEFINITION.search(f.read_text(errors="replace")) for f in top.glob("*.fpp"))
         if registers_deployment or has_topology:
             deployments.append(directory)
     return deployments
@@ -188,7 +187,7 @@ def find_deployments(project: Path, settings: fpp.ProjectSettings) -> List[Path]
 
 def load_model(project: Path, settings: fpp.ProjectSettings, deployment: Path, work: Path):
     """The FPP model of a deployment, read as fprime-wsts reads it (without the simulation)"""
-    top_dir = deployment / "Top"
+    top_dir = fpp.topology_directory(deployment) or deployment / "Top"
     roots = [settings.framework_path, *settings.library_locations, project]
     config_overrides, _ = fpp.find_config_overrides(roots)
     found_files = fpp.find_fpp_files(roots)
@@ -201,7 +200,7 @@ def load_model(project: Path, settings: fpp.ProjectSettings, deployment: Path, w
     fpp.locate_defs(work, candidates)
     model = fpp.analyze(work, fpp.depend(work, top_fpp) + top_fpp)
     local = [t for t in model.topologies.values() if t.file in top_fpp or t.file.parent == top_dir]
-    return model, local
+    return model, fpp.deployment_topologies(local)
 
 
 def restriction(component: fpp.Component, stop_at: List[Path]) -> Optional[str]:
@@ -321,6 +320,10 @@ def analyse(project: Path, settings: fpp.ProjectSettings, deployment: Path, cata
             trial: bool) -> dict:
     rel = deployment.relative_to(project).as_posix()
     result: dict = {"deployment": rel, "name": deployment.name, "directory": str(deployment)}
+    top_dir = fpp.topology_directory(deployment)
+    top_name = top_dir.relative_to(deployment).as_posix() if top_dir else "Top"
+    if top_name != "Top":
+        result["topology_dir"] = top_name
     stops = [settings.framework_path, *settings.library_locations, project]
     with tempfile.TemporaryDirectory(prefix="wsts-survey-") as scratch:
         try:
@@ -330,8 +333,9 @@ def analyse(project: Path, settings: fpp.ProjectSettings, deployment: Path, cata
             return result
     if len(local) != 1:
         result["topologies"] = [t.name for t in local]
-        result["model_error"] = (f"{len(local)} topologies in Top/: the manifest must name one with 'topology:'"
-                                 if local else "no topology found in Top/")
+        where = f"{top_name}/"
+        result["model_error"] = (f"{len(local)} topologies in {where}: the manifest must name one with 'topology:'"
+                                 if local else f"no topology found in {where}")
         if not local:
             return result
     topology = local[0]
@@ -439,6 +443,8 @@ def minimal_manifest(project: Path, deployment_rel: str, analysis: dict, base: P
         data["keep"] = keep
     if len(analysis.get("topologies", [])) > 1:
         data["topology"] = analysis["topologies"][0]
+    if analysis.get("topology_dir"):
+        data["topology_dir"] = analysis["topology_dir"]
     return data
 
 
@@ -505,6 +511,8 @@ def starter_manifest(project_root: Path, d: dict, sim_dir: Path, system: bool) -
     ]
     if len(d.get("topologies", [])) > 1:
         lines.append(f"topology: {d['topologies'][0]}   # TODO: which topology is the deployment's")
+    if d.get("topology_dir"):
+        lines.append(f"topology_dir: {d['topology_dir']}   # the directory with the topology: not Top/")
     ground = [h["instance"] for h in d.get("hardware", []) if h.get("bytestream_role") == "ground"]
     if ground:
         lines += ["", "# The ground link stays real so the GDS connects as in flight", "keep:"]
@@ -806,7 +814,7 @@ def init_cli(args) -> int:
         raise WstsError(f"no deployment of {project} could be read"
                         + (" (" + "; ".join(problems) + ")" if problems else
                            (f": none is called {', '.join(args.deployment)}" if args.deployment else
-                            ": a deployment is a directory with a Top/ that defines a topology")))
+                            ": a deployment is a directory with a Top/ (or another directory its CMakeLists.txt adds) that defines a topology")))
     report["starters_written"] = written = write_starters(report, target, gitignore=True)
     if args.json:
         print(json.dumps(report, indent=2))
