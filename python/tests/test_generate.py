@@ -239,3 +239,38 @@ def test_topology_directory_is_found_without_a_top_directory(tmp_path):
     (deployment / "Config" / "other.fpp").write_text("topology Other {\n}\n")
     assert topology_directory(deployment) is None  # two directories define one: the manifest must say
     assert topology_directory(deployment, "Config") == deployment / "Config"
+
+
+@needs_fpp
+def test_inputs_of_other_autocoders_are_handed_on_by_the_topology_module(tmp_path):
+    """A project that registers an autocoder (for sequence files, say) lists the files in the topology
+    module's AUTOCODER_INPUTS: the generated module lists them too, at their place in the flight project"""
+    from mission import copy_flight
+
+    project = copy_flight(tmp_path)
+    cmake = project / "Payload" / "Top" / "CMakeLists.txt"
+    text = cmake.read_text()
+    assert '"${CMAKE_CURRENT_LIST_DIR}/topology.fpp"' in text
+    sequence = project / "Payload" / "seqs" / "STARTUP.seq"
+    sequence.parent.mkdir()
+    sequence.write_text("R00:00:00 cmdDisp.CMD_NO_OP\n")
+    cmake.write_text(text.replace('"${CMAKE_CURRENT_LIST_DIR}/topology.fpp"',
+                                  '"${CMAKE_CURRENT_LIST_DIR}/topology.fpp"\n        "${CMAKE_CURRENT_LIST_DIR}/../seqs/STARTUP.seq"'))
+    generate(project, flight_manifest("Payload", keep=["hubDriver"], models=PAYLOAD_MODELS), tmp_path / "out")
+    generated = (tmp_path / "out" / "Payload" / "Top" / "CMakeLists.txt").read_text()
+    inputs = generated.split("AUTOCODER_INPUTS")[1].split("SOURCES")[0]
+    assert "topology.fpp" in inputs
+    # Relative to where the module is written, so that the overlay can be checked in
+    assert '"${CMAKE_CURRENT_LIST_DIR}/' in inputs and inputs.count(".seq") == 1
+    listed = inputs.split(".seq")[0].split('"${CMAKE_CURRENT_LIST_DIR}/')[-1] + ".seq"
+    assert ((tmp_path / "out" / "Payload" / "Top") / listed).resolve() == sequence.resolve()
+
+
+@needs_fpp
+def test_a_topology_module_with_only_fpp_inputs_lists_only_those(tmp_path):
+    from mission import copy_flight
+
+    project = copy_flight(tmp_path)
+    generate(project, flight_manifest("Payload", keep=["hubDriver"], models=PAYLOAD_MODELS), tmp_path / "out")
+    inputs = (tmp_path / "out" / "Payload" / "Top" / "CMakeLists.txt").read_text().split("AUTOCODER_INPUTS")[1].split("SOURCES")[0]
+    assert ".seq" not in inputs and inputs.count(".fpp") == 3  # topology.fpp, instances.fpp, wsts_instances.fpp
