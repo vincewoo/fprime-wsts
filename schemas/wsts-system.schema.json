@@ -46,6 +46,10 @@
               "bridge": {
                 "type": "string",
                 "description": "Default: the manifest's, else tcp:50100, tcp:50101, ..."
+              },
+              "gds": {
+                "type": "boolean",
+                "description": "false: leave this element's dictionary out of the one the GDS uses (and out of its version check), for an element whose items reach the ground only as another element's; not for the ground element. Default: true"
               }
             },
             "additionalProperties": false,

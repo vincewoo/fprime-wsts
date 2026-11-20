@@ -5,8 +5,11 @@ import json
 from pathlib import Path
 
 import socket
+import subprocess
 
 import pytest
+
+from fprime_wsts.fpp import WstsError
 
 from fprime_wsts.runner import Simulation, _wait_until_listening, gds_command
 
@@ -364,6 +367,41 @@ def test_elements_built_from_different_states_are_named_before_the_merge(tmp_pat
     assert f"fprime-wsts build {tmp_path / 'Mission'} --fresh" in message
     assert "framework version" in dictionary_mismatch({**same, "payload": dictionary("payload", "d366f51", "v4.4.2")})
     assert dictionary_mismatch({"cdh": tmp_path / "missing.json", "payload": same["payload"]}) is None
+
+
+def test_an_element_left_out_of_the_gds_dictionary_is_neither_merged_nor_compared(tmp_path, monkeypatch):
+    """`gds: false`: an element on another framework whose items reach the ground only as
+    another element's does not stop `run --gds`"""
+    from fprime_wsts import runner
+
+    system = tmp_path / "S"
+    for name, framework in (("cdh", "v4.4.2"), ("sensor", "v3.6.0")):
+        binary = system / name / "build-artifacts" / "Linux" / name / "bin" / name
+        binary.parent.mkdir(parents=True)
+        binary.write_text("")
+        binary.chmod(0o755)
+        (system / name / "wsts-report.json").write_text(json.dumps({"time": {"mode": "realtime"}}))
+        dictionary = binary.parent.parent / "dict" / f"{name}Dictionary.json"
+        dictionary.parent.mkdir()
+        dictionary.write_text(json.dumps({"metadata": {"projectVersion": "abc", "frameworkVersion": framework}}))
+    elements = [{"name": "cdh", "directory": "cdh", "bridge": "none"},
+                {"name": "sensor", "directory": "sensor", "bridge": "none"}]
+    (system / "wsts-system.json").write_text(json.dumps({"system": "S", "ground": "cdh", "links": [],
+                                                         "elements": elements}))
+    merged = []
+    monkeypatch.setattr(runner.shutil, "which", lambda name: "/bin/true")
+    monkeypatch.setattr(runner.subprocess, "run", lambda command, **kwargs: merged.append(command)
+                        or subprocess.CompletedProcess(command, 0))
+
+    with pytest.raises(WstsError, match=r"different F Prime framework versions \(v4.4.2 in cdh, v3.6.0 in sensor\).*gds: false"):
+        runner.SystemSimulation(system).merge_dictionaries()
+
+    elements[1]["gds"] = False
+    (system / "wsts-system.json").write_text(json.dumps({"system": "S", "ground": "cdh", "links": [],
+                                                         "elements": elements}))
+    dictionary = runner.SystemSimulation(system).merge_dictionaries()
+    assert dictionary.name == "cdhDictionary.json", "the ground element's alone, as it is"
+    assert merged == [], "nothing to merge it with"
 
 
 def test_nothing_of_a_process_group_outlives_a_run(tmp_path):

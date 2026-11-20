@@ -217,9 +217,12 @@ def build(directory: Path, jobs: Optional[int] = None, fresh: bool = False, only
     if system and result["ok"]:
         # Elements built at different times carry different versions, which only shows when
         # the GDS is started on their merged dictionary: say so now, with the way out
-        from .runner import dictionary_mismatch
+        from .runner import dictionary_mismatch, in_gds_dictionary
+        from .system import SYSTEM_FILE
 
-        dictionaries = {name: found for name, element_directory in elements
+        merged = {element["name"] for element in json.loads((directory / SYSTEM_FILE).read_text())["elements"]
+                  if in_gds_dictionary(element)}
+        dictionaries = {name: found for name, element_directory in elements if name in merged
                         for found in sorted(element_directory.glob("build-artifacts/*/*/dict/*Dictionary.json"))[:1]}
         mismatch = dictionary_mismatch(dictionaries, directory)
         if mismatch:

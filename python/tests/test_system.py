@@ -59,6 +59,12 @@ def test_gpio_link_kind_is_accepted():
     assert system.links[0].kind == "gpio"
 
 
+def test_an_element_can_be_left_out_of_the_gds_dictionary():
+    system = parse_system(changed(elements={"cdh": "c.yaml", "payload": {"manifest": "p.yaml", "gds": False}}))
+    assert [(e.name, e.gds) for e in system.elements] == [("cdh", True), ("payload", False)]
+    assert all(e.gds for e in parse_system(TWO).elements), "every element is in it by default"
+
+
 def test_system_manifests_are_told_from_deployment_manifests():
     assert is_system_manifest(SYSTEM)
     assert not is_system_manifest(SIM / "cdh.yaml")
@@ -75,6 +81,8 @@ def test_system_manifests_are_told_from_deployment_manifests():
     (changed(elements={"cdh": {"manifest": "m", "ids": [5]}, "payload": "p"}), r"\[first, last\]"),
     (changed(elements={"cdh": {"manifest": "m", "ids": [0, 100]}, "payload": {"manifest": "p", "ids": [100, 200]}}),
      "windows of 'cdh' and 'payload' overlap"),
+    (changed(elements={"cdh": "c.yaml", "payload": {"manifest": "p.yaml", "gds": "no"}}), "'gds' must be true or false"),
+    (changed(elements={"cdh": {"manifest": "c.yaml", "gds": False}, "payload": "p.yaml"}), "ground element"),
     (changed(links=[{"name": "hub", "a": "cdh.hubDriver"}]), "needs 'name', 'a' and 'b'"),
     (changed(links=[{"name": "hub", "a": "cdh.hubDriver", "b": "elsewhere.x"}]), "<element>.<instance>"),
     (changed(links=[{"name": "hub", "a": "cdh.x", "b": "cdh.y"}]), "same element"),
@@ -429,6 +437,13 @@ def test_elements_must_not_share_wsts_ids(tmp_path):
     (tmp_path / "wsts-system.yaml").write_text(yaml.safe_dump(data))
     with pytest.raises(WstsError, match="wstsControl instances of elements 'one' and 'two' share IDs"):
         generate_system(load_system(tmp_path / "wsts-system.yaml"))
+
+    # Unless one of them is left out of the merged dictionary
+    data["elements"]["two"] = {"manifest": data["elements"]["two"], "gds": False}
+    (tmp_path / "wsts-system.yaml").write_text(yaml.safe_dump(data))
+    elements = generate_system(load_system(tmp_path / "wsts-system.yaml"), tmp_path / "out").description["elements"]
+    assert [element.get("gds", True) for element in elements] == [True, False]
+    assert "gds" not in elements[0], "written only when left out, so other descriptions stay as they were"
 
 
 # ----------------------------------------------------------------------
