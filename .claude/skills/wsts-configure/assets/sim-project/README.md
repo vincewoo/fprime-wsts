@@ -9,8 +9,10 @@ into flight software, and fprime-wsts only reads the flight project.
 
 ## Generate, build, run
 
-Needs the fprime-wsts checkout at `{{WSTS_REL}}`, installed in the active Python
-environment (`pip install -r {{WSTS_REL}}/lib/fprime/requirements.txt -e {{WSTS_REL}}/python`).
+Builds against fprime-wsts pinned as a git submodule at `lib/fprime-wsts`: check it out with
+`git submodule update --init lib/fprime-wsts` after cloning. Any `fprime-wsts` on the path
+runs commands on this project with the pinned one; for the pytest plugin, install that one
+(`pip install -r {{FRAMEWORK_REL}}/requirements.txt -e lib/fprime-wsts/python`).
 
 {{COMMANDS}}
 

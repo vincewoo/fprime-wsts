@@ -32,7 +32,8 @@ one deployment, or a system of several.
 2. **Interview.** It asks what only you know: which components reach hardware, how the
    deployment starts, which computers are linked, which devices matter most.
 3. **Write** a simulation project beside yours (`../my-mission-sim`) with a manifest per
-   deployment, or a whole system, each non-obvious line commented with its reason.
+   deployment, or a whole system, each non-obvious line commented with its reason. The
+   toolkit is pinned in it as a git submodule, `lib/fprime-wsts`.
 4. **Build loop.** Generate, check the host, build and run; stop at the first failure,
    fix one thing, and go again, until the simulated deployment runs.
 

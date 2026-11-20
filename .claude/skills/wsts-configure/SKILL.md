@@ -12,6 +12,7 @@ workspace/
   fprime-wsts/          # this checkout (the toolkit, and this skill)
   my-mission/           # flight project(s): read, never written
   my-mission-sim/       # the simulation project this skill creates
+    lib/fprime-wsts/    # this toolkit, pinned as a git submodule of it
 ```
 
 The goal is a simulated deployment, or a system of them, that **generates, builds and
@@ -105,8 +106,11 @@ python3 <skill>/scripts/survey.py --starter-dir ../my-mission-sim [--deployment 
 ```
 
 This writes `wsts.yaml` for one deployment, or `<element>.yaml` per deployment plus
-`wsts-system.yaml`. Paths are relative to the simulation project. Then settle each
-`TODO`, using `references/decisions.md`:
+`wsts-system.yaml`. Paths are relative to the simulation project. A new simulation project
+also gets this checkout as a git submodule at `lib/fprime-wsts`, at its current commit
+([decisions §2](references/decisions.md#2-where-the-simulation-project-lives)); relay the
+script's warnings about that commit to the user. Then settle each `TODO`, using
+`references/decisions.md`:
 
 | Starter TODO / survey item | Decision |
 |---|---|
@@ -190,8 +194,9 @@ and models), and what is not. Then tell the user, briefly:
 - every decision you made with a default instead of their answer, so they can revisit it;
 - what flight software sees on each endpoint without a model, and the warnings that remain;
 - any flight-project change you proposed and did not make;
-- next steps: device models (`wsts-device-model`), scenarios, tests, CI with
-  `fprime-wsts generate --check` if they check the generated tree in;
+- next steps: commit the simulation project with its `lib/fprime-wsts` submodule; device
+  models (`wsts-device-model`), scenarios, tests, CI with `fprime-wsts generate --check`
+  if they check the generated tree in (CI clones with `--recurse-submodules`);
 - the commands to rerun: `build_loop.py <manifest>`, or the plain `fprime-wsts generate` /
   `fprime-util build` / `fprime-wsts run` lines.
 

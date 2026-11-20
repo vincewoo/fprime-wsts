@@ -323,6 +323,16 @@ def cmd_scaffold(args: argparse.Namespace) -> int:
     return scaffold_cli(args)
 
 
+#: The argument that names what a command works on, for those that work on a simulation project
+TARGETS = {"generate": "manifest", "check-host": "target", "build": "target", "report": "directory",
+           "run": "directory", "status": "directory", "ctl": "directory", "scaffold": "output"}
+
+
+def _target_of(args: argparse.Namespace):
+    name = TARGETS.get(args.command)
+    return Path(getattr(args, name)) if name and getattr(args, name, None) else None
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="fprime-wsts", description="F Prime Workstation Test Set (WSTS) toolkit")
     parser.add_argument("--version", action="version", version=__version__)
@@ -346,6 +356,9 @@ def main(argv=None) -> int:
     init.add_argument("--deployment", action="append", default=[], metavar="NAME",
                       help="only deployments with this directory name (repeatable; default: all)")
     init.add_argument("--no-trial", action="store_true", help="skip the trial generation with a minimal manifest")
+    init.add_argument("--no-submodule", action="store_true",
+                      help="do not add this fprime-wsts checkout to the simulation project as a git submodule at "
+                           "lib/fprime-wsts; the project is then generated with whichever fprime-wsts runs")
     init.add_argument("--json", action="store_true", help="print the survey and what was written as JSON")
     init.set_defaults(handler=cmd_init)
 
@@ -466,6 +479,13 @@ def main(argv=None) -> int:
 
     args = parser.parse_args(argv)
     try:
+        # A simulation project that pins the toolkit (lib/fprime-wsts) is generated, built and run by it
+        target = _target_of(args)
+        if target is not None:
+            from .toolkit import delegate, foreign
+            toolkit = foreign(target)
+            if toolkit is not None:
+                return delegate(toolkit, sys.argv[1:] if argv is None else list(argv), replace=argv is None)
         return args.handler(args)
     except WstsError as error:
         print(f"fprime-wsts: error: {error}", file=sys.stderr)

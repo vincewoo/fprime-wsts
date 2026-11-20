@@ -32,9 +32,10 @@ device models.
 The **flight project** is your existing F´ project. `fprime-wsts` only ever reads it.
 
 The **simulation project** is where everything you write for simulation lives: the
-manifest, device models, surrogates, scenarios. It is usually a sibling directory (or its
-own repository) that names the flight project with `project: ../my-mission`, and it is
-itself an F´ library, so its modules build alongside the flight modules.
+manifest, device models, surrogates, scenarios. It is usually a sibling directory in its
+own repository that names the flight project with `project: ../my-mission`, and it is
+itself an F´ library, so its modules build alongside the flight modules. It pins the
+toolkit as a git submodule, `lib/fprime-wsts`, and is built against that.
 [Create one](../user-guide/simulation-project.md).
 
 ### Manifest

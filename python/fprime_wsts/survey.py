@@ -100,7 +100,8 @@ def walk(root: Path, depth: int = 0):
     except OSError:
         return
     for child in children:
-        if child.name in SKIP_DIRS or child.name.startswith("build-") or (child / fpp.GENERATED_MARKER).exists():
+        if child.name in SKIP_DIRS or child.name.startswith("build-") or (child / fpp.GENERATED_MARKER).exists() \
+                or fpp.is_toolkit_checkout(child):  # a simulation project's submodule of the toolkit
             continue
         yield from walk(child, depth + 1)
 
@@ -765,16 +766,39 @@ def main(argv=None, default_dirs: Optional[List[Path]] = None) -> int:
     parser.add_argument("dirs", nargs="*", help="directories to search (default: the siblings of the fprime-wsts checkout)")
     parser.add_argument("--deployment", action="append", default=[], help="only deployments with this directory name (repeatable)")
     parser.add_argument("--no-trial", action="store_true", help="skip the trial generation")
-    parser.add_argument("--starter-dir", help="write starter manifests here (never overwrites)")
+    parser.add_argument("--starter-dir", help="write starter manifests here (never overwrites); a new simulation "
+                                              "project also gets this checkout as a git submodule at lib/fprime-wsts")
+    parser.add_argument("--no-submodule", action="store_true",
+                        help="with --starter-dir: do not add the toolkit to the simulation project as a submodule")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
     dirs = [Path(d).resolve() for d in args.dirs] or default_dirs or [WSTS_ROOT.parent]
     report = survey(dirs, args.deployment, not args.no_trial)
     if args.starter_dir:
-        report["starters_written"] = write_starters(report, Path(args.starter_dir))
+        target = Path(args.starter_dir).resolve()
+        fresh = not (target.is_dir() and any(target.glob("*.yaml")))
+        report["starters_written"] = write_starters(report, target)
+        if fresh and report["starters_written"] and not args.no_submodule:
+            from .toolkit import pin
+            report["toolkit"] = pin(target)
     print(json.dumps(report, indent=2) if args.json else render(report))
+    if not args.json:
+        print_pinned(report.get("toolkit", {}))
     return 0
+
+
+def print_pinned(toolkit: dict) -> None:
+    """What `pin` did, for a reader"""
+    if toolkit.get("added"):
+        print(f"fprime-wsts added as a git submodule of {toolkit['repository']} at {toolkit['submodule']} "
+              f"(commit {toolkit['commit'][:12]}, {toolkit['url']}): the simulation project is generated, built "
+              "and run with it")
+    elif toolkit.get("skipped"):
+        print(f"fprime-wsts not added as a submodule ({toolkit['skipped']}): the simulation project is generated "
+              "with whichever fprime-wsts runs")
+    for warning in toolkit.get("warnings", []):
+        print(f"warning: {warning}")
 
 
 def survey_cli(args) -> int:
@@ -815,21 +839,32 @@ def init_cli(args) -> int:
                         + (" (" + "; ".join(problems) + ")" if problems else
                            (f": none is called {', '.join(args.deployment)}" if args.deployment else
                             ": a deployment is a directory with a Top/ (or another directory its CMakeLists.txt adds) that defines a topology")))
+    fresh = not (target.is_dir() and any(target.glob("*.yaml")))
     report["starters_written"] = written = write_starters(report, target, gitignore=True)
+    if fresh and written and not getattr(args, "no_submodule", False):
+        # The new project builds against this toolkit, pinned: generated paths point into it
+        from .toolkit import pin
+        report["toolkit"] = pin(target)
     if args.json:
         print(json.dumps(report, indent=2))
         return 0
     print(render(report))
+    toolkit = report.get("toolkit", {})
+    print_pinned(toolkit)
     system = len(analysed) > 1
     manifest = target / ("wsts-system.yaml" if system else "wsts.yaml")
     if not written:
         print(f"Nothing written: {target} already has these manifests\n")
     todos = sum(path.read_text().count("TODO") for path in target.glob("*.yaml"))
     print("Next:")
-    if todos:
-        print(f"  1. settle the {todos} TODO(s) in the manifest{'s' if system else ''}: each says what to decide")
-    print(f"  {'2' if todos else '1'}. fprime-wsts build {manifest}     # generate, then configure and build")
-    print(f"  {'3' if todos else '2'}. fprime-wsts run <the directory it wrote> --gds")
+    steps = [f"settle the {todos} TODO(s) in the manifest{'s' if system else ''}: each says what to decide"] if todos else []
+    steps += [f"fprime-wsts build {manifest}     # generate, then configure and build",
+              "fprime-wsts run <the directory it wrote> --gds"]
+    if toolkit.get("added"):
+        steps.append(f"commit the simulation project with its submodule (git -C {toolkit['repository']} commit); "
+                     f"a clone of it checks the toolkit out with `git submodule update --init {toolkit['path']}`")
+    for number, step in enumerate(steps, 1):
+        print(f"  {number}. {step}")
     return 0
 
 

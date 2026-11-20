@@ -227,11 +227,19 @@ def read_settings(project_root: Path) -> ProjectSettings:
     return ProjectSettings(root, resolve(framework), libraries, section.get("default_toolchain", "native").strip())
 
 
+def is_toolkit_checkout(path: Path) -> bool:
+    """A checkout of fprime-wsts, such as the submodule a simulation project pins it with
+    (`lib/fprime-wsts`). Whatever directory holds one, it is not part of that directory's
+    build: the toolkit is a library of the simulated build of its own, and its examples and
+    tests are nobody's flight project."""
+    return (path / "Wsts" / "Core").is_dir() and (path / "python" / "fprime_wsts").is_dir()
+
+
 def _is_excluded_dir(path: Path) -> bool:
     name = path.name
     if name in EXCLUDED_DIR_NAMES or name.startswith(EXCLUDED_DIR_PREFIXES):
         return True
-    return (path / GENERATED_MARKER).exists()
+    return (path / GENERATED_MARKER).exists() or is_toolkit_checkout(path)
 
 
 def find_fpp_files(roots: Iterable[Path], exclude_globs: Iterable[str] = ()) -> List[Path]:

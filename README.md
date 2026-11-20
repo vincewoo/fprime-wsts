@@ -210,7 +210,8 @@ merged dictionary. Add `--gds-gui` for the GDS's browser GUI instead of the head
 is involved at any point.
 
 To start on a flight project of your own, `fprime-wsts init ../my-mission` surveys it and
-writes a simulation project with starter manifests beside it; the
+writes a simulation project with starter manifests beside it, with this toolkit pinned in
+it as a git submodule (`lib/fprime-wsts`); the
 [user guide](https://vincewoo.github.io/fprime-wsts/) takes it from there.
 
 ## Driving a simulation
@@ -279,9 +280,9 @@ checkout to "set up a WSTS simulation of ../my-mission":
 
 - **`wsts-configure`** surveys the project's deployments and hardware drivers, asks what only
   you know (entry points, which components reach hardware, which computers are linked),
-  writes a simulation project beside yours (`../my-mission-sim`) with a manifest per
-  deployment or a whole system, then generates, builds and runs it, and works through each
-  error until it runs.
+  writes a simulation project beside yours (`../my-mission-sim`, with the toolkit as its
+  `lib/fprime-wsts` submodule) with a manifest per deployment or a whole system, then
+  generates, builds and runs it, and works through each error until it runs.
 - **`wsts-device-model`** writes a device model from a datasheet and checks it against the
   real device over its serial, I2C, SPI or GPIO interface.
 

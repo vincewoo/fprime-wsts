@@ -13,7 +13,7 @@ from mission import MISSION, needs_fpp
 @needs_fpp
 def test_init_writes_a_system_that_loads(tmp_path, capsys):
     sim = tmp_path / "mission-sim"
-    assert main(["init", str(MISSION), "--output", str(sim), "--no-trial"]) == 0
+    assert main(["init", str(MISSION), "--output", str(sim), "--no-trial", "--no-submodule"]) == 0
     printed = capsys.readouterr().out
     assert "Next:" in printed and f"fprime-wsts build {sim / 'wsts-system.yaml'}" in printed
     assert sorted(p.name for p in sim.iterdir()) == [".gitignore", "cdh.yaml", "payload.yaml", "wsts-system.yaml"]
@@ -32,7 +32,8 @@ def test_init_writes_a_system_that_loads(tmp_path, capsys):
 @needs_fpp
 def test_init_of_one_deployment_and_survey(tmp_path, capsys):
     sim = tmp_path / "sim"
-    assert main(["init", str(MISSION), "--output", str(sim), "--deployment", "Payload", "--no-trial", "--json"]) == 0
+    assert main(["init", str(MISSION), "--output", str(sim), "--deployment", "Payload", "--no-trial", "--no-submodule",
+                 "--json"]) == 0
     report = json.loads(capsys.readouterr().out)
     assert [Path(p).name for p in report["starters_written"]] == ["wsts.yaml", ".gitignore"]
     manifest = load_manifest(sim / "wsts.yaml")

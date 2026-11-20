@@ -54,6 +54,17 @@ to the manifest, and the directory becomes a standalone simulation project.
 inside the flight project also works (no `project:` key, manifest next to the
 deployment), but it mixes simulation sources into flight, so suggest it only if they ask.
 
+**The toolkit is a submodule of it**, `lib/fprime-wsts`, which `survey.py --starter-dir`
+(and `fprime-wsts init`) adds to a new simulation project at this checkout's commit,
+making the directory a git repository if it is in none. Generated files then point into
+the project, not at this checkout, and `fprime-wsts` commands on the project are run by
+the pinned toolkit (a line on stderr says so). Tell the user to commit it with the project.
+If the script warns that the commit is not on a remote branch, or that this checkout has
+uncommitted changes, say so: a clone of the simulation project could not check the
+submodule out, or would build a different toolkit than the one tested here. Leave it out
+(`--no-submodule`) only if the user asks, for instance when a monorepo already pins the
+toolkit.
+
 The project needs a `library.cmake` only once it has modules of its own: surrogates,
 models, simulator components, configuration overrides. Until then leave it out. Templates
 are in `assets/sim-project/`. The generated directory (`wsts/`) is a build artifact: put
