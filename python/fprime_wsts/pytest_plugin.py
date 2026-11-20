@@ -35,6 +35,7 @@ def pytest_addoption(parser):
 def pytest_configure(config):
     """With --wsts-auto-ports the GDS started here and fprime-gds's test API (its
     `fprime_test_api` fixture, which reads these options) meet on sockets of this session"""
+    _check_toolkit(config)
     config._wsts_zmq = None
     if config.getoption("--wsts-auto-ports") and config.getoption("--wsts-gds"):
         import tempfile
@@ -44,6 +45,27 @@ def pytest_configure(config):
         for namespace in (config.option, getattr(config, "known_args_namespace", None)):
             if namespace is not None and not getattr(namespace, "zmq_transport", None):
                 namespace.zmq_transport = list(config._wsts_zmq)
+
+
+def _check_toolkit(config):
+    """The plugin runs in this session's Python: unlike the command line, it cannot hand a
+    simulation project that pins another toolkit (lib/fprime-wsts) to that one"""
+    from .fpp import WstsError
+    from .toolkit import foreign
+
+    for option in ("--wsts-deployment", "--wsts-system"):
+        directory = config.getoption(option)
+        if not directory:
+            continue
+        try:
+            toolkit = foreign(Path(directory))
+        except WstsError as error:
+            raise pytest.UsageError(str(error))
+        if toolkit is not None:
+            config.issue_config_time_warning(pytest.PytestConfigWarning(
+                f"{directory} is built with the toolkit its project pins, {toolkit}, and these tests run the "
+                f"fprime_wsts package of another checkout: install the pinned one in this environment "
+                f"(pip install -e {toolkit / 'python'})"), stacklevel=2)
 
 
 def pytest_unconfigure(config):

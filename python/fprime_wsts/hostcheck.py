@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from . import flight_cmake
-from .fpp import GENERATED_MARKER, WstsError
+from .fpp import GENERATED_MARKER, WstsError, is_toolkit_checkout
 from .manifest import SHIMS, TOOLKIT_ROOT
 
 HOST_FILE = "wsts-host"  # wsts-host.json and wsts-host.md, beside the report; not checked in
@@ -109,7 +109,7 @@ def _walk_headers(directory: Path, stop_at: Set[Path]) -> Dict[str, List[str]]:
         directories[:] = [
             d for d in directories
             if d not in PRUNED and not d.startswith("build-") and (here / d) not in stop_at
-            and not (here / d / GENERATED_MARKER).exists()
+            and not (here / d / GENERATED_MARKER).exists() and not is_toolkit_checkout(here / d)
         ]
         for name in files:
             if name.endswith(flight_cmake.HEADER_SUFFIXES) or "." not in name:

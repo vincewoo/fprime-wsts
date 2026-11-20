@@ -2930,7 +2930,7 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
                 directories[:] = sorted(
                     d for d in directories if not d.startswith(("build-", ".")) and d not in ("wsts-logs", "__pycache__")
                     and not (here / d / fpp.GENERATED_MARKER).exists() and (here / d) not in excluded
-                    and (here / d) not in roots)
+                    and (here / d) not in roots and not fpp.is_toolkit_checkout(here / d))
                 if here != library and "CMakeLists.txt" in files:
                     tree.directories.setdefault(here, start)
                     flight_cmake.read_tree(here / "CMakeLists.txt", stub_dirs, excluded, tree, set_variables, hosted=hosted_dirs)

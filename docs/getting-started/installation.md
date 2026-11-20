@@ -60,15 +60,22 @@ fprime-wsts --help
 ## Where your projects go
 
 `fprime-wsts` reads a flight project and writes a simulation next to it. The layout that
-the rest of this guide (and the [agent skills](../user-guide/agents.md)) assumes is three
-sibling checkouts:
+the rest of this guide (and the [agent skills](../user-guide/agents.md)) assumes:
 
 ```
 work/
-  fprime-wsts/        # this repository
+  fprime-wsts/        # this repository: where you run fprime-wsts from at first
   my-mission/         # your flight project, never written to
   my-mission-sim/     # your simulation project (created in the walkthrough)
+    lib/fprime-wsts/  # the toolkit, pinned as a git submodule of the simulation project
 ```
+
+The simulation project builds against its own submodule of the toolkit, which
+`fprime-wsts init` adds at the commit of the checkout it runs from. Generated files point
+into that submodule, not at `../fprime-wsts`, so they are the same on every machine, and
+the project keeps building against the toolkit version it pins when this checkout moves
+on. Any `fprime-wsts` on your path hands a command on such a project to the pinned toolkit
+([Simulation project](../user-guide/simulation-project.md#the-toolkit-submodule)).
 
 The simulated build uses the F´ framework that your flight project's `settings.ini`
 names. The toolkit is built and tested against F´ v4.4.2; `fprime-wsts generate` reports

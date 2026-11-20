@@ -88,32 +88,34 @@ recording and replaying a run inside a test.
 
 The whole loop needs only Linux, CMake, a compiler and Python. A GitHub Actions job:
 
-```yaml title=".github/workflows/sim.yml"
+```yaml title="my-mission-sim/.github/workflows/sim.yml"
 jobs:
   simulation:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-        with: {path: my-mission, submodules: true}
-      - uses: actions/checkout@v4
-        with: {repository: vincewoo/fprime-wsts, path: fprime-wsts, submodules: true}
+      - uses: actions/checkout@v4      # the simulation project, with its lib/fprime-wsts submodule
+        with: {path: my-mission-sim, submodules: true}
+      - uses: actions/checkout@v4      # the flight project, where `project:` says it is
+        with: {repository: my-org/my-mission, path: my-mission, submodules: true}
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
-      - run: pip install -r fprime-wsts/lib/fprime/requirements.txt -e ./fprime-wsts/python pytest
-      - run: fprime-wsts generate my-mission/sim/wsts.yaml
-      - run: fprime-wsts check-host my-mission/sim/wsts/MyDeployment
-      - run: fprime-wsts build my-mission/sim/wsts/MyDeployment
+      - run: pip install -r my-mission/lib/fprime/requirements.txt -e ./my-mission-sim/lib/fprime-wsts/python pytest
+      - run: fprime-wsts generate my-mission-sim/wsts.yaml
+      - run: fprime-wsts check-host my-mission-sim/wsts/MyDeployment
+      - run: fprime-wsts build my-mission-sim/wsts/MyDeployment
       - run: |
-          D=my-mission/sim/wsts/MyDeployment
-          pytest my-mission/sim/tests -p fprime_wsts.pytest_plugin --wsts-deployment $D --wsts-gds \
+          D=my-mission-sim/wsts/MyDeployment
+          pytest my-mission-sim/tests -p fprime_wsts.pytest_plugin --wsts-deployment $D --wsts-gds \
             --dictionary $D/build-artifacts/Linux/MyDeployment/dict/MyDeploymentTopologyDictionary.json
       - if: failure()
         uses: actions/upload-artifact@v4
-        with: {name: wsts-logs, path: my-mission/sim/wsts/MyDeployment/wsts-logs}
+        with: {name: wsts-logs, path: my-mission-sim/wsts/MyDeployment/wsts-logs}
 ```
 
-Adjust the paths to your layout and the dictionary path to what your build writes. Keep
-`wsts-logs/` on failure: `sim.log` and `gds.log` usually explain it.
+Adjust the paths to your layout and the dictionary path to what your build writes. The
+toolkit is the one the simulation project pins, installed from its submodule, with the F´
+tools at the versions of the flight project's framework (`framework_path` in its
+`settings.ini`). Keep `wsts-logs/` on failure: `sim.log` and `gds.log` usually explain it.
 
 For a quick check without pytest, `fprime-wsts run <dir> --duration 30 --json` exits
 non-zero if the deployment stops on its own, and its summary names the cause of an F´
