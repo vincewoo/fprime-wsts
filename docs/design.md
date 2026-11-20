@@ -299,7 +299,8 @@ flowchart LR
 <output>/
   settings.ini, CMakeLists.txt     host toolchain; adds only the project modules the topology needs
   <Deployment>/CMakeLists.txt      reuses the flight Main.cpp, or WstsMain.cpp when there is no main()
-  <Deployment>/Top/
+  <Deployment>/Top/                the topology directory, under its flight name (`Top/` or `topology_dir`);
+                                   its module also hands on the flight inputs of other autocoders
     *.fpp                          patched copies of the topology model
     wsts_instances.fpp              the wstsSetup and wstsControl instances
     WstsSetup.cpp                   binds surrogates, builds and attaches models, starts the runtime
@@ -914,5 +915,6 @@ Replay is repeatable to tick granularity. It is not cycle-exact: see
    `-m32` on the C, C++ and link flags, with a `check-host` probe for the 32-bit runtime.
    Big-endian builds and the adapters remain.
 5. Systems: GPIO links, datagram and connection semantics for socket links, and merged
-   recordings. (Lockstep time across elements and system scenarios are built: phase 4 of
-   item 1.)
+   recordings. *Built* (`kind: gpio` and `kind: datagram` links, `--record-merged` and
+   `--scenario-merged`, [systems.md](systems.md)). Lockstep time across elements and system
+   scenarios are built too: phase 4 of item 1.

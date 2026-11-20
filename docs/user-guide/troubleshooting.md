@@ -28,7 +28,7 @@ Each fix belongs in one of three places:
 |---|---|---|
 | `deployment X has no main()` | The target OS starts it | Add [`main:`](manifest.md#start-a-deployment-that-has-no-main) |
 | `expected exactly one topology in …` | `Top/` defines several | `topology: <Module.Name>` |
-| `… has no Top directory` | `deployment` is not the deployment's directory | Fix `deployment:` (relative to the flight project) and `project:` (relative to the manifest) |
+| `… has no Top directory, and no single directory …` | `deployment` is not the deployment's directory, or its topology is in a directory the generator cannot pick | Fix `deployment:` (relative to the flight project) and `project:` (relative to the manifest), or name the directory with `topology_dir:` |
 | `manifest names instance 'x', which is not in topology` | Typo, or a name from another deployment | Qualified names (`SensorLink.uart`) always work |
 | `instance name 'x' is ambiguous` | Two subtopologies have one | Use the qualified name |
 | `instance X (C) cannot build on Linux […] and no surrogate is mapped` | A platform-restricted component outside the catalog | `substitute` with one of the surrogates the message lists, or a project surrogate; or, for flight logic that only a test harness kept off the host, `cmake.build_on_host: [<module dir>]` |
@@ -39,6 +39,7 @@ Each fix belongs in one of three places:
 | `model 'm' attaches to endpoint 'e', which no surrogate is bound to` | Wrong endpoint name | The message lists the endpoints |
 | `… registers CONFIGURATION_OVERRIDES directly` | The override call is in `library.cmake` | Move it to `config/CMakeLists.txt` and `add_fprime_subdirectory()` it |
 | `uses FPP files from the simulation project … but it has no library.cmake` | Simulation modules with no build | Add a `library.cmake` |
+| `simulator instances outside the 'ids' window …` | A simulator's base ID is above the share of IDs that flight software routes to this deployment | Give the simulator a base ID inside the window, above the flight instances' highest ID (the message gives it), or widen `ids` if flight really routes more here |
 | `base ID … for instance …` from FPP | A simulator instance's IDs collide | Move the simulator's base ID; flight IDs never move |
 | `…yaml:<line>:<column>: not valid YAML` | A syntax error in a manifest or catalog | Fix it at the place named: an unclosed `[` or `{`, a tab, a missing space after `:` |
 | A Python traceback instead of `fprime-wsts: error:` | A toolkit bug | Report it with the traceback and the manifest |
@@ -51,6 +52,7 @@ Each fix belongs in one of three places:
 | A board or SDK header | A stand-in under `host/include/`, added by `cmake.include_early: [host.cmake]` |
 | A library (`-lfoo`) | Install it, add a host build under `host/lib` (`link_directories` in `host.cmake`), or stand in for the module |
 | A `REQUIRED` package | Install it, or `cmake.cache: {<Pkg>_DIR: …}` |
+| `32-bit build` (`-m32`), with `cmake.bits: 32` | Install the compiler's 32-bit runtime (`gcc-multilib`, `g++-multilib` on Debian/Ubuntu), or drop `cmake.bits` |
 | A false positive | `host.ignore: [<name>]` |
 
 ## Configure (`fprime-wsts build`, or `fprime-util generate`)
@@ -86,6 +88,7 @@ Each fix belongs in one of three places:
 | An assert in `Os/MutexInterface.hpp` under `BufferManager` or `GenericHub` | A deployment behind a hub, run alone with its hub driver kept as a real socket: the link is down and buffers run out. Substitute the hub driver or simulate the system. Flight software would do the same with the other computer off |
 | The machine stays busy after a run (`fprime_gds…comm` at 100 %) | A GDS child left by a run of an earlier version of the toolkit, which ended only the GDS itself: `pkill -f fprime_gds.executables`. `fprime-wsts run` now ends the GDS's whole process group |
 | `Address already in use` before the bridge opens | Another run holds the port: stop it, change `bridge:`, or run with `--auto-ports` |
+| The GDS is connected but shows no events or telemetry | The ground link is not framed as the GDS expects by default: give the framing under `run.gds_args` (for example `[--framing-selection, fprime]`) in the manifest of the deployment, or of the ground element of a system |
 | `tick` stays at 0 | The tick source is not simulated (`generate` warned), or the run is paused |
 | `errors` > 0 in the final status | An endpoint without a model, or a model that rejects what flight sends. `--record run.jsonl` shows each transaction |
 | Links down in a system | One element did not start or did not open its link driver: check its `sim.log` |

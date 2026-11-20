@@ -54,6 +54,18 @@ Other options:
 | `--files-dir DIR` | Where relative scenario and recording paths resolve (default: the log directory) |
 | `--gds-port P` | The port the deployment connects to (default 50000) |
 
+The GDS is started with its default framing. A deployment that frames its ground link
+otherwise (the F´ protocol rather than CCSDS space packets, say) says what to add to the
+`fprime-gds` command line in its manifest:
+
+```yaml
+run:
+  gds_args: [--framing-selection, fprime]
+```
+
+In a [system](systems.md) the GDS is the ground element's, so it is that element's
+manifest that says so.
+
 ## The JSON summary
 
 ```json
