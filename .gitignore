@@ -21,8 +21,7 @@ wsts-host.md
 # Seeds the framework's test library writes where unit tests run
 seed-history
 
-# ADW local state and runtime artifacts
-.adw/
+# Local agent state and runtime artifacts
 .agents/
 .commandcode/
 specs/
