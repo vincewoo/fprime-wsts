@@ -40,7 +40,7 @@ from .manifest import LinkEnd, Manifest, id_window, load_manifest, read_yaml, un
 
 SYSTEM_FILE = "wsts-system.json"
 SYSTEM_KEYS = {"system", "ground", "elements", "links", "output"}
-ELEMENT_KEYS = {"manifest", "bridge", "ids"}
+ELEMENT_KEYS = {"manifest", "bridge", "ids", "gds"}
 LINK_KEYS = {"name", "kind", "a", "b"}
 LINK_KINDS = {"bytestream", "gpio", "datagram"}
 FIRST_BRIDGE_PORT = 50100
@@ -54,6 +54,11 @@ class ElementSpec:
     manifest: Path
     bridge: Optional[str] = None
     ids: Optional[Tuple[int, int]] = None
+    # Whether the element's dictionary is merged into the one the GDS uses. An element whose
+    # items the ground never sees by their own IDs (another element translates what it sends
+    # into items of its own dictionary) may leave it out, and with it the check that every
+    # merged dictionary comes from the same project and framework versions.
+    gds: bool = True
 
 
 @dataclass
@@ -143,10 +148,17 @@ def parse_system(data: dict, path: Optional[Path] = None) -> SystemManifest:
             spec.bridge = str(entry["bridge"])
         if entry.get("ids") is not None:
             spec.ids = id_window(entry["ids"], f"{where}: element '{name}'")
+        if entry.get("gds") is not None:
+            if not isinstance(entry["gds"], bool):
+                raise WstsError(f"{where}: element '{name}': 'gds' must be true or false")
+            spec.gds = entry["gds"]
         system.elements.append(spec)
     names = [e.name for e in system.elements]
     if system.ground not in names:
         raise WstsError(f"{where}: 'ground' names '{system.ground}', which is not an element ({', '.join(names)})")
+    if not system.element(system.ground).gds:
+        raise WstsError(f"{where}: element '{system.ground}' is the ground element: the GDS uses its dictionary, "
+                        "so it cannot have 'gds: false'")
     windows = sorted((e.ids, e.name) for e in system.elements if e.ids)
     for (first, first_name), (second, second_name) in zip(windows, windows[1:]):
         if second[0] <= first[1]:
@@ -243,10 +255,11 @@ def generate_system(system: SystemManifest, output: Optional[Path] = None, check
         result.changed += [f"{element.name}/{name}" for name in generated.changed]
 
     # The merged dictionary identifies items by ID: two wstsControl instances with the same
-    # base ID would become one
+    # base ID would become one. An element left out of it (gds: false) cannot collide.
     blocks = [
         (generated.report["control"]["control_base_id"], name)
-        for name, generated in result.elements.items() if generated.report["control"]["enabled"]
+        for name, generated in result.elements.items()
+        if generated.report["control"]["enabled"] and system.element(name).gds
     ]
     blocks.sort()
     for (first, first_name), (second, second_name) in zip(blocks, blocks[1:]):
@@ -273,6 +286,8 @@ def generate_system(system: SystemManifest, output: Optional[Path] = None, check
                 "bridge": manifests[element.name].bridge,
                 "ids": list(element.ids) if element.ids else None,
                 "control_base_id": result.elements[element.name].report["control"]["control_base_id"],
+                # Written only when left out, so descriptions of systems without it stay as they were
+                **({"gds": False} if not element.gds else {}),
             }
             for element in system.elements
         ],

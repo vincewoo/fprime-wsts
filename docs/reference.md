@@ -641,6 +641,10 @@ elements:                        # required: element name -> deployment manifest
     ids: [0x00000000, 0x1FFFFFFF]  # IDs routed to this element; its WSTS instances go inside
     bridge: tcp:50100            # default: the manifest's, else tcp:50100, tcp:50101, ...
   payload: payload.yaml         # short form
+  sensor:
+    manifest: sensor.yaml
+    gds: false                   # leave its dictionary out of the GDS's (and out of the version
+                                 # check): its items reach the ground only as another element's
 links:
   - name: hub                    # also the name faults are addressed by
     kind: bytestream             # default; datagram: connectionless, one message per datagram;

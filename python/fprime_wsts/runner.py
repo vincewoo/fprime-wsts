@@ -766,6 +766,12 @@ def split_recording(source: Path, elements: List[str],
     return {name: str(handles[name][1]) for name in elements if name in handles}
 
 
+def in_gds_dictionary(element: dict) -> bool:
+    """Whether an element of a system description has its dictionary merged into the GDS's
+    (`gds: false` in the system manifest leaves it out)"""
+    return element.get("gds", True)
+
+
 def dictionary_mismatch(dictionaries: Dict[str, Path], directory: Optional[Path] = None) -> Optional[str]:
     """Why the dictionaries of a system's elements cannot be merged into one, if they
     cannot: F Prime writes the version of the checkout into each when its build is
@@ -782,6 +788,12 @@ def dictionary_mismatch(dictionaries: Dict[str, Path], directory: Optional[Path]
     for field, what in (("projectVersion", "project"), ("frameworkVersion", "framework")):
         found = {name: version[field] for name, version in versions.items()}
         if len(set(found.values())) > 1:
+            if field == "frameworkVersion":
+                return (f"the elements are built on different F Prime framework versions ("
+                        + ", ".join(f"{version} in {name}" for name, version in found.items())
+                        + "), and the GDS cannot merge their dictionaries. An element whose items the ground "
+                        "does not decode by their own IDs can be left out of the merge with 'gds: false' under "
+                        "its entry in the system manifest; otherwise build the elements on one framework.")
             return (f"the elements were built from different states of the checkout ({what} version "
                     + ", ".join(f"{version} in {name}" for name, version in found.items())
                     + "), and the GDS cannot merge their dictionaries. The version is written when a build is "
@@ -863,6 +875,8 @@ class SystemSimulation:
             raise WstsError("fprime-merge-dictionary was not found on PATH (it comes with fprime-gds)")
         dictionaries = {}
         for element in self.description["elements"]:
+            if not in_gds_dictionary(element):
+                continue
             _, dictionary, _ = find_artifacts(self.directory / element["directory"])
             if dictionary is None:
                 raise WstsError(f"no dictionary found for element '{element['name']}': has it been built?")

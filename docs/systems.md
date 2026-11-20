@@ -232,7 +232,8 @@ are added to each element:
 
 Without `ids`, each `wstsControl` sits just above its own element's flight IDs, which is
 right whenever the elements' flight IDs already follow the routing. Two elements whose
-`wstsControl` instances would share IDs are an error. `control.base_id` in an element's
+`wstsControl` instances would share IDs are an error, unless one of them is left out of the
+merged dictionary ([`gds: false`](#elements-the-gds-does-not-decode)). `control.base_id` in an element's
 manifest overrides the placement; `control: none` leaves the instance out.
 
 ## Running a system
@@ -255,6 +256,35 @@ if any element exits on its own. With `--gds` it merges the elements' dictionari
 it. Events, telemetry and commands of every element are then available under their usual
 names (`Payload.instrument.TAKE_SAMPLE`, `Cdh.wstsControl.SIM_PAUSE`,
 `Payload.wstsControl.FAULT_SET`, ...).
+
+The merge needs every dictionary to come from the same project and framework versions
+(`projectVersion` and `frameworkVersion` in their metadata); `build` warns and `run --gds`
+stops when they differ.
+
+### Elements the GDS does not decode
+
+An element whose events, telemetry and commands never reach the ground under their own IDs
+does not need its dictionary in the GDS: for example a computer that talks to another over
+a link, where the other one turns what it receives into items of its own dictionary. Leave
+it out of the merge with `gds: false`:
+
+```yaml
+elements:
+  cdh: cdh.yaml
+  sensor:
+    manifest: sensor.yaml
+    gds: false
+```
+
+Such an element is still built, run, linked, recorded and driven through its bridge
+(`fprime-wsts status`, `ctl --element sensor`, `wsts_system["sensor"]` in pytest); only the
+GDS does not know its items, and its `wstsControl` commands are therefore not in the GDS's
+dictionary either. Its dictionary is not compared with the others, so it may be built on
+another F´ framework version than the rest of the system. The other tools are still those
+of one environment: `generate` warns when the FPP tools on PATH differ from what an
+element's framework pins, and `build` uses the `fprime-util` on PATH for every element (with
+`--element`, each can be built from its own virtual environment). The ground element cannot
+have `gds: false`.
 
 Add `--gds-gui` to serve that GDS's browser GUI on the ground element and print its URL
 (`--gds-gui-port`, default 5000; `--gds-gui-addr`, default `127.0.0.1`).
