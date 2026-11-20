@@ -70,8 +70,10 @@ JsonObj SimStatus::toJson() const {
 }
 
 Control& Control::get() {
-    static Control control;
-    return control;
+    // Never destroyed, as the Bus: tick sources and clocks of the deployment's components report to it until the
+    // process is gone
+    static Control* control = new Control;
+    return *control;
 }
 
 Control::Control() {
