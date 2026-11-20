@@ -119,8 +119,10 @@ class Bus::ReplySink : public ByteSink {
 };
 
 Bus& Bus::get() {
-    static Bus bus;
-    return bus;
+    // Never destroyed: surrogates unbind from it in their destructors, which run when a deployment keeps its
+    // components in globals, after function-local statics are gone
+    static Bus* bus = new Bus;
+    return *bus;
 }
 
 Bus::Endpoint& Bus::endpointLocked(const std::string& name) {

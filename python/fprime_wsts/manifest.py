@@ -293,6 +293,7 @@ class Manifest:
     # manifest. The directory holding the manifest is then the simulation project's root.
     project: Optional[str] = None
     topology: Optional[str] = None
+    topology_dir: Optional[str] = None  # directory of the topology, relative to the deployment: default Top/
     output: Optional[str] = None
     substitutions: List[Substitution] = field(default_factory=list)
     keep: List[str] = field(default_factory=list)
@@ -384,7 +385,7 @@ class Manifest:
 
 
 KNOWN_KEYS = {
-    "project", "deployment", "topology", "output", "substitute", "keep", "models", "control", "bridge", "tick_hz",
+    "project", "deployment", "topology", "topology_dir", "output", "substitute", "keep", "models", "control", "bridge", "tick_hz",
     "catalogs", "sources", "main", "cmake", "libraries", "fpp_exclude", "defines", "simulators", "devices",
     "clocks", "run", "host", "setup", "time", "shims", "files", "ids", "gpio_endpoints",
 }
@@ -517,6 +518,7 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
     if data.get("project") is not None:
         manifest.project = str(data["project"])
     manifest.topology = data.get("topology")
+    manifest.topology_dir = str(data["topology_dir"]).strip("/") if data.get("topology_dir") else None
     manifest.output = data.get("output")
     manifest.keep = [str(k) for k in data.get("keep", [])]
     gpio_endpoints = data.get("gpio_endpoints") or []

@@ -62,6 +62,8 @@ the flight project root.
 project: ../flight               # flight project root, relative to this file (standalone simulation project)
 deployment: Payload              # deployment directory (the one containing Top/)
 topology: Payload.Payload        # only needed if Top/ defines more than one topology
+topology_dir: Payload            # the directory of the topology, relative to the deployment, when it is not Top/ (default: Top/,
+                                 # else the one directory the deployment's CMakeLists.txt adds that defines a topology)
 output: wsts/Payload              # default: wsts/<deployment> in the simulation project, else in the flight project
 
 keep: [comDriver]                # instances never substituted (see "Instance names")

@@ -11,6 +11,7 @@ order you usually need the keys. Every key is in the
 project: ../my-mission
 deployment: MyDeployment
 topology: MyDeployment.MyDeployment   # only if Top/ has several
+topology_dir: MyDeployment            # only if the topology is not in Top/ (found by itself when the deployment's CMakeLists.txt adds one directory with a topology)
 ```
 
 With only this, `generate` replaces every instance whose component is in the
