@@ -6,6 +6,8 @@ from pathlib import Path
 
 import socket
 
+import pytest
+
 from fprime_wsts.runner import Simulation, _wait_until_listening, gds_command
 
 DICTIONARY = Path("/d/MissionDictionary.json")
@@ -487,3 +489,50 @@ def test_command_takes_the_arguments_the_manifest_adds():
     # With a GUI the arguments still come last
     assert gds_command("fprime-gds", DICTIONARY, 50000, LOGS, gui_port=8080, extra=["--x"])[-1] == "--x"
     assert gds_command("fprime-gds", DICTIONARY, 50000, LOGS) == gds_command("fprime-gds", DICTIONARY, 50000, LOGS, extra=[])
+
+
+def test_a_termination_signal_is_an_interrupt_for_the_length_of_a_run():
+    import os
+    import signal
+
+    from fprime_wsts.runner import terminate_as_interrupt
+
+    before = (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP))
+    with terminate_as_interrupt():
+        for number in (signal.SIGTERM, signal.SIGHUP):
+            with pytest.raises(KeyboardInterrupt):
+                os.kill(os.getpid(), number)
+    assert (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGHUP)) == before
+
+
+def test_a_hangup_that_was_ignored_stays_ignored():
+    """`nohup fprime-wsts run ...` has to survive its terminal, as it does without this"""
+    import signal
+
+    from fprime_wsts.runner import terminate_as_interrupt
+
+    original = signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    try:
+        with terminate_as_interrupt():
+            assert signal.getsignal(signal.SIGHUP) is signal.SIG_IGN
+            assert signal.getsignal(signal.SIGTERM) is not signal.SIG_DFL
+        assert signal.getsignal(signal.SIGHUP) is signal.SIG_IGN
+    finally:
+        signal.signal(signal.SIGHUP, original)
+
+
+def test_it_does_nothing_outside_the_main_thread():
+    import threading
+
+    from fprime_wsts.runner import terminate_as_interrupt
+
+    result = []
+
+    def body():
+        with terminate_as_interrupt():
+            result.append("ran")
+
+    thread = threading.Thread(target=body)
+    thread.start()
+    thread.join()
+    assert result == ["ran"]

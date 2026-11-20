@@ -7,6 +7,7 @@ no terminals to juggle and an exit code that means something.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -1042,7 +1043,39 @@ class SystemSimulation:
         self.stop()
 
 
+@contextlib.contextmanager
+def terminate_as_interrupt():
+    """Turn SIGTERM and SIGHUP into the interrupt that Ctrl-C is, for the length of a run.
+
+    A run starts processes (the deployment, the GDS, the device models) and stops them when it ends or is
+    interrupted. A plain `kill`, or a terminal that goes away, ended it at once and left them running, holding
+    their ports. As an interrupt, the same orderly stop happens. SIGHUP stays ignored where it was ignored
+    already (`nohup`). Only in the main thread, where Python allows signal handlers; elsewhere, nothing changes.
+    """
+    def interrupt(number, frame):
+        raise KeyboardInterrupt
+
+    previous = {}
+    try:
+        for number in (signal.SIGTERM, signal.SIGHUP):
+            if signal.getsignal(number) is signal.SIG_IGN:
+                continue
+            previous[number] = signal.signal(number, interrupt)
+    except ValueError:  # not the main thread
+        pass
+    try:
+        yield
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+
+
 def run_system_cli(args) -> int:
+    with terminate_as_interrupt():
+        return _run_system_cli(args)
+
+
+def _run_system_cli(args) -> int:
     from .system import load_description
 
     for option in ("bridge", "files_dir"):
@@ -1224,10 +1257,15 @@ TICK_SOURCE_WAIT = 20.0
 
 
 def run_cli(args) -> int:
+    with terminate_as_interrupt():
+        return _run_cli(args)
+
+
+def _run_cli(args) -> int:
     from .system import SYSTEM_FILE
 
     if (Path(args.directory) / SYSTEM_FILE).is_file():
-        return run_system_cli(args)
+        return _run_system_cli(args)
     for merged, option, single in (("record_merged", "--record-merged", "--record"),
                                    ("scenario_merged", "--scenario-merged", "--scenario")):
         if getattr(args, merged, None):
@@ -1253,6 +1291,9 @@ def run_cli(args) -> int:
     simulation.hold = bool(is_stepped and args.duration)
     try:
         simulation.start()
+    except (KeyboardInterrupt, SystemExit):
+        simulation.stop()  # interrupted while starting: what was started goes with it
+        raise
     except StartError as error:
         if args.json:
             # The same summary as for a run that ended, so that a caller reads one shape
