@@ -177,6 +177,15 @@ def explain_assert(directory: Path, log: str, report: Optional[dict] = None) -> 
     return result
 
 
+def with_traffic(bridge, status: dict) -> dict:
+    """The final status with the bus traffic of each endpoint (`bus_traffic`), when the
+    deployment answers `bus_stats` (one built with an older toolkit does not)"""
+    try:
+        return {**status, "bus_traffic": bridge.bus_stats()}
+    except Exception:
+        return status
+
+
 def _wait_for_port(port: int, timeout: float, process: Optional[subprocess.Popen] = None) -> bool:
     """Wait until something listens on a local port. Gives up early when `process`, which
     was to open it, has exited."""
@@ -1135,7 +1144,7 @@ def run_system_cli(args) -> int:
             continue
         try:
             with simulation.connect() as bridge:
-                statuses[name] = {**bridge.status(), "bus_traffic": bridge.bus_stats()}
+                statuses[name] = with_traffic(bridge, bridge.status())
         except Exception:
             pass
     codes = system.stop()
@@ -1323,7 +1332,7 @@ def run_cli(args) -> int:
     if not crashed and simulation.bridge != "none":
         try:
             with simulation.connect() as bridge:
-                status = {**bridge.status(), "bus_traffic": bridge.bus_stats()}
+                status = with_traffic(bridge, bridge.status())
         except Exception:
             status = {}
     code = simulation.stop()
