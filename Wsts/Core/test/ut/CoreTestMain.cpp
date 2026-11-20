@@ -18,6 +18,7 @@
 #include <string>
 #include <thread>
 
+#include <Wsts/Core/Bridge.hpp>
 #include <Wsts/Core/Bus.hpp>
 #include <Wsts/Core/Clock.hpp>
 #include <Wsts/Core/Activity.hpp>
@@ -2431,6 +2432,29 @@ TEST_F(CoreTest, SlowClockCallbackDropsCyclesInsteadOfPilingUp) {
     EXPECT_LE(clock.pending(), 64u);
     clock.stop();
     EXPECT_LT(count.load(), 40u);
+}
+
+// A deployment may keep its components in globals, as a microcontroller's does: they are destroyed when the
+// process exits, after the function-local statics of this file were. A component that calls the singletons
+// from its destructor (a surrogate unbinds its endpoint) must still find them.
+namespace {
+struct UnbindsAtExit {
+    ~UnbindsAtExit() {
+        Bus::get().unbind("exitEndpoint");
+        (void)Wsts::Bridge::get().running();
+        (void)Control::get().elapsedNs();
+    }
+};
+UnbindsAtExit g_unbindsAtExit;  // constructed before the singletons it uses are first called
+}  // namespace
+
+TEST(Exit, SingletonsOutliveGlobalsThatUseThem) {
+    EXPECT_EXIT(
+        {
+            Bus::get().bindByteStream("exitEndpoint", [](const Bytes&) {});
+            std::exit(0);
+        },
+        ::testing::ExitedWithCode(0), "");
 }
 
 int main(int argc, char** argv) {

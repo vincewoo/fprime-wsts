@@ -353,8 +353,9 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
 // ----------------------------------------------------------------------
 
 Bridge& Bridge::get() {
-    static Bridge bridge;
-    return bridge;
+    // Never destroyed, as the Bus: a thread of the bridge may still be running when the process exits
+    static Bridge* bridge = new Bridge;
+    return *bridge;
 }
 
 bool Bridge::start(const std::string& address) {
