@@ -341,6 +341,8 @@ class Manifest:
     # Python files with device models that `fprime-wsts run` starts with the deployment and
     # attaches through the bridge, relative to the manifest
     run_models: List[str] = field(default_factory=list)
+    # Arguments added to the command line of fprime-gds when `fprime-wsts run` starts one
+    run_gds_args: List[str] = field(default_factory=list)
     keep_libraries: List[str] = field(default_factory=list)
     drop_libraries: List[str] = field(default_factory=list)
     fpp_exclude: List[str] = field(default_factory=list)
@@ -397,7 +399,7 @@ HOST_KEYS = {"ignore"}
 ALL_MODULES = ""
 CLOCK_KEYS = {"instance", "hz", "options"}
 LIBRARY_KEYS = {"keep", "drop", "sim"}
-RUN_KEYS = {"env", "models"}
+RUN_KEYS = {"env", "models", "gds_args"}
 #: Keys of the sandbox of the files of flight software (`files`)
 FILES_KEYS = {"sandbox"}
 MAX_CLOCK_HZ = 100000.0  # Wsts::CycleClock::MAX_HZ
@@ -682,6 +684,11 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
         raise WstsError(f"{where}: run.models must be a list of Python files (each defines serve(sim)), relative to "
                         "the manifest")
     manifest.run_models = [str(entry) for entry in models]
+    gds_args = run.get("gds_args") or []
+    if not isinstance(gds_args, list) or not all(isinstance(entry, (str, int)) for entry in gds_args):
+        raise WstsError(f"{where}: run.gds_args must be a list of command line arguments for fprime-gds "
+                        "(for example [--framing-selection, fprime])")
+    manifest.run_gds_args = [str(entry) for entry in gds_args]
 
     files = data.get("files") or {}
     unknown = set(files) - FILES_KEYS if isinstance(files, dict) else {"(not a mapping)"}

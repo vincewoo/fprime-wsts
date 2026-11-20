@@ -531,6 +531,16 @@
             "pattern": "\\.py$"
           },
           "description": "Python files with device models, relative to this file. Each defines serve(sim); fprime-wsts run starts them with the deployment and attaches them through the bridge"
+        },
+        "gds_args": {
+          "type": "array",
+          "items": {
+            "type": [
+              "string",
+              "integer"
+            ]
+          },
+          "description": "Arguments added to the fprime-gds command line when fprime-wsts run starts a GDS, for example [--framing-selection, fprime] for a deployment that does not use the GDS's default framing"
         }
       },
       "additionalProperties": false

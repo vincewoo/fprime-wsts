@@ -478,3 +478,12 @@ def test_a_stepped_run_waits_for_the_tick_source_to_say_how_long_a_tick_is(tmp_p
     monkeypatch.setattr(runner, "TICK_SOURCE_WAIT", 0.1)
     assert main(["run", str(tmp_path), "--stepped", "--duration", "5"]) == 2
     assert "did not say how long a tick is within 0.1 s" in capsys.readouterr().err and steps == []
+
+
+def test_command_takes_the_arguments_the_manifest_adds():
+    command = gds_command("fprime-gds", DICTIONARY, 50000, LOGS, extra=["--framing-selection", "fprime"])
+    assert command[-2:] == ["--framing-selection", "fprime"]
+    assert command[command.index("--ip-port") + 1] == "50000"
+    # With a GUI the arguments still come last
+    assert gds_command("fprime-gds", DICTIONARY, 50000, LOGS, gui_port=8080, extra=["--x"])[-1] == "--x"
+    assert gds_command("fprime-gds", DICTIONARY, 50000, LOGS) == gds_command("fprime-gds", DICTIONARY, 50000, LOGS, extra=[])

@@ -3541,6 +3541,8 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
                 raise WstsError(f"run.models: {entry} not found ({path})")
             files.append(rel(path))
         report.setdefault("run", {"env": {}, "env_paths": []})["models"] = files
+    if manifest.run_gds_args:
+        report.setdefault("run", {"env": {}, "env_paths": []})["gds_args"] = list(manifest.run_gds_args)
     report["reused_sources"] = {
         k: [rel(Path(p)) if os.path.isabs(p) else p for p in v] for k, v in reused.items()
     }

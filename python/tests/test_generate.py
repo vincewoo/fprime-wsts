@@ -186,3 +186,13 @@ def test_simulation_project_needs_a_library_cmake_for_its_modules(tmp_path):
 def test_planned_link_construction_sets_its_kind():
     link = PlannedLink(LinkEnd(link="l", instance="i", role="listen", peer="p", kind="gpio"), "i", "e", "gpio")
     assert link.kind == "gpio"
+
+
+@needs_fpp
+def test_run_gds_args_reach_the_report(tmp_path):
+    """What `fprime-wsts run` reads to start the GDS, next to run.env and run.models"""
+    result = generate(MISSION, payload_manifest(keep=["hubDriver"], run={"gds_args": ["--framing-selection", "fprime"]}),
+                      tmp_path / "out")
+    assert json.loads((result.output / "wsts-report.json").read_text())["run"]["gds_args"] == ["--framing-selection", "fprime"]
+    plain = generate(MISSION, payload_manifest(keep=["hubDriver"]), tmp_path / "plain")
+    assert "gds_args" not in json.loads((plain.output / "wsts-report.json").read_text()).get("run", {})

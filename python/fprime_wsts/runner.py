@@ -344,7 +344,8 @@ def end_group(group: int, grace: float = 2.0) -> bool:
 
 def gds_command(executable: str, dictionary: Path, gds_port: int, log_dir: Path,
                 gui_port: Optional[int] = None, gui_addr: str = "127.0.0.1",
-                zmq_transport: Optional[List[str]] = None, client: bool = False) -> List[str]:
+                zmq_transport: Optional[List[str]] = None, client: bool = False,
+                extra: Optional[List[str]] = None) -> List[str]:
     """The `fprime-gds` command line: headless, or with its browser GUI on `gui_port`.
 
     `-n` keeps fprime-gds from running a deployment of its own: the simulation is started
@@ -355,6 +356,9 @@ def gds_command(executable: str, dictionary: Path, gds_port: int, log_dir: Path,
     The GDS listens on `gds_port` and the deployment connects to it, as a `Drv.TcpClient` does.
     With `client` it is the other way round, for a deployment whose ground link is a
     `Drv.TcpServer`: the deployment listens on `gds_port` and the GDS connects to it.
+
+    `extra` is added at the end: what the manifest says under `run.gds_args` (a deployment that does not
+    frame its ground link as the GDS does by default says which framing it uses).
     """
     command = [executable, "-n", "--dictionary", str(dictionary), "--ip-port", str(gds_port),
                "--logs", str(log_dir), "--log-directly"]
@@ -369,7 +373,7 @@ def gds_command(executable: str, dictionary: Path, gds_port: int, log_dir: Path,
     else:
         command += ["-g", "html", "--gui-addr", gui_addr, "--gui-port", str(gui_port),
                     "--skip-browser-open"]
-    return command
+    return command + list(extra or [])
 
 
 class Simulation:
@@ -442,7 +446,8 @@ class Simulation:
             shutil.rmtree(self.log_dir / "gds", ignore_errors=True)
             gds_log = open(self.log_dir / "gds.log", "w")
             command = gds_command(executable, self.dictionary, self.gds_port, self.log_dir / "gds",
-                                  self.gds_gui, self.gds_gui_addr, self.zmq_transport, client=self.gds_is_client)
+                                  self.gds_gui, self.gds_gui_addr, self.zmq_transport, client=self.gds_is_client,
+                                  extra=self.report.get("run", {}).get("gds_args"))
             arguments = ["-a", "127.0.0.1", "-p", str(self.gds_port)]
             if not self.gds_is_client:
                 self._start_gds(command, gds_log)

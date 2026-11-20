@@ -170,6 +170,7 @@ run:
     SIM_PROFILE: ./profiles/calm.txt # ./ or ../ : a path relative to this file
     SIM_SEED: 42
   models: [models/thermo.py]         # Python device models started with the run (each defines serve(sim))
+  gds_args: [--framing-selection, fprime]   # added to the fprime-gds command line of a run with --gds
 fpp_exclude: ["*/Experimental/*"]    # FPP files to leave out of the analysis
 defines: [MY_SIM_FLAG]               # compile definitions, in addition to WSTS_SIM=1
 host:
