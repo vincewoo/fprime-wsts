@@ -78,6 +78,8 @@ void SimControl::publishTelemetry() {
     this->tlmWrite_BusTransactions(static_cast<U32>(status.counters.transactions));
     this->tlmWrite_BusBytes(static_cast<U32>(status.counters.bytes));
     this->tlmWrite_BusErrors(static_cast<U32>(status.counters.errors));
+    // Telemetry written for the deployment (the registers of its models), at the same time
+    Control::get().publishTelemetrySources();
 }
 
 void SimControl::drainEvents() {
@@ -97,6 +99,10 @@ void SimControl::drainEvents() {
                 break;
             case SimEvent::FAULT_ARMED:
                 this->log_ACTIVITY_HI_FaultArmed(event.a, endpoint, text, event.b);
+                break;
+            case SimEvent::UNANSWERED:
+                this->log_WARNING_LO_UnansweredTraffic(
+                    endpoint, text, static_cast<U64>(event.a) | (static_cast<U64>(event.b) << 32));
                 break;
             case SimEvent::FAULT_TRIGGERED:
                 this->log_WARNING_LO_FaultTriggered(event.a, endpoint, text);

@@ -41,7 +41,8 @@ flowchart LR
 | `log` | | | A marker event (`SimLog`) |
 
 The bridge also answers queries: `status()` (tick, run state, faults, bus counters,
-endpoints), `gpio_get(endpoint)` (the level flight last wrote), `bytes_sent(endpoint)`,
+endpoints), `bus_stats()` (the traffic of each endpoint and each I2C address or register
+offset on it, below), `gpio_get(endpoint)` (the level flight last wrote), `bytes_sent(endpoint)`,
 `register_accesses(endpoint)`, and with `subscribe()` a stream of every bus transaction
 and action (`events()`, `wait_for(predicate)`).
 

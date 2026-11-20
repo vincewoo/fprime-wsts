@@ -157,11 +157,15 @@
               "integer",
               "string"
             ],
-            "description": "I2C address (i2c only)"
+            "description": "I2C address (i2c only), or 'any': the device for every address no other device on the endpoint has"
           },
           "params": {
             "type": "object",
-            "description": "Each becomes model.set(key, value) at start-up"
+            "description": "Each becomes model.set(key, value) at start-up. The registers of Wsts::RegisterMapI2c and Wsts::RegisterFile also take a signal of simulated time, e.g. \"sine(offset=1400, amplitude=50, period=20) as u16be\""
+          },
+          "telemetry": {
+            "type": "boolean",
+            "description": "A channel per register of a stock register model (Wsts::RegisterMapI2c, Wsts::RegisterFile), with its current value (default true)"
           }
         },
         "additionalProperties": false,

@@ -5,24 +5,25 @@
 | Command | Purpose |
 |---|---|
 | `fprime-wsts survey [DIR]... [--deployment NAME]... [--no-trial] [--json]` | For every F´ project under the directories (default: the current one), list each deployment's hardware instances and what the generator would do with each, byte stream drivers by role (ground link, hub link, device), register interface components, tick and time sources, entry points, ID range, and the result of a trial generation with a minimal manifest. Writes nothing. Exit status 1 when no project is found |
-| `fprime-wsts init <flight project> [--output DIR] [--deployment NAME]... [--no-trial] [--no-submodule] [--json]` | The same survey of one flight project, then a simulation project written from it: `wsts.yaml` for one deployment, or `<element>.yaml` for each and `wsts-system.yaml` for several, and a `.gitignore`. Default directory: `<project>-sim` beside the flight project. Decisions it cannot make are marked `TODO`. Never overwrites a file, and refuses a directory inside the flight project. A new project (no manifest in the directory yet) also gets the running toolkit as a git submodule at `lib/fprime-wsts`, at this checkout's commit, with its `origin` as the URL; the directory becomes a git repository if it is in none. Nothing is committed. `--no-submodule` leaves it out. In `--json`, `toolkit` says what was done |
+| `fprime-wsts init <flight project> [--output DIR] [--deployment NAME]... [--no-trial] [--no-submodule] [--models] [--json]` | The same survey of one flight project, then a simulation project written from it: `wsts.yaml` for one deployment, or `<element>.yaml` for each and `wsts-system.yaml` for several, and a `.gitignore`. Default directory: `<project>-sim` beside the flight project. Decisions it cannot make are marked `TODO`. Never overwrites a file, and refuses a directory inside the flight project. A new project (no manifest in the directory yet) also gets the running toolkit as a git submodule at `lib/fprime-wsts`, at this checkout's commit, with its `origin` as the URL; the directory becomes a git repository if it is in none. Nothing is committed. `--no-submodule` leaves it out. In `--json`, `toolkit` says what was done. `--models` also starts a device model for each bus endpoint the survey finds, as `new-model` does (`Models/<Endpoint>Model.hpp`, `.cpp`, the module and `library.cmake`), named in the manifests with `cmake.depends: [Models]`; an I2C one at `address: any`. A hub link end gets none: the other element is its device |
 | `fprime-wsts generate <wsts.yaml> [--project DIR] [--output DIR] [--check] [--json]` | Create or refresh a simulated deployment. `--project` defaults to the manifest's `project`, else the nearest `settings.ini` above the manifest. `--check` writes nothing and exits 1 if the output is out of date |
 | `fprime-wsts generate <wsts-system.yaml> [--output DIR] [--check] [--json]` | The same for every element of a [system](systems.md), plus `wsts-system.json` |
 | `fprime-wsts build [DIR or manifest] [-j N] [--element NAME]... [--fresh] [-D NAME=VALUE]... [--keep-going] [--project DIR] [--json]` | Configure and build a generated deployment, or every element of a generated system; given a manifest, `generate` first. The configure step (`fprime-util generate`, with the report's `configure_options` and the `-D` options) runs when there is no build directory, when one was left unfinished, with `--fresh`, and when what a build directory caches has changed since this command configured it (the overlay's cache entries, its `settings.ini`, the options; recorded in `wsts-build.json` in the build directory). A build directory configured by hand is used as it is. Output goes to `DIR/wsts-logs/build.log` (`wsts-logs/<element>/build.log` for a system). Exit status 1 when a build fails; it stops at the first element that fails unless `--keep-going` |
 | `fprime-wsts run [DIR] [--gds] [--gds-gui] [--gds-port P] [--gds-gui-port P] [--gds-gui-addr A] [--scenario F] [--scenario-mode stimulus\|responses] [--record F] [--duration S] [--bridge ADDR] [--auto-ports] [--stepped \| --realtime] [--files-dir DIR] [--env NAME=VALUE]... [--json]` | Run a built simulated deployment, optionally with the GDS. `--stepped` runs in [stepped time](stepped-time.md) (experimental): ticks are taken as fast as flight software finishes them, and `--duration` counts simulated seconds. A system runs in [lockstep](stepped-time.md#phase-4-what-is-built): its elements are stepped together on one time base, and a plain `--scenario F` is a [system scenario](#system-scenarios). `--realtime` overrides a manifest that says `time: {mode: stepped}`. `--auto-ports` takes free ports for the bridge, the GDS link and the GDS GUI in place of the fixed ones, and gives the GDS sockets of its own, so several runs fit on one machine. `--gds` is headless; `--gds-gui` starts the browser GUI (implies `--gds`) and prints its URL. Logs go to `DIR/wsts-logs`. `--env` sets an environment variable of the deployment, over the manifest's `run.env` |
 | `fprime-wsts run [SYSTEM DIR] [--gds] [--gds-gui] [--auto-ports] [--duration S] [--scenario ELEMENT=F]... [--scenario-mode M] [--record [ELEMENT=]F]... [--record-merged F] [--scenario-merged F] [--env [ELEMENT.]NAME=VALUE]... [--json]` | Run every element of a generated system, with their links, and optionally one GDS on the ground element with the merged dictionary. `--scenario payload=F` plays a scenario on one element; `--record payload=F` records one element, and a plain `--record F` every element, each to `<stem>.<element>.<suffix>`. `--record-merged F` records every element to one file, one line per recording line, each with `"element": <name>`: the lines are per element in the system's element order, each element's in the order it recorded them, not re-sorted (ticks are relative to each element's own recording start). Each element records to a temp file under the log directory while the run is up; they are merged when it stops, and removed once the merge succeeds (a failed merge names the element and leaves them). `--scenario-merged F` is its inverse: the file is split by `element` and each element plays its own part from start-up, in `--scenario-mode` (`stimulus` or `responses`). `--record-merged` cannot be given with `--record`, nor `--scenario-merged` with `--scenario`; both are errors on a single deployment, which has `--record`/`--scenario` for its one file. `--env NAME=VALUE` goes to every element, `--env payload.NAME=VALUE` to one |
-| `fprime-wsts status [DIR] [--element NAME] [--json]` | The state of the simulation running from a generated directory, read through its bridge: tick, run state, rate, links, bus counters, faults, scenario, endpoints. For a system, every element or the one named. Exit status 2 when nothing answers |
+| `fprime-wsts status [DIR] [--element NAME] [--bus] [--json]` | The state of the simulation running from a generated directory, read through its bridge: tick, run state, rate, links, bus counters, faults, scenario, endpoints. For a system, every element or the one named. `--bus` adds the traffic of each endpoint (the `bus_stats` query, below): a line each, and the addresses nothing answered; in `--json`, under `bus_traffic`. Exit status 2 when nothing answers |
 | `fprime-wsts ctl DIR [--element NAME] OP [FIELD=VALUE]...` | Send one [action](#actions) (or a bridge query such as `gpio_get`) to a running simulation and print the answer as JSON: `fprime-wsts ctl DIR fault_set endpoint=i2cBus kind=error arg=3 count=5`. A value is a JSON value where it reads as one (`3`, `true`), else text, in which `\n`, `\t` and `\xNN` are those characters (`'text=$TEMP,48.0\n'`). In a system, `pause`, `resume`, `set_rate`, `fault_clear` and `status` go to every element unless `--element` names one; any other action needs `--element` |
 | `fprime-wsts check-host <DIR or manifest> [--project DIR] [--json]` | List what the host must provide for the simulated build (system headers, libraries, packages, SDK files, sanitizer runtime) and whether it does, with the host and flight compilers. Compiles nothing of the project. Exit status 1 when something is missing; a check that cannot be made is a warning. Given a generated directory it also writes `wsts-host.md` and `wsts-host.json` there |
 | `fprime-wsts report [DIR] [--json]` | Print a generated deployment's fidelity report, and the host check of this machine if `generate` or `check-host` left one |
 | `fprime-wsts scaffold <Component> --output DIR [--project DIR] [--name NAME]` | Start a mirror surrogate for a flight component |
+| `fprime-wsts new-model <Name> --kind i2c\|spi\|bytestream\|gpio\|register [--endpoint E] [--address A\|any] [--python] [--project DIR] [--manifest FILE] [--namespace NS] [--json]` | Start a [device model](user-guide/device-models.md#start-one-with-new-model) that builds and answers from the first run, with TODOs where the device's behaviour goes. C++: `Models/<Name>.hpp` and `.cpp` in the simulation project (default: the current directory), added to `Models/CMakeLists.txt` (made, or added to when `new-model` made it), and `library.cmake` when there is none. `--python`: `pymodels/<name>.py`, which defines `serve(sim)`. The model is named in the manifest (`--manifest`, else the project's one deployment manifest) under `models` with `cmake.depends: [Models]`, or under `run.models`, edited as text so its comments stay; what cannot be placed is printed to add by hand. Its name there is the class name with a lowercase first letter. An I2C model is at `address: any` unless `--address` says. Never overwrites a file |
 
 Errors the user can fix are printed as `fprime-wsts: error: …` with exit code 2.
 
 A command given a path in a simulation project that pins the toolkit (a `lib/fprime-wsts`
 in the directory of the path or one above it) is run by that toolkit when it is not the
-one running: `generate`, `check-host`, `build`, `report`, `run`, `status`, `ctl` and
-`scaffold` (by `--output`). It runs in the same Python environment with the pinned
+one running: `generate`, `check-host`, `build`, `report`, `run`, `status`, `ctl`,
+`scaffold` (by `--output`) and `new-model` (by `--project`). It runs in the same Python environment with the pinned
 `python/` first on the path, and says so on stderr. A `lib/fprime-wsts` that is not checked
 out is an error ([Simulation project](user-guide/simulation-project.md#the-toolkit-submodule)).
 
@@ -101,8 +102,9 @@ models:                          # in-process C++ device models
     header: Wsts/Core/Models.hpp  # default
     endpoint: i2cBus
     kind: i2c                    # bytestream | i2c | spi | gpio | register | none
-    address: 0x68                # i2c only
+    address: 0x68                # i2c only; `any`: every address no other device on the endpoint has
     params: {"0x75": "0x68"}     # each becomes model.set(key, value) at start-up
+    telemetry: true              # default: a channel per register of a stock register model (below)
   - name: fpga                   # a block of memory-mapped registers (see "Register blocks")
     class: Wsts::RegisterFile
     endpoint: fpgaRegs           # the endpoint of a substituted register interface instance
@@ -799,6 +801,7 @@ Newline-delimited JSON. A client sends `{"id": n, "op": …}` and receives
 | `wait_quiescent` (`timeout_ms`=1000) | Wait until `activity` is zero: flight software has finished everything it was given. Answers `quiescent`, `activity` and, when it is not, `holding`: the queues with work outstanding, as `<queue>: <messages>, …`. Meaningful while paused |
 | `subscribe` | Start receiving `{"ev": "rec", …}`, `{"ev": "action", …}` and `{"ev": "sim_event", …}` |
 | `gpio_get` (`endpoint`) | Level flight software last wrote |
+| `bus_stats` | The traffic of each endpoint since start-up (endpoints nothing has used yet with zeros), flat: `bus.<endpoint>.<counter>` with `transactions`, `to_device` (what flight software did: sends, reads, writes, transfers, pin writes), `to_flight` (what reached it unasked: received bytes, input levels, interrupts), `bytes_to_device`, `bytes_to_flight`, `errors`, `unanswered`, `fault_hits` (an endpoint's interrupts included) and `last_tick`; and `bus.<endpoint>.at.<address>.<counter>` (`transactions`, `errors`, `unanswered`) for each I2C address and register offset, the address in hex (`0x68`). `unanswered` counts what nothing answered: no device on the endpoint, none at the I2C address, nothing at the register offset (`NO_DEVICE`, from the bus or a `RegisterFile` that has not defined the offset). Byte streams and GPIO pins have no answer to miss (a client may serve them by subscribing) and are never `unanswered`. `WstsBridge.bus_stats()` nests them: `{endpoint: {counter: n, …, "addresses": {"0x68": {…}}}}` |
 | `attach` (`endpoint`, `kind`: `i2c`\|`spi`, `addr`) | Become the device model. The sim then sends `{"ev": "i2c_req", "rid", "endpoint", "addr", "write", "rlen"}` and waits up to 2 s for `{"op": "reply", "rid", "status", "data"}` |
 | `attach` (`endpoint`, `kind`: `register`) | Become the register block. The sim sends `{"ev": "reg_req", "rid", "endpoint", "access": "read", "offset": "0x…", "width", "rlen"}` or `{…, "access": "write", "offset", "width", "value": "0x…", "rlen": 0}` and waits up to 2 s for `{"op": "reply", "rid", "status", "data"}`, where `data` is the value read as little-endian hex (`width` bytes; empty for a write). Raise the block's interrupts with `irq_raise`. When the client disconnects, the block that was on the endpoint before answers again |
 
@@ -814,7 +817,7 @@ in `wsts-logs/models.log`) against a deployment started paused, and resumes it w
 again; `wait_quiescent()` waits for that by itself and raises with the queues that hold
 work up.
 
-`fprime_wsts.bridge.WstsBridge` wraps all of this (`step`, `wait_quiescent`, `serve_i2c`, `serve_spi`,
+`fprime_wsts.bridge.WstsBridge` wraps all of this (`step`, `wait_quiescent`, `bus_stats`, `serve_i2c`, `serve_spi`,
 `serve_bytestream`, `serve_gpio`,
 `serve_register`, `raise_irq`, `reg_set`, `register_accesses`, and `submit` to wait on several
 simulations at once). `fprime_wsts.bridge.WstsSystem` holds one `WstsBridge` per element of a
@@ -859,6 +862,57 @@ lines starting with `#` are skipped.
 | any in `run.env` or `--env` | Set by `fprime-wsts run` and the pytest plugin for the simulator components' phase code |
 | `WSTS_LINK_DIR` | Directory of the link sockets of a system. A stream link is `<link>.sock`; a datagram link binds `<link>.a.sock` at its `a` end and `<link>.b.sock` at its `b` end. Set by `fprime-wsts run`; without it links stay down |
 
+### Signals
+
+The registers of `Wsts::RegisterMapI2c` and `Wsts::RegisterFile` (and the `value` of a model
+`new-model` starts) take a signal of simulated time in place of a number: stored in the
+register on every tick, until a number is given (in the manifest, with `model_set`,
+`i2c_reg_set`, `reg_set`). `Wsts/Core/Signal.hpp` and `python/fprime_wsts/signals.py` are the
+same language, and give the same values.
+
+| Function (arguments by position or by name, all optional) | Value at `t` seconds |
+|---|---|
+| `sine(offset=0, amplitude=1, period=1, phase=0)` | `offset + amplitude·sin(2π(t/period + phase))` |
+| `square(low=0, high=1, period=1, duty=0.5, phase=0)` | `high` for the first `duty` of each period, else `low` |
+| `triangle(low=0, high=1, period=1, phase=0)` | `low` → `high` → `low` over each period |
+| `sawtooth(low=0, high=1, period=1, phase=0)` | `low` → `high` over each period |
+| `ramp(from=0, to=1, start=0, duration=1)` | `from` until `start`, linearly to `to` over `duration`, then `to` |
+| `step(before=0, after=1, at=0)` | `before` until `at`, then `after` |
+| `noise(sd=1, mean=0, seed=0)` | Gaussian; a hash of the seed and the instant, so the same in every run |
+| `uniform(low=0, high=1, seed=0)` | Uniform in [low, high); the same |
+
+`t` is simulated time in seconds (tick count times tick period: the same in two runs in
+stepped time); `+ - * /` and parentheses combine terms; arguments do not depend on `t`.
+`<expression> as <format>` says how the value is stored: `u8`, `s8`, `u16`, `s16`, `u24`,
+`s24`, `u32` or `s32`, rounded half away from zero and held at the ends of the range. For
+`RegisterMapI2c` the value fills as many registers from the one named, with `be` or `le`
+(`u16be`) when wider than a byte; the default is `u8`. For `RegisterFile` it is the low bits
+of the 32-bit word, no byte order; the default is `u32`. `generate` checks the signals of these
+two models; a model of the project checks its own parameters.
+
+```yaml
+params:
+  "0x02": "sine(offset=14000, amplitude=500, period=30) / 1.25 as u16be"   # RegisterMapI2c
+  "reg.0x0C": "215 + noise(sd=2) as s16"                                    # RegisterFile
+```
+
+### Register telemetry
+
+Each register a manifest gives `Wsts::RegisterMapI2c` (`"<register>"`) or `Wsts::RegisterFile`
+(`reg.<offset>`) a value is a telemetry channel of `wstsModelTlm`, with the register's current
+value: `<model>_0x<register>` (`power_0x02`, `fpga_0x000c`). A value of one to four bytes, or a
+signal stored in as many, is one channel, of the width (`U8`, `U16`, `U32`) and sign (`I…`) of the
+signal's format, big-endian in the order given otherwise; a longer list of bytes is a `U8`
+channel per register. A `RegisterFile` register is a `U32`, or the signal's format.
+`telemetry: false` on a model leaves its registers out.
+
+`wstsModelTlm` is a passive `WstsAdapted.ModelTelemetry` written for the deployment
+(`WstsAdapted/ModelTelemetry/` of the overlay), at the set-up anchor's base ID + 0x800. `Wsts.SimControl`
+writes its channels with its own, once a second (once a simulated second in stepped time),
+through `Wsts::Control::addTelemetrySource`; with `control: false` there is none, and
+`generate` warns. The report lists each model's channels; telemetry packets omit them, as they
+omit `wstsControl`'s.
+
 ## `Wsts.SimControl`
 
 Commands mirror the actions (see the README); `SIM_STEP` (`ticks`) is `step` and `SIM_SET_STEPPED` (`stepped`) is `set_stepped`; `REG_SET` (`endpoint`, `offset`, `value`,
@@ -866,7 +920,10 @@ both 64 bits) and `IRQ_RAISE` (`endpoint`, `number`) are those of the register k
 `SimRateSet`, `FaultArmed`, `FaultTriggered` (first application of a fault only),
 `FaultExpired`, `FaultsCleared`, `Injected`, `ScenarioLoaded`, `ScenarioStarted`,
 `ScenarioCompleted`, `ScenarioStopped`, `ScenarioError`, `RecordStarted`,
-`RecordStopped`, `ActionFailed`, `SimLog`. Telemetry, once a second: `SimTicks`,
+`RecordStopped`, `ActionFailed`, `SimLog`, `UnansweredTraffic` (`endpoint`, `kind`: `i2c`, `spi` or
+`register`, `address`: the first access of flight software that nothing answered at that endpoint and
+address, once each; `unanswered` on the bridge's event stream, with the address in `a` and its high
+32 bits in `b`). Telemetry, once a second: `SimTicks`,
 `SimRunState`, `SimTimeScale`, `ActiveFaults`, `FaultHits`, `ScenarioRunState`,
 `ScenarioStep`, `ScenarioSteps`, `Recording`, `BusTransactions`, `BusBytes`, `BusErrors`.
 

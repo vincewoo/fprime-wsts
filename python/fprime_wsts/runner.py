@@ -1135,7 +1135,7 @@ def run_system_cli(args) -> int:
             continue
         try:
             with simulation.connect() as bridge:
-                statuses[name] = bridge.status()
+                statuses[name] = {**bridge.status(), "bus_traffic": bridge.bus_stats()}
         except Exception:
             pass
     codes = system.stop()
@@ -1323,7 +1323,7 @@ def run_cli(args) -> int:
     if not crashed and simulation.bridge != "none":
         try:
             with simulation.connect() as bridge:
-                status = bridge.status()
+                status = {**bridge.status(), "bus_traffic": bridge.bus_stats()}
         except Exception:
             status = {}
     code = simulation.stop()

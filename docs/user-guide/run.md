@@ -81,7 +81,14 @@ manifest that says so.
     "tick": 300, "paused": false, "rate": 1.0, "active_faults": 0,
     "scenario_state": "idle", "recording": false,
     "transactions": 4512, "bytes": 30881, "errors": 0, "fault_hits": 0,
-    "endpoints": ["i2cBus", "sensorUart", "heaterPin"]
+    "endpoints": ["i2cBus", "sensorUart", "heaterPin"],
+    "bus_traffic": {
+      "i2cBus": {"transactions": 3300, "to_device": 3300, "to_flight": 0, "bytes_to_device": 3300,
+                 "bytes_to_flight": 19800, "errors": 300, "unanswered": 300, "fault_hits": 0, "last_tick": 300,
+                 "addresses": {"0x68": {"transactions": 3000, "errors": 0, "unanswered": 0},
+                               "0x48": {"transactions": 300, "errors": 300, "unanswered": 300}}},
+      "...": {}
+    }
   }
 }
 ```
@@ -94,6 +101,9 @@ What to look at first:
   rate groups (a project timer that was kept, or the run is paused).
 - **`final_status.errors`**: failed bus transactions. A steady count usually means an
   endpoint without a model, or a model that rejects what flight software sends.
+- **`final_status.bus_traffic`**: the same, per endpoint and per I2C address or register
+  offset. `unanswered` is what nothing answered: above, flight software polls a device at
+  0x48 that has no model. Each first one is also the `UnansweredTraffic` event in the GDS.
 
 Logs are in `<dir>/wsts-logs/`: `sim.log` for the deployment, `gds.log` for the GDS.
 
@@ -122,6 +132,16 @@ MyDeployment: running at tick 412, rate 1
   bus: 6180 transaction(s), 42310 byte(s), 0 error(s); faults: 0 active, 0 hit(s)
   scenario: idle; recording: no
   endpoints: i2cBus, sensorUart, heaterPin
+```
+
+`--bus` adds a line per endpoint, and where nothing answered:
+
+```
+  endpoint    from flight  to flight  bytes out  bytes in  errors  unanswered  fault hits  last tick
+  heaterPin             2          0          0         0       0           0           0        380
+  i2cBus             4532          0       4532     27192     412         412           0        412
+  sensorUart            0         41          0      1066       0           0           0        400
+  nothing answered on i2cBus at: 0x48 (412)
 ```
 
 `fprime-wsts ctl` sends any [action](control.md) the same way, with no Python and no GDS:

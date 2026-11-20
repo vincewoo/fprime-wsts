@@ -132,7 +132,7 @@ Read every response. Then update `spec.md`:
 |---|---|
 | Default: tests and flight software are the only things that talk to the device | **C++ model** implementing a `Wsts::*Device` interface (and `Wsts::Model` for parameters and ticks) in `Models/`. No IDs, no topology change |
 | An FPGA block or SoC peripheral behind a register interface component | **C++ model** derived from `Wsts::RegisterFile` (`kind: register`) |
-| A simple register-addressed I2C part, or a fixed periodic message | A **stock model** with `params` (`Wsts::RegisterMapI2c`, `Wsts::ScriptedByteStream`). No code |
+| A simple register-addressed I2C part, or a fixed periodic message | A **stock model** with `params` (`Wsts::RegisterMapI2c`, `Wsts::ScriptedByteStream`). No code. A register that should move takes a signal of simulated time (`"sine(offset=1400, amplitude=50, period=20) as u16be"`, `docs/reference.md` "Signals") |
 | Operators must command or watch the simulator from the GDS (its own commands, events, telemetry, parameters), a simulator component exists already, or the device is several cooperating parts | **F´ simulator component** behind the adapter for the bus kind (`Wsts.BusByteStreamDevice`, `Wsts.BusI2cDevice`, `Wsts.BusSpiDevice`, `Wsts.BusGpioDevice`). Keep the protocol in a plain C++ class the component owns, so `conform.py` can still test it |
 | Exploring a protocol quickly, before committing to C++ | A **Python model** over the bridge (`WstsBridge.serve_i2c`, `serve_spi`, `serve_register`, or `subscribe` + `inject_bytes`). A prototype; port it to C++ |
 
@@ -140,7 +140,10 @@ Say which form you chose and why.
 
 ### 6. Write the model
 
-Patterns and skeletons for each interface are in `references/model-patterns.md`: ASCII
+Start the files with `fprime-wsts new-model <Name> --kind <kind> --endpoint <endpoint>
+--project <sim project>`: it writes `Models/<Name>.hpp`/`.cpp` that build, the module and the
+manifest entry, and a `value` parameter that takes a number or a signal (`Wsts::Signal`, for
+readings that move). Then replace its TODOs with the spec. Patterns and skeletons for each interface are in `references/model-patterns.md`: ASCII
 and binary framed byte streams, streaming output, I2C register maps, SPI, GPIO and
 register blocks. The points that most often go wrong:
 

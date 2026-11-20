@@ -77,6 +77,32 @@ def link_traffic(response: dict) -> dict:
     return response
 
 
+#: Counters of an endpoint in bus_stats, and of an address on it
+TRAFFIC_COUNTERS = ("transactions", "to_device", "to_flight", "bytes_to_device", "bytes_to_flight", "errors",
+                    "unanswered", "fault_hits", "last_tick")
+ADDRESS_COUNTERS = ("transactions", "errors", "unanswered")
+
+
+def bus_traffic(response: dict) -> Dict[str, dict]:
+    """Nest the flat answer of `bus_stats` (`bus.<endpoint>.<counter>`,
+    `bus.<endpoint>.at.<address>.<counter>`) as {endpoint: {counter: n, ..., "addresses":
+    {"0x48": {"transactions", "errors", "unanswered"}}}}"""
+    traffic: Dict[str, dict] = {}
+    for key, value in response.items():
+        if not key.startswith("bus."):
+            continue
+        rest = key[len("bus."):]
+        if ".at." in rest:
+            endpoint, _, tail = rest.partition(".at.")
+            address, _, counter = tail.rpartition(".")
+            entry = traffic.setdefault(endpoint, {"addresses": {}})
+            entry["addresses"].setdefault(address, {})[counter] = int(value)
+        else:
+            endpoint, _, counter = rest.rpartition(".")
+            traffic.setdefault(endpoint, {"addresses": {}})[counter] = int(value)
+    return traffic
+
+
 def links_expected_up(description: dict) -> Dict[str, int]:
     """The link ends of each element that have a connection and so can come up. A datagram
     link has none: it is started, and counted in `links`, but has nothing to wait for."""
@@ -299,6 +325,15 @@ class WstsBridge:
         response = self.request("status")
         response["endpoints"] = [e for e in response.get("endpoints", "").split(",") if e]
         return link_traffic(response)
+
+    def bus_stats(self) -> Dict[str, dict]:
+        """The traffic of every bus endpoint since start-up: {endpoint: {"transactions",
+        "to_device", "to_flight", "bytes_to_device", "bytes_to_flight", "errors", "unanswered",
+        "fault_hits", "last_tick", "addresses": {"0x48": {"transactions", "errors",
+        "unanswered"}}}}. "unanswered" counts what nothing answered (no device, none at the I2C
+        address, nothing at the register offset); "addresses" are I2C addresses or register
+        offsets."""
+        return bus_traffic(self.request("bus_stats"))
 
     # ---- Run control ----
 

@@ -77,6 +77,15 @@ void setup() {
     Wsts::Bus::get().attachByteStream("hubDriver", &link_hub);
 
     ::Payload::wstsControl.wstsBind("", "");
+
+    // Telemetry of the models' registers: a channel each, published with the WSTS telemetry
+    ::Payload::wstsModelTlm.wstsSource(0, [] { return std::uint64_t{model_fpga.peek(0x0)}; });
+    ::Payload::wstsModelTlm.wstsSource(1, [] { return std::uint64_t{model_fpga.peek(0x4)}; });
+    ::Payload::wstsModelTlm.wstsSource(2, [] { return std::uint64_t{model_fpga.peek(0x8)}; });
+    ::Payload::wstsModelTlm.wstsSource(3, [] { return std::uint64_t{model_fpga.peek(0xc)}; });
+    ::Payload::wstsModelTlm.wstsSource(4, [] { return std::uint64_t{model_fpga.peek(0x10)}; });
+    ::Payload::wstsModelTlm.wstsSource(5, [] { return std::uint64_t{model_fpga.peek(0x14)}; });
+    Wsts::Control::get().addTelemetrySource([] { ::Payload::wstsModelTlm.wstsPublish(); });
     Wsts::RuntimeConfig config;
     config.bridge = "tcp:50101";
     config.internalTickHz = 10;

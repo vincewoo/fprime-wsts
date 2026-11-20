@@ -500,7 +500,51 @@ def element_name(deployment: str) -> str:
     return re.sub(r"[^a-z0-9_]", "", deployment.lower()) or "element"
 
 
-def starter_manifest(project_root: Path, d: dict, sim_dir: Path, system: bool) -> str:
+def model_endpoints(d: dict) -> List[Tuple[str, str, dict]]:
+    """The bus endpoints of a deployment that a device model answers on: (endpoint, kind, entry)"""
+    found = []
+    for h in d.get("hardware", []):
+        if h.get("bytestream_role") in ("hub", "ground"):
+            continue
+        if h.get("model_kind"):
+            found.append((h["endpoint"], h["model_kind"], h))
+        elif "register_ports" in h and h.get("action", "").startswith("decide"):
+            found.append((h["instance"].rsplit(".", 1)[-1], "register", h))
+    return found
+
+
+def starter_models(report: dict, target: Path, only: Set[str]) -> Dict[str, List[dict]]:
+    """A model skeleton (newmodel.py) for each bus endpoint of the analysed deployments named in
+    `only`, in target/Models; the manifest entries by deployment name. A model that exists is
+    reused."""
+    from .newmodel import model_name, new_model
+
+    analysed = [d for p in report["projects"] for d in p.get("deployments", []) if "topology" in d]
+    taken: Dict[str, int] = {}
+    for d in analysed:
+        for endpoint, _, _ in model_endpoints(d):
+            taken[endpoint] = taken.get(endpoint, 0) + 1
+    entries: Dict[str, List[dict]] = {}
+    for d in analysed:
+        if d["name"] not in only:
+            continue
+        for endpoint, kind, h in model_endpoints(d):
+            base = endpoint[:1].upper() + endpoint[1:]
+            # The same endpoint name in two deployments: a model each
+            prefix = re.sub(r"\W", "", d["name"].title()) if taken[endpoint] > 1 else ""
+            name = re.sub(r"\W", "_", f"{prefix}{base}Model")
+            entry = {"name": model_name(name), "class": f"Sim::{name}", "header": f"Models/{name}.hpp",
+                     "endpoint": endpoint, "kind": kind}
+            if kind == "i2c":
+                entry["address"] = "any"
+            if not (target / "Models" / f"{name}.hpp").exists():
+                new_model(target, name, kind, endpoint, edit=False)
+            entries.setdefault(d["name"], []).append({**entry, "_for": f"{h['instance']} ({h['component']})"})
+    return entries
+
+
+def starter_manifest(project_root: Path, d: dict, sim_dir: Path, system: bool,
+                     models: Optional[List[dict]] = None) -> str:
     rel_project = os.path.relpath(project_root, sim_dir)
     lines = [
         f"# yaml-language-server: $schema={SCHEMAS}wsts.schema.json",
@@ -547,7 +591,18 @@ def starter_manifest(project_root: Path, d: dict, sim_dir: Path, system: bool) -
             lines += [f"  {line}" for line in why]
             lines += [f"  - instance: {h['instance']}", f"    with: {surrogate}"]
     endpoints = [h for h in d.get("hardware", []) if h.get("model_kind")]
-    if endpoints:
+    if models:
+        lines += ["", "# Device models started by `fprime-wsts init --models` (in Models/): each answers on its",
+                  "# endpoint from the first run, and takes a value or a signal (model_set <name> value",
+                  "# \"sine(offset=25, amplitude=5, period=60)\"). TODO: give each its device's registers and",
+                  "# behaviour (Models/<class>.cpp), or replace it with a stock model. An I2C model answers",
+                  "# every address (address: any) until it is given the device's.",
+                  "models:"]
+        for entry in models:
+            fields = ", ".join(f"{k}: {v}" for k, v in entry.items() if not k.startswith("_"))
+            lines.append(f"  - {{{fields}}}   # {entry['_for']}")
+        lines += ["", "cmake:", "  depends: [Models]   # the module of the models, for the generated set-up"]
+    elif endpoints:
         lines += ["", "# Bus endpoints that will exist. Without a model: an I2C transaction fails (address error),",
                   "# an SPI read is zeros, a byte stream accepts what is sent and nothing answers, a GPIO holds",
                   "# its level. TODO: decide which devices need a model (stock or written).",
@@ -733,21 +788,31 @@ def survey(dirs: List[Path], deployments: Optional[List[str]] = None, trial: boo
     return report
 
 
-def write_starters(report: dict, target: Path, gitignore: bool = False) -> List[str]:
+def write_starters(report: dict, target: Path, gitignore: bool = False, models: bool = False) -> List[str]:
     """Starter manifests for the deployments of a survey: wsts.yaml for one, a manifest per
-    element and wsts-system.yaml for several. Never over an existing file."""
+    element and wsts-system.yaml for several. Never over an existing file. With `models`, a
+    model skeleton for each bus endpoint (Models/), named in the manifests."""
     target = Path(target).resolve()
     target.mkdir(parents=True, exist_ok=True)
     written = []
     analysed = [(Path(p["root"]), d) for p in report["projects"] for d in p.get("deployments", []) if "topology" in d]
     system = len(analysed) > 1
+    entries: Dict[str, List[dict]] = {}
+    if models:
+        # For the manifests about to be written only: one that exists is the user's
+        fresh = {d["name"] for _, d in analysed
+                 if not (target / (f"{element_name(d['name'])}.yaml" if system else "wsts.yaml")).exists()}
+        candidates = lambda: {*(target / "Models").glob("*"), target / "library.cmake"}  # noqa: E731
+        before = {p for p in candidates() if p.exists()}
+        entries = starter_models(report, target, fresh)
+        written += sorted(str(p) for p in candidates() if p.exists() and p not in before)
     elements = []
     for root, d in analysed:
         name = element_name(d["name"])
         path = target / (f"{name}.yaml" if system else "wsts.yaml")
         elements.append((name, path.name))
         if not path.exists():
-            path.write_text(starter_manifest(root, d, target, system))
+            path.write_text(starter_manifest(root, d, target, system, entries.get(d["name"])))
             written.append(str(path))
     if system and not (target / "wsts-system.yaml").exists():
         roots = {root for root, _ in analysed}
@@ -770,6 +835,9 @@ def main(argv=None, default_dirs: Optional[List[Path]] = None) -> int:
                                               "project also gets this checkout as a git submodule at lib/fprime-wsts")
     parser.add_argument("--no-submodule", action="store_true",
                         help="with --starter-dir: do not add the toolkit to the simulation project as a submodule")
+    parser.add_argument("--starter-models", action="store_true",
+                        help="with --starter-dir: also a device model skeleton for each bus endpoint (Models/), "
+                             "named in the manifests")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
@@ -778,7 +846,7 @@ def main(argv=None, default_dirs: Optional[List[Path]] = None) -> int:
     if args.starter_dir:
         target = Path(args.starter_dir).resolve()
         fresh = not (target.is_dir() and any(target.glob("*.yaml")))
-        report["starters_written"] = write_starters(report, target)
+        report["starters_written"] = write_starters(report, target, models=args.starter_models)
         if fresh and report["starters_written"] and not args.no_submodule:
             from .toolkit import pin
             report["toolkit"] = pin(target)
@@ -840,7 +908,8 @@ def init_cli(args) -> int:
                            (f": none is called {', '.join(args.deployment)}" if args.deployment else
                             ": a deployment is a directory with a Top/ (or another directory its CMakeLists.txt adds) that defines a topology")))
     fresh = not (target.is_dir() and any(target.glob("*.yaml")))
-    report["starters_written"] = written = write_starters(report, target, gitignore=True)
+    report["starters_written"] = written = write_starters(report, target, gitignore=True,
+                                                          models=getattr(args, "models", False))
     if fresh and written and not getattr(args, "no_submodule", False):
         # The new project builds against this toolkit, pinned: generated paths point into it
         from .toolkit import pin
@@ -858,6 +927,9 @@ def init_cli(args) -> int:
     todos = sum(path.read_text().count("TODO") for path in target.glob("*.yaml"))
     print("Next:")
     steps = [f"settle the {todos} TODO(s) in the manifest{'s' if system else ''}: each says what to decide"] if todos else []
+    if getattr(args, "models", False) and (target / "Models").is_dir():
+        steps.append(f"give the device models in {target / 'Models'} their devices' registers and behaviour "
+                     "(the TODOs in each; `fprime-wsts new-model` starts another)")
     steps += [f"fprime-wsts build {manifest}     # generate, then configure and build",
               "fprime-wsts run <the directory it wrote> --gds"]
     if toolkit.get("added"):

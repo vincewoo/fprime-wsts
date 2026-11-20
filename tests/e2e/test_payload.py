@@ -69,6 +69,28 @@ def test_flight_telemetry_comes_from_models(gds):
     gds.assert_telemetry("Payload.fpga.Temperature", value=21.5, timeout=T)
 
 
+def test_bus_traffic_is_counted_per_endpoint(payload):
+    before = payload.bus_stats()
+    payload.advance(20)  # one second at 20 Hz
+    after = payload.bus_stats()
+    assert set(after) == {"i2cBus", "spiBus", "sensorUart", "heaterPin", "switchPin", "hubDriver", "fpgaRegs"}
+
+    def grew(endpoint, counter, address=None):
+        if address is None:
+            return after[endpoint][counter] - before[endpoint][counter]
+        return (after[endpoint]["addresses"][address][counter]
+                - before[endpoint]["addresses"].get(address, {}).get(counter, 0))
+
+    # The IMU at 10 Hz and the power monitor at 1 Hz, each by its address
+    assert grew("i2cBus", "transactions", hex(IMU_ADDR)) >= 9 and grew("i2cBus", "transactions", hex(POWER_ADDR)) >= 1
+    assert grew("i2cBus", "to_device") >= 10 and grew("i2cBus", "bytes_to_flight") > 0
+    # The serial sensor reports once a second, unasked; the FPGA's temperature register is read at 10 Hz
+    assert grew("sensorUart", "to_flight") >= 1 and grew("sensorUart", "bytes_to_flight") > 0
+    assert grew("fpgaRegs", "transactions", "0xc") >= 9
+    assert after["i2cBus"]["last_tick"] > before["i2cBus"]["last_tick"]
+    assert not any(t["unanswered"] for t in after.values()), "every device the flight software uses has a model"
+
+
 def test_project_model_takes_engineering_units(gds, payload):
     # Sim::ImuModel starts at 1 g on Z; its parameters are in g, not register bytes
     payload.model_set("imu", "accel_x", -0.5)
@@ -342,6 +364,10 @@ def test_python_device_model(gds, payload):
         gds.assert_telemetry("Payload.power.BusVoltage", value=14.0, timeout=T)
     # The external model has gone away: the bus reports that nothing answers
     gds.assert_event("Payload.imu.ImuReadError", timeout=T)
+    # ... and the simulation says where, once, and counts it
+    gds.assert_event("Payload.wstsControl.UnansweredTraffic", ["i2cBus", "i2c", IMU_ADDR], timeout=T)
+    addresses = payload.bus_stats()["i2cBus"]["addresses"]
+    assert addresses[hex(IMU_ADDR)]["unanswered"] > 0 and addresses[hex(POWER_ADDR)]["unanswered"] == 0
 
 
 def test_spi_faults_then_a_device_model_in_python(gds, payload):
@@ -396,6 +422,21 @@ def test_flight_driver_reads_and_writes_the_register_block(gds, payload):
     gds.send_and_assert_command("Payload.fpga.FPGA_SET_LEDS", [0xA5], timeout=T)
     gds.assert_event("Payload.fpga.LedsSet", [0xA5], timeout=T)
     assert [a["value"] for a in payload.register_accesses("fpgaRegs") if a.get("offset") == REG_LEDS] == [0xA5]
+
+
+def test_model_registers_are_telemetry(gds, payload):
+    # Each register the manifest gives the model is a channel of wstsModelTlm, with its value
+    gds.assert_telemetry("Payload.wstsModelTlm.fpga_0x0000", value=0xF00D0001, timeout=T)
+    gds.assert_telemetry("Payload.wstsModelTlm.fpga_0x000c", value=215, timeout=T)
+    try:
+        # A signal of simulated time: stored in the register on every tick, read by flight
+        # software, and seen on the register's channel
+        payload.model_set("fpga", "reg.0x0C", "215 + step(before=0, after=10, at=0)")
+        gds.assert_telemetry("Payload.wstsModelTlm.fpga_0x000c", value=225, timeout=T)
+        gds.assert_telemetry("Payload.fpga.Temperature", value=22.5, timeout=T)
+    finally:
+        payload.model_set("fpga", "reg.0x0C", 215)  # a number ends the signal
+    gds.assert_telemetry("Payload.wstsModelTlm.fpga_0x000c", value=215, timeout=T)
 
 
 def test_register_interrupt_is_serviced_by_flight_software(gds, payload):

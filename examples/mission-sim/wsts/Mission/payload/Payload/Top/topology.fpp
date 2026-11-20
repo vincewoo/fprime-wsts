@@ -10,6 +10,7 @@ module Payload {
     # WSTS instances (generated)
     instance wstsSetup
     instance wstsControl
+    instance wstsModelTlm
 
 
     # ----------------------------------------------------------------------

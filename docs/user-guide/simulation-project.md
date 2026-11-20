@@ -41,6 +41,11 @@ interface under `substitute`, the hub link of a system, the bus endpoints that w
 model. What only you know is marked `TODO`. It never writes over a file that exists, and
 never writes into the flight project.
 
+Add `--models` and every bus endpoint also gets a device model to start from (`Models/`, as
+[`new-model`](device-models.md#start-one-with-new-model) writes one), named in the manifest:
+the first build then runs with every endpoint answering, and you give each model its device's
+behaviour as you go.
+
 Or start by hand, with just the manifest:
 
 ```bash

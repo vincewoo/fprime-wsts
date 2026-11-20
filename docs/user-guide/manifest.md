@@ -100,6 +100,11 @@ models:
     params: {text: "$GPGGA,...\n", period: "10"}
 ```
 
+A register of the stock register models can also be a signal that changes with simulated
+time (`"0x02": "sine(offset=1400, amplitude=50, period=20) as u16be"`), and each register they
+are given is a telemetry channel too. `fprime-wsts new-model` starts a model of your own and
+adds it here.
+
 [Device models](device-models.md) lists the stock models and shows how to write your own.
 
 ## Start a deployment that has no `main()`

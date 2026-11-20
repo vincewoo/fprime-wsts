@@ -48,7 +48,7 @@ skill's directory (`fprime-wsts/.claude/skills/wsts-configure`).
 
 | Script | What it does |
 |---|---|
-| `scripts/survey.py [DIR…] [--deployment NAME] [--starter-dir DIR] [--json] [--no-trial]` | (The survey is part of the toolkit, `fprime-wsts survey` and `fprime-wsts init`; this script adds the default of searching the checkout's siblings.) Finds F´ projects (default: the checkout's siblings), their deployments and existing WSTS manifests. For each deployment: hardware instances and what fprime-wsts will do with each, byte stream drivers by role (ground, hub, device), register interfaces, project components whose sources open devices, tick and time sources, `main()` or entry points, ID range, command splitters, endpoint collisions, and a trial generation with a minimal manifest. `--starter-dir` writes starter manifests with every decision marked `TODO`, without overwriting anything. About 10 s per deployment |
+| `scripts/survey.py [DIR…] [--deployment NAME] [--starter-dir DIR] [--json] [--no-trial]` | (The survey is part of the toolkit, `fprime-wsts survey` and `fprime-wsts init`; this script adds the default of searching the checkout's siblings.) Finds F´ projects (default: the checkout's siblings), their deployments and existing WSTS manifests. For each deployment: hardware instances and what fprime-wsts will do with each, byte stream drivers by role (ground, hub, device), register interfaces, project components whose sources open devices, tick and time sources, `main()` or entry points, ID range, command splitters, endpoint collisions, and a trial generation with a minimal manifest. `--starter-dir` writes starter manifests with every decision marked `TODO`, without overwriting anything; with `--starter-models`, also a device model skeleton for each bus endpoint (`Models/`, as `fprime-wsts new-model` writes one), named in the manifests. About 10 s per deployment |
 | `scripts/build_loop.py MANIFEST [--stages generate,host,build,run] [--run-seconds 20] [--fresh] [--gds] [--keep-going] [--json]` | One pass through generate, `check-host`, `fprime-wsts build` (every element; it configures when it has to) and a short `fprime-wsts run`. Stops at the first failing stage and prints the lines that matter: the generator error, compiler, linker or CMake errors, an assert, an element that exited, links down, bus errors, `WARNING_HI` events. Full logs in `<generated dir>/build-wsts-loop/`. A first build takes several minutes per element. Later ones are incremental |
 
 ## Workflow
@@ -140,7 +140,12 @@ and a `host.cmake` and `library.cmake` only when needed
 
 Aim for the smallest configuration that runs. Leave models out where the user does not
 need them yet, and attach stock models where the flight code makes the values obvious (an
-ID register, a `WHO_AM_I`). Tell the user what flight software will see on each endpoint
+ID register, a `WHO_AM_I`). A stock register model's register can be a signal of simulated
+time (`"0x02": "sine(offset=1400, amplitude=50, period=20) as u16be"`) when flight software
+needs a reading that moves, and each one is a telemetry channel (`wstsModelTlm`). When the
+user wants every endpoint answering from the first build, `--starter-models` (or
+`fprime-wsts new-model` for one endpoint) writes skeletons that answer with a settable
+`value`. Tell the user what flight software will see on each endpoint
 left without a model ([decisions §8](references/decisions.md#8-devices-behind-the-buses)).
 Devices with real protocols go to the **`wsts-device-model`** skill later. Do not write
 them in this pass unless the user asks.

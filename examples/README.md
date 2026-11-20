@@ -76,6 +76,7 @@ runs the end-to-end tests against it.
 | A project device model | `Sim::ImuModel` in `mission-sim/Models`, set in g | `test_payload.py::test_project_model_takes_engineering_units` |
 | A register interface component replaced, its driver kept | `fpgaRegs` (`SensorLib.RegisterInterface`, named in `payload.yaml`) becomes `Wsts.SimRegister`, written with that component's ports; `Components.FpgaMonitor` above it is flight code | `test_payload.py::test_flight_driver_reads_and_writes_the_register_block` |
 | A register block with an interrupt | `Wsts::RegisterFile` on `fpgaRegs`: identity, write-1-to-clear status, a frame interrupt once a second | `test_payload.py::test_register_interrupt_is_serviced_by_flight_software`, `test_lost_and_duplicated_interrupts` |
+| Register telemetry, and a signal of simulated time set while it runs | `wstsModelTlm.fpga_0x0000` … `fpga_0x0014`, one channel per register the manifest gives `fpga` | `test_payload.py::test_model_registers_are_telemetry` |
 | Register faults, `REG_SET` and `IRQ_RAISE`, recording and replay, a register block in Python | on `fpgaRegs` and `fpgaRegs:irq` | `test_payload.py` (the register tests) |
 | A mirror of the register interface | `mission-sim/Surrogates/SimRegisterInterface`, on `Wsts::RegisterSurrogate`: built, and used when `payload.yaml` names it | Python tests (`test_registers.py`); the build |
 | Two devices on one bus | IMU at 0x68 and power monitor at 0x40 on `i2cBus` | `test_payload.py::test_two_devices_answer_on_one_i2c_bus` |

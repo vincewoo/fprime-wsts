@@ -210,6 +210,13 @@ module Wsts {
       severity activity high id 0x13 \
       format "Faults cleared on {}: {}"
 
+    @ The first access of flight software that nothing answered at an address of an endpoint
+    @ (no device, none at the I2C address, nothing at the register offset). Once per endpoint
+    @ and address; the counts are in the bus traffic (fprime-wsts status --bus)
+    event UnansweredTraffic(endpoint: string size 40, kind: string size 20, address: U64) \
+      severity warning low id 0x14 \
+      format "Nothing answered flight software on {} ({}) at 0x{x}: no model there"
+
     event Injected(endpoint: string size 40, what: string size 40, a: U32, b: U32) \
       severity activity low id 0x20 \
       format "Injected on {}: {} ({}, {})"

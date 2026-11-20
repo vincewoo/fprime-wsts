@@ -334,7 +334,39 @@
       "class": "Wsts::RegisterFile",
       "endpoint": "fpgaRegs",
       "kind": "register",
-      "address": 0
+      "address": 0,
+      "channels": [
+        {
+          "channel": "fpga_0x0000",
+          "type": "U32",
+          "register": 0
+        },
+        {
+          "channel": "fpga_0x0004",
+          "type": "U32",
+          "register": 4
+        },
+        {
+          "channel": "fpga_0x0008",
+          "type": "U32",
+          "register": 8
+        },
+        {
+          "channel": "fpga_0x000c",
+          "type": "U32",
+          "register": 12
+        },
+        {
+          "channel": "fpga_0x0010",
+          "type": "U32",
+          "register": 16
+        },
+        {
+          "channel": "fpga_0x0014",
+          "type": "U32",
+          "register": 20
+        }
+      ]
     },
     {
       "name": "tempSensor",
@@ -421,7 +453,8 @@
         "Payload.wstsControl.SimLog",
         "Payload.wstsControl.SimPaused",
         "Payload.wstsControl.SimRateSet",
-        "Payload.wstsControl.SimResumed"
+        "Payload.wstsControl.SimResumed",
+        "Payload.wstsControl.UnansweredTraffic"
       ],
       "channels": [
         "Payload.wstsControl.ActiveFaults",
@@ -435,7 +468,13 @@
         "Payload.wstsControl.ScenarioSteps",
         "Payload.wstsControl.SimRunState",
         "Payload.wstsControl.SimTicks",
-        "Payload.wstsControl.SimTimeScale"
+        "Payload.wstsControl.SimTimeScale",
+        "Payload.wstsModelTlm.fpga_0x0000",
+        "Payload.wstsModelTlm.fpga_0x0004",
+        "Payload.wstsModelTlm.fpga_0x0008",
+        "Payload.wstsModelTlm.fpga_0x000c",
+        "Payload.wstsModelTlm.fpga_0x0010",
+        "Payload.wstsModelTlm.fpga_0x0014"
       ]
     },
     "added_by_simulators": {

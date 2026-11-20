@@ -41,8 +41,89 @@ models:
 ```
 
 Several I2C devices can share one endpoint at different addresses, as the example's IMU
-(0x68) and power monitor (0x40) do. Change a parameter while running with
+(0x68) and power monitor (0x40) do. `address: any` puts a device at every address no other
+device on the endpoint has: a model can answer before you know the device's address. Change a parameter while running with
 `model_set power 0x02 "0x5D 0xC0"` (from Python, a scenario or the `MODEL_SET` command).
+
+### Values that change over time
+
+A register of `RegisterMapI2c` or `RegisterFile` can be given a **signal** in place of a
+number: an expression of simulated time that the model stores in the register on every tick.
+Telemetry moves, and flight software's limits and filters have something to work on,
+without a line of model code:
+
+```yaml
+params:
+  # bus voltage: 14 V ± 0.4 V over 30 s, with a little noise, in 1.25 mV counts, 2 bytes big-endian
+  "0x02": "(sine(offset=14, amplitude=0.4, period=30) + noise(sd=0.01)) / 0.00125 as u16be"
+  # current: 500 mA, stepping to 800 mA after a minute
+  "0x04": "step(before=500, after=800, at=60) as u16be"
+```
+
+The functions are `sine`, `square`, `triangle`, `sawtooth`, `ramp`, `step`, `noise` and
+`uniform`, and `t` is simulated time in seconds ([Reference](../reference.md#signals) has
+their arguments). `as <format>` says how the value is stored (`u8` … `s32`, with `be` or `le`
+for an I2C register wider than a byte). A signal is checked when the deployment is
+generated. Noise is a hash of the seed and the instant, not a sequence, so two runs in
+stepped time see the same values.
+
+Change one while the simulation runs; a number ends it:
+
+```bash
+fprime-wsts ctl wsts/Payload model_set model=power key=0x04 value="ramp(from=500, to=0, duration=10) as u16be"
+```
+
+### Register telemetry
+
+Each register you give a stock register model in the manifest is also a telemetry channel,
+with the register's current value: `Payload.wstsModelTlm.power_0x02`, `…fpga_0x000c`. In the
+GDS you see what the device holds next to what flight software made of it. A value of up to
+four bytes, or a signal, is one channel of that width; `telemetry: false` on a model leaves its
+registers out. They are published with `wstsControl`'s telemetry, once a second.
+
+## Start one with `new-model`
+
+For a device with behaviour of its own, start a model of the project:
+
+```bash
+fprime-wsts new-model Thermometer --kind i2c --endpoint thermoBus --address 0x48 --project my-mission-sim
+```
+
+It writes `Models/Thermometer.hpp` and `.cpp` (and the `Models` module and `library.cmake` if
+the project has none), and names the model in the manifest (`--manifest`, or the project's
+one deployment manifest), keeping its comments:
+
+```yaml
+models:
+  - {name: thermometer, class: Sim::Thermometer, header: Models/Thermometer.hpp, endpoint: thermoBus, kind: i2c, address: 0x48}
+cmake:
+  depends: [Models]
+```
+
+The model builds and answers from the first run. Each kind starts from a common form of its
+device:
+
+| `--kind` | Starts as |
+|---|---|
+| `i2c` | A register map with an auto-incrementing pointer |
+| `spi` | A register map, bit 7 of the first byte for a read |
+| `bytestream` | A device that answers lines of text (`*IDN?`, `READ?`), and reports every `period` ticks if asked |
+| `gpio` | A device that raises a `ready` pin `delay` ticks after its own pin goes high |
+| `register` | A `Wsts::RegisterFile` with identity, control, status and data registers, and a measurement that ends with an interrupt |
+
+Each has a `value` parameter in engineering units that takes a number or a signal, so its
+readings move before you write anything (`model_set model=thermometer key=value
+value="sine(offset=25, amplitude=5, period=60)"`). The TODOs mark where the device's own
+registers, scale and commands go. `--python` writes `pymodels/<name>.py` instead, a Python
+model that starts with the run (below).
+
+`fprime-wsts init --models` does the same for every bus endpoint of a new simulation
+project, so a fresh project builds with every endpoint answering.
+
+To find which devices still need a model, run the deployment and look where nothing
+answered: `fprime-wsts status <dir> --bus` lists each endpoint's traffic and the I2C
+addresses and register offsets flight software reached with nothing there, and the GDS shows
+`wstsControl.UnansweredTraffic` the first time each one happens.
 
 ## A C++ model
 
@@ -153,7 +234,8 @@ that topology set-up code reads (an ID register checked in `configure`) needs a 
 
 ## Device models from a datasheet
 
-The [`wsts-device-model` agent skill](agents.md#wsts-device-model) writes a model from a
+To write a model by hand, start from `new-model`; for a model checked against the real part,
+use the agent skill. The [`wsts-device-model` agent skill](agents.md#wsts-device-model) writes a model from a
 datasheet, ICD or protocol spec, and checks it against the real device: it probes a bench
 unit over its serial, I2C, SPI or GPIO interface, captures the answers, and replays the
 captures against the model.

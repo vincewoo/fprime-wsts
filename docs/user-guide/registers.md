@@ -63,7 +63,7 @@ it: drop it with `ports: {<port>: }`, or write a [mirror](#keeping-the-component
 
 | Parameter | Meaning |
 |---|---|
-| `reg.<offset>` | Value of a register. The first use defines it, with this as its reset value |
+| `reg.<offset>` | Value of a register. The first use defines it, with this as its reset value. Or a [signal](device-models.md#values-that-change-over-time), stored on every tick until a number is given: `"215 + noise(sd=2) as s16"` |
 | `reset.<offset>` | Reset value |
 | `mask.<offset>` | Bits flight software can write (default all; `0` makes it read-only) |
 | `w1c.<offset>` | `1`: writing a 1 clears the bit |
@@ -88,6 +88,9 @@ params:
   "irq.status": "0x04"
   "irq.bits": "0x1"          # frame ready
 ```
+
+Each `reg.<offset>` is also a telemetry channel of `wstsModelTlm` with the register's
+current value (`Payload.wstsModelTlm.fpga_0x000c`), unless the model has `telemetry: false`.
 
 ## A model with behaviour
 

@@ -21,7 +21,7 @@ const char* const EVENT_NAMES[] = {
     "paused",           "resumed",           "rate_set",         "fault_armed",      "fault_triggered",
     "fault_expired",    "faults_cleared",    "scenario_loaded",  "scenario_started", "scenario_completed",
     "scenario_stopped", "scenario_error",    "record_started",   "record_stopped",   "injected",
-    "action_failed",    "log",
+    "action_failed",    "log",               "unanswered",
 };
 
 const char* const SCENARIO_STATE_NAMES[] = {"idle", "loaded", "running", "completed", "failed"};
@@ -94,7 +94,9 @@ void Control::reset() {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_models.clear();
         m_events.clear();
+        m_unanswered.clear();
         m_listeners.clear();
+        m_telemetrySources.clear();
         m_recordTap = nullptr;
         m_eventTap = nullptr;
     }
@@ -708,6 +710,22 @@ void Control::addTickListener(TickListener listener) {
     m_listeners.push_back(std::move(listener));
 }
 
+void Control::addTelemetrySource(std::function<void()> source) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_telemetrySources.push_back(std::move(source));
+}
+
+void Control::publishTelemetrySources() {
+    std::vector<std::function<void()>> sources;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        sources = m_telemetrySources;
+    }
+    for (const auto& source : sources) {
+        source();
+    }
+}
+
 void Control::setRecordTap(RecordTap tap) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_recordTap = std::move(tap);
@@ -752,6 +770,21 @@ SimStatus Control::status() {
 }
 
 void Control::onRecord(const Record& record) {
+    if (record.unanswered) {
+        // Once per endpoint and address: a polled device with no model would otherwise give an
+        // event per transaction. The counts are in the bus traffic (bus_stats).
+        const std::uint64_t at = (record.type == "spi") ? 0 : record.addr;
+        bool first = false;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            first = m_unanswered.emplace(record.endpoint, at).second;
+        }
+        if (first) {
+            const char* kind = (record.type == "i2c") ? "i2c" : (record.type == "spi") ? "spi" : "register";
+            this->post(SimEvent::UNANSWERED, record.endpoint, kind, static_cast<std::uint32_t>(at),
+                       static_cast<std::uint32_t>(at >> 32));
+        }
+    }
     RecordTap tap;
     {
         std::lock_guard<std::mutex> lock(m_mutex);

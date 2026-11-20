@@ -7,7 +7,7 @@ the siblings of the fprime-wsts checkout, and writes starter manifests with --st
 
 Usage:
   survey.py [DIR ...] [--deployment NAME]... [--no-trial] [--json]
-            [--starter-dir DIR [--no-submodule]]
+            [--starter-dir DIR [--no-submodule] [--starter-models]]
 
 A new simulation project written with --starter-dir gets this checkout as a git submodule at
 lib/fprime-wsts, as `fprime-wsts init` gives it.
