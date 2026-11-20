@@ -243,7 +243,8 @@ def test_register_interface_that_is_not_named_is_kept_as_in_flight(tmp_path):
     result = generate(MISSION, flight_manifest("Payload", keep=["hubDriver"]), tmp_path / "out")
     assert "Payload.fpgaRegs" not in {s["instance"] for s in result.report["substitutions"]}
     assert "register_blocks" not in result.report and "setup" not in result.report
-    assert not (tmp_path / "out" / "WstsAdapted").exists()
+    # Nothing is adapted: the only module written for the deployment is its simulation telemetry
+    assert [p.name for p in (tmp_path / "out" / "WstsAdapted").iterdir()] == ["SimTelemetry"]
     assert "## Register blocks" not in (tmp_path / "out" / "wsts-report.md").read_text()
 
 
@@ -357,8 +358,8 @@ def test_a_mirror_keeps_the_flight_dictionary(tmp_path):
     block = result.report["register_blocks"][0]
     assert block["surrogate"] == "Sim.SimRegisterInterface" and block["written_for_the_component"] is False
     assert block["ports"]["read32In"] == "read32" and block["interrupt_to"] == ["Payload.fpga.interruptIn"]
-    # Nothing is adapted: the only module written for the deployment is its register telemetry
-    assert [p.name for p in (tmp_path / "out" / "WstsAdapted").iterdir()] == ["ModelTelemetry"]
+    # Nothing is adapted: the modules written for the deployment are its telemetry
+    assert sorted(p.name for p in (tmp_path / "out" / "WstsAdapted").iterdir()) == ["ModelTelemetry", "SimTelemetry"]
     removed = result.report["dictionary"]["removed"]
     assert not [name for names in removed.values() for name in names if ".fpgaRegs." in name]
     assert "Wsts::Bus::get().attachRegister(\"fpgaRegs\", &model_fpga);" in \
