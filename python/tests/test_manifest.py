@@ -165,3 +165,11 @@ def test_epoch_of_simulated_time():
     for bad in ("next tuesday", 0, 2 ** 40):
         with pytest.raises(WstsError, match="time.epoch"):
             epoch(bad)
+
+
+def test_run_gds_args():
+    manifest = parse_manifest({"deployment": "D", "run": {"gds_args": ["--framing-selection", "fprime", 5]}})
+    assert manifest.run_gds_args == ["--framing-selection", "fprime", "5"]
+    assert parse_manifest({"deployment": "D"}).run_gds_args == []
+    with pytest.raises(WstsError, match="gds_args must be a list"):
+        parse_manifest({"deployment": "D", "run": {"gds_args": "--framing-selection fprime"}})

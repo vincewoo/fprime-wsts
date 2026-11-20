@@ -188,6 +188,16 @@ def test_planned_link_construction_sets_its_kind():
     assert link.kind == "gpio"
 
 
+@needs_fpp
+def test_run_gds_args_reach_the_report(tmp_path):
+    """What `fprime-wsts run` reads to start the GDS, next to run.env and run.models"""
+    result = generate(MISSION, payload_manifest(keep=["hubDriver"], run={"gds_args": ["--framing-selection", "fprime"]}),
+                      tmp_path / "out")
+    assert json.loads((result.output / "wsts-report.json").read_text())["run"]["gds_args"] == ["--framing-selection", "fprime"]
+    plain = generate(MISSION, payload_manifest(keep=["hubDriver"]), tmp_path / "plain")
+    assert "gds_args" not in json.loads((plain.output / "wsts-report.json").read_text()).get("run", {})
+
+
 def move_topology(project, name):
     """The deployment Payload with its topology in Payload/<name>/ instead of Payload/Top/, as a
     project that names the directory after the deployment has it"""
