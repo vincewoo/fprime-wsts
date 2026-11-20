@@ -640,7 +640,8 @@ elements:                        # required: element name -> deployment manifest
   payload: payload.yaml         # short form
 links:
   - name: hub                    # also the name faults are addressed by
-    kind: bytestream             # default; datagram: connectionless, one message per datagram
+    kind: bytestream             # default; datagram: connectionless, one message per datagram;
+                                 # gpio: a level from the pin flight software at `a` writes to an input at `b`
     a: cdh.hubDriver             # <element>.<instance>: a byte stream driver instance;
                                  # qualified names work too (cdh.RadioLink.uart)
     b: payload.hubDriver
@@ -649,6 +650,11 @@ links:
 An instance at the end of a link is substituted even if no catalog entry replaces its
 component (with `Wsts.SimByteStream`, chosen by `link`). It cannot be listed under `keep`,
 and its endpoint cannot also have a `bytestream` model.
+
+A `gpio` link carries a pin level, one direction only (`a` drives `b`; the reverse is a second
+link with the ends swapped): a `Wsts::LinkGpio` model, its ends replaced by `Wsts.SimGpio`
+unless a surrogate says `gpio_endpoint: true`, and an end may instead be a pin listed under
+`gpio_endpoints` of its element's manifest ([Links](systems.md#links)).
 
 A `datagram` link carries the same traffic over connectionless Unix datagram sockets: a
 `Wsts::LinkDatagram` model instead of `Wsts::LinkByteStream`, one `sendto()` per message

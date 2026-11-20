@@ -134,8 +134,9 @@ flowchart LR
 ### Links
 
 A link joins a driver instance of one element to one of another. `kind` says what it
-carries: `bytestream` (the default), a UART or socket connection, or `gpio`, a discrete wire
-between two pins. Naming an instance in a link is enough to have it simulated:
+carries: `bytestream` (the default), a UART or socket connection, `gpio`, a discrete wire
+between two pins, or `datagram`, connectionless messages ([below](#datagram-links)).
+Naming an instance in a link is enough to have it simulated:
 
 - if the catalog or the element's manifest already replaces it (a UART or GPIO driver, say),
   that surrogate is used;
