@@ -98,7 +98,7 @@ Register interface components replaced at their ports: the flight drivers above 
 - `Payload.sensorUart.BytesSent`
 - `Payload.spiBus.SPI_Bytes`
 
-**Added (WSTS):** 54
+**Added (WSTS):** 55
 - `Payload.wstsControl.FAULT_CLEAR`
 - `Payload.wstsControl.FAULT_SET`
 - `Payload.wstsControl.GPIO_FORCE`
@@ -135,6 +135,7 @@ Register interface components replaced at their ports: the flight drivers above 
 - `Payload.wstsControl.SimPaused`
 - `Payload.wstsControl.SimRateSet`
 - `Payload.wstsControl.SimResumed`
+- `Payload.wstsControl.UnansweredTraffic`
 - `Payload.wstsControl.ActiveFaults`
 - `Payload.wstsControl.BusBytes`
 - `Payload.wstsControl.BusErrors`

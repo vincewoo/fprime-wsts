@@ -222,6 +222,34 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
             response.setNum("links", LinkByteStream::started());
             response.setNum("links_up", LinkByteStream::connected());
             LinkByteStream::traffic(response);
+        } else if (op == "bus_stats") {
+            // Flat, as every bridge message is: bus.<endpoint>.<counter> and
+            // bus.<endpoint>.at.<address>.<counter> (fprime_wsts.bridge.bus_traffic nests them)
+            std::map<std::string, EndpointTraffic> traffic = Bus::get().traffic();
+            for (const std::string& name : Bus::get().endpoints()) {
+                (void)traffic[name];  // an endpoint nothing has used yet, with zeros
+            }
+            for (const auto& entry : traffic) {
+                const std::string prefix = "bus." + entry.first + ".";
+                const EndpointTraffic& t = entry.second;
+                response.setNum(prefix + "transactions", static_cast<std::int64_t>(t.transactions));
+                response.setNum(prefix + "to_device", static_cast<std::int64_t>(t.toDevice));
+                response.setNum(prefix + "to_flight", static_cast<std::int64_t>(t.toFlight));
+                response.setNum(prefix + "bytes_to_device", static_cast<std::int64_t>(t.bytesToDevice));
+                response.setNum(prefix + "bytes_to_flight", static_cast<std::int64_t>(t.bytesToFlight));
+                response.setNum(prefix + "errors", static_cast<std::int64_t>(t.errors));
+                response.setNum(prefix + "unanswered", static_cast<std::int64_t>(t.unanswered));
+                response.setNum(prefix + "fault_hits", static_cast<std::int64_t>(t.faultHits));
+                response.setNum(prefix + "last_tick", static_cast<std::int64_t>(t.lastTick));
+                for (const auto& at : t.byAddress) {
+                    char address[24];
+                    std::snprintf(address, sizeof(address), "0x%llx", static_cast<unsigned long long>(at.first));
+                    const std::string key = prefix + "at." + address + ".";
+                    response.setNum(key + "transactions", static_cast<std::int64_t>(at.second.transactions));
+                    response.setNum(key + "errors", static_cast<std::int64_t>(at.second.errors));
+                    response.setNum(key + "unanswered", static_cast<std::int64_t>(at.second.unanswered));
+                }
+            }
         } else if (op == "subscribe") {
             m_subscribed.store(true);
         } else if (op == "attach") {

@@ -173,6 +173,11 @@ version, unset `JAVA_HOME` so the bundled JRE is used.
   `Wsts.SimControl` publishes it with its own telemetry (`Control::addTelemetrySource`): it has
   no thread, and with `control: false` it is not generated.
 - `I2C_ANY_ADDRESS` (`address: any`): the device for the addresses of an endpoint that have none.
+- `Bus` counts traffic per endpoint and per I2C address or register offset in `emit()`
+  (`traffic()`, the bridge's `bus_stats`, `status --bus`, `final_status.bus_traffic`). A record
+  is `unanswered` when nothing answered (no device, none at the address, `NO_DEVICE`); it is not
+  recorded. A new transaction path must go through `emit()` and set it, and `Control::onRecord`
+  posts `UNANSWERED` once per endpoint and address.
 - A new action goes in `Control::dispatch`, then `SimControl.fpp`/`.cpp`, `bridge.py`,
   `docs/reference.md`, and a test at each level.
 

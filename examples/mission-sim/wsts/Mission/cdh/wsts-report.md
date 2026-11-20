@@ -80,7 +80,7 @@ F´ components that the simulation adds to the topology. They are not in the fli
 - `SensorLink.uart.BytesRecv`
 - `SensorLink.uart.BytesSent`
 
-**Added (WSTS):** 48
+**Added (WSTS):** 49
 - `Cdh.wstsControl.FAULT_CLEAR`
 - `Cdh.wstsControl.FAULT_SET`
 - `Cdh.wstsControl.GPIO_FORCE`
@@ -117,6 +117,7 @@ F´ components that the simulation adds to the topology. They are not in the fli
 - `Cdh.wstsControl.SimPaused`
 - `Cdh.wstsControl.SimRateSet`
 - `Cdh.wstsControl.SimResumed`
+- `Cdh.wstsControl.UnansweredTraffic`
 - `Cdh.wstsControl.ActiveFaults`
 - `Cdh.wstsControl.BusBytes`
 - `Cdh.wstsControl.BusErrors`

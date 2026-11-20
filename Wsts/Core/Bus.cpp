@@ -359,6 +359,13 @@ Bus::Effects Bus::applyFaults(const std::string& endpoint, FaultDir dir) {
     }
     if (!hits.empty()) {
         m_faultHits += hits.size();
+        {
+            // An endpoint's interrupts ("<endpoint>:irq") count with the endpoint
+            const std::size_t irq = endpoint.rfind(":irq");
+            const std::string name = (irq != std::string::npos && irq + 4 == endpoint.size()) ? endpoint.substr(0, irq) : endpoint;
+            std::lock_guard<std::mutex> lock(m_trafficMutex);
+            m_traffic[name].faultHits += hits.size();
+        }
         BusObserver* observer = m_observer.load();
         if (observer != nullptr) {
             for (const Hit& hit : hits) {
@@ -375,6 +382,26 @@ void Bus::emit(Record& record) {
     m_bytes += record.data.size() + record.rdata.size();
     if (record.status != 0) {
         m_errors++;
+    }
+    {
+        // Received bytes, input levels and interrupts come to flight software; the rest is
+        // what flight software did
+        const bool toFlight = (record.type == "bs_rx" || record.type == "gpio_in" || record.type == "reg_irq");
+        std::lock_guard<std::mutex> lock(m_trafficMutex);
+        EndpointTraffic& traffic = m_traffic[record.endpoint];
+        traffic.transactions++;
+        (toFlight ? traffic.toFlight : traffic.toDevice)++;
+        traffic.bytesToDevice += toFlight ? 0 : record.data.size();
+        traffic.bytesToFlight += record.rdata.size() + (toFlight ? record.data.size() : 0);
+        traffic.errors += (record.status != 0) ? 1 : 0;
+        traffic.unanswered += record.unanswered ? 1 : 0;
+        traffic.lastTick = record.tick;
+        if (record.type == "i2c" || record.type == "reg_rd" || record.type == "reg_wr") {
+            AddressTraffic& at = traffic.byAddress[record.addr];
+            at.transactions++;
+            at.errors += (record.status != 0) ? 1 : 0;
+            at.unanswered += record.unanswered ? 1 : 0;
+        }
     }
     BusObserver* observer = m_observer.load();
     if (observer != nullptr) {
@@ -510,6 +537,7 @@ int Bus::i2cTransact(const std::string& endpoint, std::uint32_t addr, const Byte
         }
         // 1 = I2C_ADDRESS_ERR: nothing answers at this address
         record.status = (device == nullptr) ? 1 : device->transact(addr, record.data, read);
+        record.unanswered = (device == nullptr);
     }
 
     if (record.status == 0 && !read.empty()) {
@@ -567,6 +595,7 @@ int Bus::spiTransfer(const std::string& endpoint, const Bytes& write, Bytes& rea
         }
         // With no device attached MISO floats: the read comes back as zeros
         record.status = (device == nullptr) ? 0 : device->transfer(record.data, read);
+        record.unanswered = (device == nullptr);
     }
 
     if (record.status == 0 && !read.empty()) {
@@ -661,6 +690,7 @@ int Bus::registerRead(const std::string& endpoint, std::uint64_t offset, unsigne
         }
         // The device is called without the bus lock: it may raise an interrupt from here
         record.status = (device == nullptr) ? static_cast<int>(RegisterStatus::NO_DEVICE) : device->read(offset, width, value);
+        record.unanswered = (record.status == RegisterStatus::NO_DEVICE);
     }
     if (record.status == 0 && effects.corrupt) {
         value ^= effects.wideMask;
@@ -706,6 +736,7 @@ int Bus::registerWrite(const std::string& endpoint, std::uint64_t offset, unsign
             device = this->endpointLocked(endpoint).reg;
         }
         record.status = (device == nullptr) ? static_cast<int>(RegisterStatus::NO_DEVICE) : device->write(offset, width, value);
+        record.unanswered = (record.status == RegisterStatus::NO_DEVICE);
     }
     this->emit(record);
     return record.status;
@@ -798,6 +829,8 @@ int Bus::gpioRead(const std::string& endpoint, bool& level) {
     delay(effects.delayMs);
     if (effects.error) {
         m_errors++;
+        std::lock_guard<std::mutex> lock(m_trafficMutex);
+        m_traffic[endpoint].errors++;
         return effects.status;
     }
     if (effects.stuck) {
@@ -862,7 +895,16 @@ BusCounters Bus::counters() {
     return counters;
 }
 
+std::map<std::string, EndpointTraffic> Bus::traffic() {
+    std::lock_guard<std::mutex> lock(m_trafficMutex);
+    return m_traffic;
+}
+
 void Bus::reset() {
+    {
+        std::lock_guard<std::mutex> lock(m_trafficMutex);
+        m_traffic.clear();
+    }
     std::lock_guard<std::mutex> lock(m_mutex);
     m_endpoints.clear();
     m_faults.clear();

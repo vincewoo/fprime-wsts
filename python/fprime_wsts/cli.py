@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import List
 
 from . import __version__
 from .fpp import WstsError
@@ -292,9 +293,38 @@ def cmd_ctl(args: argparse.Namespace) -> int:
     return 0
 
 
+def render_traffic(traffic: dict) -> List[str]:
+    """`status --bus`: a line per endpoint, and the addresses nothing answered"""
+    if not traffic:
+        return ["  bus traffic: no endpoints"]
+    header = ("endpoint", "from flight", "to flight", "bytes out", "bytes in", "errors", "unanswered", "fault hits",
+              "last tick")
+    rows = [(name, *(str(t.get(c, 0)) for c in ("to_device", "to_flight", "bytes_to_device", "bytes_to_flight",
+                                                 "errors", "unanswered", "fault_hits", "last_tick")))
+            for name, t in sorted(traffic.items())]
+    widths = [max(len(row[i]) for row in [header, *rows]) for i in range(len(header))]
+    lines = ["  " + "  ".join(cell.ljust(widths[i]) if i == 0 else cell.rjust(widths[i]) for i, cell in enumerate(row))
+             for row in [header, *rows]]
+    for name, t in sorted(traffic.items()):
+        missing = [f"{address} ({a['unanswered']})" for address, a in sorted(t.get("addresses", {}).items(),
+                                                                                key=lambda item: int(item[0], 16))
+                   if a.get("unanswered")]
+        if missing:
+            lines.append(f"  nothing answered on {name} at: {', '.join(missing)}")
+        elif t.get("unanswered"):
+            lines.append(f"  nothing answered on {name}: no device is attached")
+    return lines
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     """Where a running simulation is: tick, run state, faults, bus counters"""
-    answers = _send(_bridges(Path(args.directory), args.element), "status", {}, args.timeout)
+    found = _bridges(Path(args.directory), args.element)
+    answers = _send(found, "status", {}, args.timeout)
+    if getattr(args, "bus", False):
+        from .bridge import bus_traffic
+
+        for name, answer in _send(found, "bus_stats", {}, args.timeout).items():
+            answers[name]["bus_traffic"] = bus_traffic(answer)
     if args.json:
         print(json.dumps(answers if len(answers) > 1 else next(iter(answers.values())), indent=2))
         return 0
@@ -314,6 +344,8 @@ def cmd_status(args: argparse.Namespace) -> int:
                  if status.get("scenario_steps") else "")
               + f"; recording: {'yes' if status.get('recording') else 'no'}")
         print(f"  endpoints: {', '.join(status.get('endpoints', [])) or 'none'}")
+        if "bus_traffic" in status:
+            print("\n".join(render_traffic(status["bus_traffic"])))
     return 0
 
 
@@ -462,6 +494,9 @@ def main(argv=None) -> int:
     status.add_argument("directory", nargs="?", default=".", help="generated simulation deployment or system directory")
     status.add_argument("--element", help="one element of a system (default: all)")
     status.add_argument("--timeout", type=float, default=2.0, help="seconds to wait for the bridge (default 2)")
+    status.add_argument("--bus", action="store_true",
+                        help="also the traffic of each bus endpoint: what flight software did, what came to it, bytes "
+                             "each way, errors, what nothing answered (and at which address), fault hits")
     status.add_argument("--json", action="store_true")
     status.set_defaults(handler=cmd_status)
 

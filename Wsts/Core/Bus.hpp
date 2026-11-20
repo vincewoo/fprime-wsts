@@ -168,6 +168,10 @@ struct Record {
     Bytes rdata;           //!< bytes read back (i2c, spi); a register value read, little-endian
     int status = 0;
     bool level = false;    //!< gpio level
+    //! Nothing answered: no device on the endpoint, none at the I2C address, or nothing at the
+    //! register offset (RegisterStatus::NO_DEVICE from the bus or the model). Counted in the
+    //! endpoint's traffic; not part of a recording.
+    bool unanswered = false;
     JsonObj toJson() const;
 };
 
@@ -184,6 +188,28 @@ struct BusCounters {
     std::uint64_t bytes = 0;
     std::uint64_t errors = 0;
     std::uint64_t faultHits = 0;
+};
+
+//! Traffic at one I2C address or register offset of an endpoint
+struct AddressTraffic {
+    std::uint64_t transactions = 0;
+    std::uint64_t errors = 0;      //!< transactions that returned an error status
+    std::uint64_t unanswered = 0;  //!< transactions nothing answered (Record::unanswered)
+};
+
+//! Traffic of one bus endpoint since start-up
+struct EndpointTraffic {
+    std::uint64_t transactions = 0;
+    std::uint64_t toDevice = 0;       //!< transactions flight software made: sends, reads, writes, transfers, pin writes
+    std::uint64_t toFlight = 0;       //!< what reached flight software unasked: received bytes, input levels, interrupts
+    std::uint64_t bytesToDevice = 0;  //!< bytes sent, written or shifted out
+    std::uint64_t bytesToFlight = 0;  //!< bytes received or read back
+    std::uint64_t errors = 0;         //!< transactions that returned an error status
+    std::uint64_t unanswered = 0;     //!< transactions nothing answered
+    std::uint64_t faultHits = 0;      //!< transactions a fault was applied to (the endpoint's and its interrupts')
+    std::uint64_t lastTick = 0;       //!< tick of the last transaction
+    //! By I2C address (i2c) or register offset (reg_rd, reg_wr)
+    std::map<std::uint64_t, AddressTraffic> byAddress;
 };
 
 // ----------------------------------------------------------------------
@@ -313,6 +339,8 @@ class Bus {
     void setObserver(BusObserver* observer) { m_observer.store(observer); }
     void setTick(std::uint64_t tick) { m_tick.store(tick); }
     BusCounters counters();
+    //! Traffic of every endpoint that has had any, by endpoint name
+    std::map<std::string, EndpointTraffic> traffic();
     //! Drop all endpoints, devices, faults and counters (unit tests)
     void reset();
 
@@ -368,6 +396,9 @@ class Bus {
     std::atomic<std::uint64_t> m_bytes{0};
     std::atomic<std::uint64_t> m_errors{0};
     std::atomic<std::uint64_t> m_faultHits{0};
+    //! Per endpoint; its own lock, taken on every transaction and never with m_mutex held
+    std::mutex m_trafficMutex;
+    std::map<std::string, EndpointTraffic> m_traffic;
 };
 
 }  // namespace Wsts

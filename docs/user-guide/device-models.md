@@ -120,6 +120,11 @@ model that starts with the run (below).
 `fprime-wsts init --models` does the same for every bus endpoint of a new simulation
 project, so a fresh project builds with every endpoint answering.
 
+To find which devices still need a model, run the deployment and look where nothing
+answered: `fprime-wsts status <dir> --bus` lists each endpoint's traffic and the I2C
+addresses and register offsets flight software reached with nothing there, and the GDS shows
+`wstsControl.UnansweredTraffic` the first time each one happens.
+
 ## A C++ model
 
 Implement one of the device interfaces in `Wsts/Core/Bus.hpp` (`ByteStreamDevice`,

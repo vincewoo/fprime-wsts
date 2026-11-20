@@ -462,7 +462,8 @@
         "Cdh.wstsControl.SimLog",
         "Cdh.wstsControl.SimPaused",
         "Cdh.wstsControl.SimRateSet",
-        "Cdh.wstsControl.SimResumed"
+        "Cdh.wstsControl.SimResumed",
+        "Cdh.wstsControl.UnansweredTraffic"
       ],
       "channels": [
         "Cdh.wstsControl.ActiveFaults",

@@ -2581,6 +2581,80 @@ TEST_F(CoreTest, RegisterFileStoresSignals) {
 
 // What a deployment publishes with the WSTS telemetry (the channels of its models'
 // registers) is called when Wsts.SimControl publishes, and forgotten on reset
+// Each endpoint counts its own traffic: what flight software did, what came to it, the
+// bytes each way, errors, what nothing answered, by I2C address or register offset
+TEST_F(CoreTest, TrafficIsCountedPerEndpointAndAddress) {
+    std::uint8_t value = 0;
+    ASSERT_EQ(readRegister(0x75, value), 0);
+    Bytes read(2, 0);
+    EXPECT_EQ(Bus::get().i2cTransact("i2c", 0x40, Bytes{0x02}, read), 1);  // no device at 0x40
+    EXPECT_EQ(Bus::get().i2cTransact("i2c", 0x40, Bytes{0x02}, read), 1);
+    ASSERT_EQ(Bus::get().byteStreamSend("uart", Bytes{1, 2, 3}), 0);
+    Bus::get().byteStreamInject("uart", Bytes{9, 9}, "inject");
+    Bytes miso(4, 0);
+    EXPECT_EQ(Bus::get().spiTransfer("spi", Bytes{0x80, 0, 0, 0}, miso), 0);  // MISO floats
+    std::uint64_t word = 0;
+    EXPECT_EQ(Bus::get().registerRead("fpga", 0x10, 4, word), Wsts::RegisterStatus::NO_DEVICE);
+    const auto traffic = Bus::get().traffic();
+
+    const Wsts::EndpointTraffic& i2c = traffic.at("i2c");
+    EXPECT_EQ(i2c.transactions, 3u);
+    EXPECT_EQ(i2c.toDevice, 3u);
+    EXPECT_EQ(i2c.toFlight, 0u);
+    EXPECT_EQ(i2c.bytesToDevice, 3u);
+    EXPECT_EQ(i2c.bytesToFlight, 1u + 2u + 2u);
+    EXPECT_EQ(i2c.errors, 2u);
+    EXPECT_EQ(i2c.unanswered, 2u);
+    EXPECT_EQ(i2c.byAddress.at(0x68).transactions, 1u);
+    EXPECT_EQ(i2c.byAddress.at(0x68).unanswered, 0u);
+    EXPECT_EQ(i2c.byAddress.at(0x40).transactions, 2u);
+    EXPECT_EQ(i2c.byAddress.at(0x40).unanswered, 2u);
+
+    const Wsts::EndpointTraffic& uart = traffic.at("uart");
+    EXPECT_EQ(uart.toDevice, 1u);
+    EXPECT_EQ(uart.toFlight, 1u);
+    EXPECT_EQ(uart.bytesToDevice, 3u);
+    EXPECT_EQ(uart.bytesToFlight, 2u);
+    EXPECT_EQ(uart.unanswered, 0u) << "a byte stream may be served by a subscribed client";
+    EXPECT_EQ(traffic.at("spi").unanswered, 1u);
+    EXPECT_EQ(traffic.at("fpga").unanswered, 1u);
+    EXPECT_EQ(traffic.at("fpga").byAddress.at(0x10).errors, 1u);
+
+    // Faults count with the endpoint they hit, its interrupts included
+    std::string error;
+    ASSERT_TRUE(Control::get().execLine(R"({"op": "fault_set", "endpoint": "i2c", "kind": "error", "arg": 3})", error)) << error;
+    (void)readRegister(0x75, value);
+    EXPECT_EQ(Bus::get().traffic().at("i2c").faultHits, 1u);
+    Control::get().reset();
+    EXPECT_TRUE(Bus::get().traffic().empty());
+}
+
+TEST_F(CoreTest, UnansweredTrafficIsReportedOncePerAddress) {
+    Bytes read(1, 0);
+    for (int i = 0; i < 3; i++) {
+        (void)Bus::get().i2cTransact("i2c", 0x40, Bytes{0}, read);
+        (void)Bus::get().i2cTransact("i2c", 0x41, Bytes{0}, read);
+        (void)Bus::get().i2cTransact("i2c", 0x68, Bytes{0}, read);  // answered
+    }
+    std::uint64_t word = 0;
+    (void)Bus::get().registerRead("fpga", 0x123456789ull * 4, 4, word);
+    std::vector<Wsts::SimEvent> unanswered;
+    Wsts::SimEvent event;
+    while (Control::get().popEvent(event)) {
+        if (event.code == Wsts::SimEvent::UNANSWERED) {
+            unanswered.push_back(event);
+        }
+    }
+    ASSERT_EQ(unanswered.size(), 3u);
+    EXPECT_EQ(unanswered[0].endpoint, "i2c");
+    EXPECT_EQ(unanswered[0].text, "i2c");
+    EXPECT_EQ(unanswered[0].a, 0x40u);
+    EXPECT_EQ(unanswered[1].a, 0x41u);
+    EXPECT_EQ(unanswered[2].text, "register");
+    EXPECT_EQ((static_cast<std::uint64_t>(unanswered[2].b) << 32) | unanswered[2].a, 0x123456789ull * 4);
+    EXPECT_EQ(std::string(unanswered[2].toJson().str("event")), "unanswered");
+}
+
 TEST_F(CoreTest, TelemetrySourcesArePublishedTogether) {
     int published = 0;
     Control::get().addTelemetrySource([&published] { published++; });

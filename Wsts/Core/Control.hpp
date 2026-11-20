@@ -34,6 +34,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -95,6 +96,7 @@ struct SimEvent {
         INJECTED,
         ACTION_FAILED,
         LOG,
+        UNANSWERED,  //!< flight software's first access nothing answered, per endpoint and address
     };
     Code code = LOG;
     std::string endpoint;
@@ -327,6 +329,8 @@ class Control : public BusObserver {
     std::mutex m_mutex;  //!< models, events, listeners, taps
     std::map<std::string, Model*> m_models;
     std::deque<SimEvent> m_events;
+    //! Endpoints and addresses an UNANSWERED event has been posted for
+    std::set<std::pair<std::string, std::uint64_t>> m_unanswered;
     std::vector<TickListener> m_listeners;
     std::vector<std::function<void()>> m_telemetrySources;
     RecordTap m_recordTap;

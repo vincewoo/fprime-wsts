@@ -453,7 +453,8 @@
         "Payload.wstsControl.SimLog",
         "Payload.wstsControl.SimPaused",
         "Payload.wstsControl.SimRateSet",
-        "Payload.wstsControl.SimResumed"
+        "Payload.wstsControl.SimResumed",
+        "Payload.wstsControl.UnansweredTraffic"
       ],
       "channels": [
         "Payload.wstsControl.ActiveFaults",

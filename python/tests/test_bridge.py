@@ -269,3 +269,26 @@ def test_an_action_for_one_element_of_a_system_needs_its_name(tmp_path, capsys):
     assert "add --element with one of cdh, payload" in capsys.readouterr().err
     assert main(["ctl", str(tmp_path), "pause", "--element", "radio"]) == 2
     assert "not an element" in capsys.readouterr().err
+
+
+def test_bus_traffic_is_nested_by_endpoint_and_address():
+    from fprime_wsts.bridge import bus_traffic
+    from fprime_wsts.cli import render_traffic
+
+    flat = {"id": 3, "bus.i2cBus.transactions": 12, "bus.i2cBus.to_device": 12, "bus.i2cBus.unanswered": 2,
+            "bus.i2cBus.at.0x68.transactions": 10, "bus.i2cBus.at.0x68.unanswered": 0,
+            "bus.i2cBus.at.0x40.transactions": 2, "bus.i2cBus.at.0x40.unanswered": 2,
+            "bus.spiBus.transactions": 3, "bus.spiBus.unanswered": 3, "bus.heaterPin.transactions": 0}
+    traffic = bus_traffic(flat)
+    assert set(traffic) == {"i2cBus", "spiBus", "heaterPin"}
+    assert traffic["i2cBus"]["transactions"] == 12
+    assert traffic["i2cBus"]["addresses"] == {"0x68": {"transactions": 10, "unanswered": 0},
+                                              "0x40": {"transactions": 2, "unanswered": 2}}
+    assert traffic["heaterPin"] == {"addresses": {}, "transactions": 0}
+    lines = render_traffic(traffic)
+    assert lines[0].split() == ["endpoint", "from", "flight", "to", "flight", "bytes", "out", "bytes", "in", "errors",
+                                "unanswered", "fault", "hits", "last", "tick"]
+    assert lines[1].split()[0] == "heaterPin" and lines[2].split()[:2] == ["i2cBus", "12"]
+    assert "  nothing answered on i2cBus at: 0x40 (2)" in lines
+    assert "  nothing answered on spiBus: no device is attached" in lines
+    assert render_traffic({}) == ["  bus traffic: no endpoints"]
