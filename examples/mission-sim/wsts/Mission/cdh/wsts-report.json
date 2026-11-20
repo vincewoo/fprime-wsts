@@ -402,6 +402,19 @@
     "setup_base_id": 402681856,
     "control_base_id": 402685952
   },
+  "sim_telemetry": {
+    "instance": "wstsTlm",
+    "base_id": 402688000,
+    "endpoints": [
+      "hubDriver",
+      "uart"
+    ],
+    "links": [
+      "hub"
+    ],
+    "timing": true,
+    "channels": 23
+  },
   "bridge": "tcp:50100",
   "dictionary": {
     "identical_to_flight": false,
@@ -477,7 +490,30 @@
         "Cdh.wstsControl.ScenarioSteps",
         "Cdh.wstsControl.SimRunState",
         "Cdh.wstsControl.SimTicks",
-        "Cdh.wstsControl.SimTimeScale"
+        "Cdh.wstsControl.SimTimeScale",
+        "Cdh.wstsTlm.hubDriver_FromFlight",
+        "Cdh.wstsTlm.hubDriver_ToFlight",
+        "Cdh.wstsTlm.hubDriver_BytesOut",
+        "Cdh.wstsTlm.hubDriver_BytesIn",
+        "Cdh.wstsTlm.hubDriver_Errors",
+        "Cdh.wstsTlm.hubDriver_Unanswered",
+        "Cdh.wstsTlm.uart_FromFlight",
+        "Cdh.wstsTlm.uart_ToFlight",
+        "Cdh.wstsTlm.uart_BytesOut",
+        "Cdh.wstsTlm.uart_BytesIn",
+        "Cdh.wstsTlm.uart_Errors",
+        "Cdh.wstsTlm.uart_Unanswered",
+        "Cdh.wstsTlm.hubDriver_RateOut",
+        "Cdh.wstsTlm.hubDriver_RateIn",
+        "Cdh.wstsTlm.uart_RateOut",
+        "Cdh.wstsTlm.uart_RateIn",
+        "Cdh.wstsTlm.SimSeconds",
+        "Cdh.wstsTlm.BusyTicks",
+        "Cdh.wstsTlm.LateTicks",
+        "Cdh.wstsTlm.Speed",
+        "Cdh.wstsTlm.hub_Sent",
+        "Cdh.wstsTlm.hub_Received",
+        "Cdh.wstsTlm.hub_Up"
       ]
     },
     "added_by_simulators": {

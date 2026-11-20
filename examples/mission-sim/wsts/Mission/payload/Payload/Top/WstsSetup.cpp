@@ -78,6 +78,9 @@ void setup() {
 
     ::Payload::wstsControl.wstsBind("", "");
 
+    // The simulation's own telemetry: bus traffic, timing, links
+    Wsts::Control::get().addTelemetrySource([] { ::Payload::wstsTlm.wstsPublish(); });
+
     // Telemetry of the models' registers: a channel each, published with the WSTS telemetry
     ::Payload::wstsModelTlm.wstsSource(0, [] { return std::uint64_t{model_fpga.peek(0x0)}; });
     ::Payload::wstsModelTlm.wstsSource(1, [] { return std::uint64_t{model_fpga.peek(0x4)}; });

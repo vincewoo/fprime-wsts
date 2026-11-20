@@ -18,6 +18,9 @@ module Payload {
     stack size 64 * 1024 \
     priority 20
 
+  @ The simulation's own telemetry: bus traffic, timing, links
+  instance wstsTlm: WstsAdapted.SimTelemetry base id 0x2f003800
+
   @ The registers of the device models, as telemetry
   instance wstsModelTlm: WstsAdapted.ModelTelemetry base id 0x2f002800
 

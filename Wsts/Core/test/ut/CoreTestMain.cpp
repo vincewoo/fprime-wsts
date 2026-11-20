@@ -6,6 +6,9 @@
 #include <gtest/gtest.h>
 
 #include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 #include <sys/stat.h>
 #include <algorithm>
 #include <atomic>
@@ -2653,6 +2656,73 @@ TEST_F(CoreTest, UnansweredTrafficIsReportedOncePerAddress) {
     EXPECT_EQ(unanswered[2].text, "register");
     EXPECT_EQ((static_cast<std::uint64_t>(unanswered[2].b) << 32) | unanswered[2].a, 0x123456789ull * 4);
     EXPECT_EQ(std::string(unanswered[2].toJson().str("event")), "unanswered");
+}
+
+// Real time: a tick taken after the next was already due is late (the host fell behind),
+// except the first one after a pause, which is behind its schedule by the pause
+TEST_F(CoreTest, RealTimeCountsLateTicksButNotAfterAPause) {
+    std::atomic<bool> quit{false};
+    std::string error;
+    auto behind = []() { return Wsts::Control::Clock::now() - std::chrono::seconds(1); };
+    auto next = behind();
+    ASSERT_TRUE(Control::get().awaitTick(1000, next, quit));
+    EXPECT_EQ(Control::get().status().lateTicks, 0u) << "the first tick has no schedule to be behind";
+    next = behind();
+    ASSERT_TRUE(Control::get().awaitTick(1000, next, quit));
+    EXPECT_EQ(Control::get().status().lateTicks, 1u);
+    next = Wsts::Control::Clock::now() + std::chrono::milliseconds(1);
+    ASSERT_TRUE(Control::get().awaitTick(1000, next, quit));
+    EXPECT_EQ(Control::get().status().lateTicks, 1u) << "on time";
+    ASSERT_TRUE(Control::get().execLine(R"({"op": "pause"})", error)) << error;
+    next = behind();
+    EXPECT_FALSE(Control::get().awaitTick(1000, next, quit));
+    ASSERT_TRUE(Control::get().execLine(R"({"op": "resume"})", error)) << error;
+    next = behind();
+    ASSERT_TRUE(Control::get().awaitTick(1000, next, quit));
+    EXPECT_EQ(Control::get().status().lateTicks, 1u) << "behind by the pause, not late";
+    EXPECT_EQ(Control::get().status().toJson().num("late_ticks"), 1);
+}
+
+// A bridge client that served an I2C address and an SPI device takes only those away when
+// it disconnects: another device on the same endpoint stays
+TEST_F(CoreTest, BridgeClientDetachesOnlyWhatItServed) {
+    Wsts::RegisterMapI2c power;
+    ASSERT_TRUE(power.set("0", "0x22"));
+    Bus::get().attachI2c("i2c", 0x40, &power);
+    Wsts::Bridge& bridge = Wsts::Bridge::get();
+    ASSERT_TRUE(bridge.start("tcp:0"));
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    ASSERT_GE(fd, 0);
+    sockaddr_in where{};
+    where.sin_family = AF_INET;
+    where.sin_port = htons(static_cast<std::uint16_t>(bridge.port()));
+    where.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    ASSERT_EQ(::connect(fd, reinterpret_cast<sockaddr*>(&where), sizeof(where)), 0);
+    const std::string requests = R"({"op": "attach", "id": 1, "endpoint": "i2c", "kind": "i2c", "addr": 104})" "\n"
+                                 R"({"op": "attach", "id": 2, "endpoint": "spi", "kind": "spi"})" "\n";
+    ASSERT_EQ(::write(fd, requests.data(), requests.size()), static_cast<ssize_t>(requests.size()));
+    // Both attached once both answers are back
+    std::string answers;
+    char chunk[512];
+    while (std::count(answers.begin(), answers.end(), '\n') < 2) {
+        const ssize_t n = ::read(fd, chunk, sizeof(chunk));
+        ASSERT_GT(n, 0);
+        answers.append(chunk, static_cast<std::size_t>(n));
+    }
+    ::close(fd);
+    // The client is gone: 0x68 (where it stood in for the IMU) and the SPI device are gone with it
+    Bytes read(1, 0);
+    for (int i = 0; i < 200 && Bus::get().i2cTransact("i2c", 0x68, Bytes{0}, read) != 1; i++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_EQ(Bus::get().i2cTransact("i2c", 0x68, Bytes{0}, read), 1);
+    // ... and the power monitor at 0x40 still answers
+    EXPECT_EQ(Bus::get().i2cTransact("i2c", 0x40, Bytes{0}, read), 0);
+    EXPECT_EQ(read[0], 0x22);
+    Bytes miso(1, 0xAA);
+    EXPECT_EQ(Bus::get().spiTransfer("spi", Bytes{1}, miso), 0);
+    EXPECT_EQ(Bus::get().traffic().at("spi").unanswered, 1u) << "no SPI device any more";
+    bridge.stop();
 }
 
 TEST_F(CoreTest, TelemetrySourcesArePublishedTogether) {

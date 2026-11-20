@@ -30,6 +30,7 @@ def test_the_deployment_schema_has_the_keys_the_parser_accepts():
     assert keys(properties["simulators"]) == manifest.SIMULATOR_KEYS
     assert keys(properties["devices"]["items"]) == manifest.DEVICE_KEYS
     assert keys(properties["models"]["items"]) == manifest.MODEL_KEYS
+    assert keys(properties["telemetry"]["oneOf"][1]) == manifest.TELEMETRY_KEYS
     assert keys(properties["clocks"]["items"]) == manifest.CLOCK_KEYS
     assert keys(properties["cmake"]) == manifest.CMAKE_KEYS
     assert keys(properties["libraries"]) == manifest.LIBRARY_KEYS

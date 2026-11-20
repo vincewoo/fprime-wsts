@@ -51,6 +51,28 @@ def test_remote_telemetry_reaches_the_ground(gds):
     assert gds.assert_telemetry("Payload.instrument.Uptime", timeout=T).get_val() > first
 
 
+def test_simulation_telemetry_of_both_elements(gds):
+    """wstsTlm: each endpoint's traffic, the run's timing and the hub link, as channels"""
+    def value(channel):
+        return gds.assert_telemetry(channel, start="NOW", timeout=T).get_val()
+
+    # The IMU and the power monitor are polled at 11 Hz: transactions grow, and so many bytes a second
+    first = value("Payload.wstsTlm.i2cBus_FromFlight")
+    assert value("Payload.wstsTlm.i2cBus_FromFlight") > first > 0
+    assert value("Payload.wstsTlm.i2cBus_RateIn") > 0
+    # (what nothing answered depends on the tests before: test_payload takes the IMU's model away)
+    assert value("Payload.wstsTlm.i2cBus_Unanswered") >= 0
+    # Cdh's sensor UART reports on its own; Payload's serial sensor once a second
+    assert value("Cdh.wstsTlm.uart_BytesIn") > 0 and value("Payload.wstsTlm.sensorUart_ToFlight") > 0
+    # The hub link is up and carries messages both ways (Payload's telemetry goes to Cdh)
+    assert value("Payload.wstsTlm.hub_Up") is True and value("Cdh.wstsTlm.hub_Up") is True
+    assert value("Payload.wstsTlm.hub_Sent") > 0 and value("Cdh.wstsTlm.hub_Received") > 0
+    # Timing: simulated time moves, at about the host's pace in real time
+    assert value("Payload.wstsTlm.SimSeconds") > 0
+    assert 0.3 < value("Cdh.wstsTlm.Speed") < 3
+    assert value("Cdh.wstsTlm.LateTicks") >= 0
+
+
 def test_command_is_routed_through_the_hub(gds, wsts_system):
     gds.send_command("Payload.instrument.TAKE_SAMPLE", [7])
     event = gds.assert_event("Payload.instrument.SampleTaken", timeout=T)

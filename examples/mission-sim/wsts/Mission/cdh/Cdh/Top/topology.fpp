@@ -10,6 +10,7 @@ module Cdh {
     # WSTS instances (generated)
     instance wstsSetup
     instance wstsControl
+    instance wstsTlm
 
 
     # ----------------------------------------------------------------------

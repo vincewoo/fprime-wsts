@@ -52,6 +52,7 @@ JsonObj SimStatus::toJson() const {
     obj.setNum("stepping", static_cast<std::int64_t>(stepping));
     obj.setBool("counting", counting).setNum("activity", static_cast<std::int64_t>(activity));
     obj.setNum("work", static_cast<std::int64_t>(work)).setNum("busy_ticks", static_cast<std::int64_t>(busyTicks));
+    obj.setNum("late_ticks", static_cast<std::int64_t>(lateTicks));
     obj.setBool("stepped", stepped).setReal("sim_seconds", simSeconds);
     obj.setBool("lockstep", lockstep).setBool("settled", settled);
     obj.setNum("tick_period_ns", static_cast<std::int64_t>(tickPeriodNs));
@@ -104,6 +105,8 @@ void Control::reset() {
     m_paused.store(false);
     m_stepUntil.store(0);
     m_busyTicks.store(0);
+    m_lateTicks.store(0);
+    m_lastTickTaken.store(false);
     m_startedUp = false;
     m_settled = false;
     m_stepped.store(false);
@@ -324,11 +327,19 @@ bool Control::awaitTick(std::uint64_t periodUs, Clock::time_point& next, const s
         const double rate = std::max(0.001, m_rate.load());
         next += std::chrono::microseconds(static_cast<std::int64_t>(static_cast<double>(periodUs) / rate));
         const auto now = Clock::now();
-        if (next < now) {
+        const bool behind = (next < now);
+        if (behind) {
             next = now;  // fell behind (host load, long pause): do not burst to catch up
         }
         std::this_thread::sleep_until(next);
-        return !quit.load() && !m_paused.load();
+        const bool take = !quit.load() && !m_paused.load();
+        // A tick taken behind schedule right after another is late: the host did not keep
+        // up. One behind after a pause is not.
+        if (take && behind && m_lastTickTaken.load()) {
+            m_lateTicks++;
+        }
+        m_lastTickTaken.store(take);
+        return take;
     }
     if (!m_startedUp) {
         // The tick source is up: start-up is over, and the tasks may begin. They begin
@@ -746,6 +757,7 @@ SimStatus Control::status() {
     status.activity = Activity::get().pending();
     status.work = Activity::get().total();
     status.busyTicks = m_busyTicks.load();
+    status.lateTicks = m_lateTicks.load();
     status.stepped = m_stepped.load();
     status.lockstep = m_lockstep.load();
     status.settled = m_settled.load();

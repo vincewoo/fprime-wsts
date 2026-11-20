@@ -114,6 +114,7 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
     class RemoteSpi : public SpiDevice {
       public:
         RemoteSpi(Client& client, std::string endpoint) : m_client(client), m_endpoint(std::move(endpoint)) {}
+        const std::string& endpoint() const { return m_endpoint; }
         int transfer(const Bytes& write, Bytes& read) override {
             JsonObj request;
             request.set("ev", "spi_req").set("endpoint", m_endpoint).set("write", toHex(write));
@@ -172,9 +173,13 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
                 }
             }
         }
-        // Detach anything this client was modelling, then release waiting transactions
-        for (const std::string& endpoint : m_attached) {
-            Bus::get().detach(endpoint);
+        // Detach what this client was modelling, and nothing else: another device on the same
+        // endpoint (a model at another I2C address) stays. Then release waiting transactions.
+        for (const AttachedI2c& attached : m_i2c) {
+            Bus::get().detachI2c(attached.endpoint, attached.addr, attached.remote.get());
+        }
+        for (const std::unique_ptr<RemoteSpi>& remote : m_spi) {
+            Bus::get().detachSpi(remote->endpoint(), remote.get());
         }
         // A register endpoint has one block: the one this client stood in for answers again
         for (auto it = m_register.rbegin(); it != m_register.rend(); ++it) {
@@ -336,8 +341,9 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
             return false;
         }
         if (kind == "i2c") {
-            m_i2c.emplace_back(new RemoteI2c(*this, endpoint));
-            Bus::get().attachI2c(endpoint, static_cast<std::uint32_t>(request.num("addr")), m_i2c.back().get());
+            const auto addr = static_cast<std::uint32_t>(request.num("addr"));
+            m_i2c.push_back(AttachedI2c{endpoint, addr, std::unique_ptr<RemoteI2c>(new RemoteI2c(*this, endpoint))});
+            Bus::get().attachI2c(endpoint, addr, m_i2c.back().remote.get());
         } else if (kind == "spi") {
             m_spi.emplace_back(new RemoteSpi(*this, endpoint));
             Bus::get().attachSpi(endpoint, m_spi.back().get());
@@ -351,7 +357,6 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
                     "inject_bytes / gpio_force";
             return false;
         }
-        m_attached.push_back(endpoint);
         return true;
     }
 
@@ -365,7 +370,12 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
     std::condition_variable m_rpcCv;
     std::map<std::uint32_t, Pending> m_pending;
     std::uint32_t m_nextRid = 1;
-    std::vector<std::unique_ptr<RemoteI2c>> m_i2c;
+    struct AttachedI2c {
+        std::string endpoint;
+        std::uint32_t addr;
+        std::unique_ptr<RemoteI2c> remote;
+    };
+    std::vector<AttachedI2c> m_i2c;
     std::vector<std::unique_ptr<RemoteSpi>> m_spi;
     struct AttachedRegister {
         std::string endpoint;
@@ -373,7 +383,6 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
         RegisterDevice* previous;  //!< the block that was on the endpoint before
     };
     std::vector<AttachedRegister> m_register;
-    std::vector<std::string> m_attached;
 };
 
 // ----------------------------------------------------------------------

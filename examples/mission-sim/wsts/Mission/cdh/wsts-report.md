@@ -63,6 +63,10 @@ F´ components that the simulation adds to the topology. They are not in the fli
 - Opcodes: 45 of 80 (`CMD_DISPATCHER_DISPATCH_TABLE_SIZE` in `../../../config/CommandDispatcherImplCfg.hpp`)
 - Parameters: 1 of 25 (`PRMDB_NUM_DB_ENTRIES` in `../../../../../lib/fprime/default/config/PrmDbImplCfg.hpp`)
 
+## Simulation telemetry
+
+`wstsTlm` (23 channels, published with `wstsControl`'s): bus traffic of `hubDriver`, `uart`; timing; links `hub`.
+
 ## Device models
 
 - none in-process (attach external models through the bridge)
@@ -80,7 +84,7 @@ F´ components that the simulation adds to the topology. They are not in the fli
 - `SensorLink.uart.BytesRecv`
 - `SensorLink.uart.BytesSent`
 
-**Added (WSTS):** 49
+**Added (WSTS):** 72
 - `Cdh.wstsControl.FAULT_CLEAR`
 - `Cdh.wstsControl.FAULT_SET`
 - `Cdh.wstsControl.GPIO_FORCE`
@@ -130,6 +134,29 @@ F´ components that the simulation adds to the topology. They are not in the fli
 - `Cdh.wstsControl.SimRunState`
 - `Cdh.wstsControl.SimTicks`
 - `Cdh.wstsControl.SimTimeScale`
+- `Cdh.wstsTlm.hubDriver_FromFlight`
+- `Cdh.wstsTlm.hubDriver_ToFlight`
+- `Cdh.wstsTlm.hubDriver_BytesOut`
+- `Cdh.wstsTlm.hubDriver_BytesIn`
+- `Cdh.wstsTlm.hubDriver_Errors`
+- `Cdh.wstsTlm.hubDriver_Unanswered`
+- `Cdh.wstsTlm.uart_FromFlight`
+- `Cdh.wstsTlm.uart_ToFlight`
+- `Cdh.wstsTlm.uart_BytesOut`
+- `Cdh.wstsTlm.uart_BytesIn`
+- `Cdh.wstsTlm.uart_Errors`
+- `Cdh.wstsTlm.uart_Unanswered`
+- `Cdh.wstsTlm.hubDriver_RateOut`
+- `Cdh.wstsTlm.hubDriver_RateIn`
+- `Cdh.wstsTlm.uart_RateOut`
+- `Cdh.wstsTlm.uart_RateIn`
+- `Cdh.wstsTlm.SimSeconds`
+- `Cdh.wstsTlm.BusyTicks`
+- `Cdh.wstsTlm.LateTicks`
+- `Cdh.wstsTlm.Speed`
+- `Cdh.wstsTlm.hub_Sent`
+- `Cdh.wstsTlm.hub_Received`
+- `Cdh.wstsTlm.hub_Up`
 
 **Added (simulator components):** 41
 - `SensorSim.sensorSim.SET_BIAS`
