@@ -249,8 +249,9 @@ class ModelSpec:
     header: str
     endpoint: str
     kind: str  # bytestream, i2c, spi, gpio, register, none
-    address: int = 0
+    address: int = 0  # I2C_ANY_ADDRESS: every address no other device on the endpoint has
     params: Dict[str, str] = field(default_factory=dict)
+    telemetry: bool = True  # a channel per register of a stock register model (model_tlm.py)
 
 
 @dataclass
@@ -409,6 +410,7 @@ SUBSTITUTE_KEYS = {"instance", "component", "with", "endpoint", "options", "port
                    "gpio_endpoint", *ATTRIBUTE_KEYS}
 SIMULATOR_KEYS = {"instances", "topologies", "connections", "headers"}
 DEVICE_KEYS = {"instance", "endpoint", "options"}
+MODEL_KEYS = {"name", "class", "header", "endpoint", "kind", "address", "params", "telemetry"}
 CMAKE_KEYS = {"extra_subdirectories", "exclude_subdirectories", "build_on_host", "depends", "cache", "include", "include_early",
               "stub_variants", "cxx_flags", "bits"}
 CONNECTION_END = r"([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+)\s*(?:\[\s*(\d+)\s*\])?"
@@ -474,6 +476,44 @@ def parse_connection(text: str, where: str) -> ConnectionSpec:
         target=target.replace("$", ""), target_index=int(target_index) if target_index is not None else None,
     )
 MODEL_KINDS = {"bytestream", "i2c", "spi", "gpio", "register", "none"}
+#: `address: any` of an I2C model (Wsts::I2C_ANY_ADDRESS)
+I2C_ANY_ADDRESS = 0xFFFFFFFF
+
+
+def _model_address(entry: dict, where: str) -> int:
+    value = entry.get("address", 0)
+    if isinstance(value, str) and value.strip().lower() == "any":
+        if str(entry.get("kind", "")).lower() != "i2c":
+            raise WstsError(f"{where}: model '{entry['name']}': address 'any' is for I2C models only")
+        return I2C_ANY_ADDRESS
+    return _int(value, f"{where}: model '{entry['name']}' address")
+
+
+def check_model_params(cls: str, name: str, params: Dict[str, str], where: str) -> None:
+    """Check the signals among the parameters of a stock register model (Signal.hpp), which the
+    model would otherwise reject only at start-up, with less to say"""
+    from .signals import SignalError, is_plain_number, signal
+
+    for key, value in params.items():
+        if cls == "Wsts::RegisterMapI2c":
+            if is_plain_number(value):
+                continue
+        elif cls == "Wsts::RegisterFile":
+            if not key.startswith("reg.") or is_plain_number(value):
+                continue
+        else:
+            return
+        try:
+            parsed = signal(value)
+        except SignalError as error:
+            raise WstsError(f"{where}: model '{name}' parameter '{key}': {error}") from None
+        if parsed.format is not None and cls == "Wsts::RegisterMapI2c" and parsed.format.bytes > 1 \
+                and not parsed.format.explicit_order:
+            raise WstsError(f"{where}: model '{name}' parameter '{key}': a format wider than a byte needs its byte "
+                            "order: be or le after it (u16be, s24le, ...)")
+        if parsed.format is not None and cls == "Wsts::RegisterFile" and parsed.format.explicit_order:
+            raise WstsError(f"{where}: model '{name}' parameter '{key}': a register is a 32-bit word and has no "
+                            "byte order: use u16, s8, ... without be or le")
 
 
 def _cxx_flags(value, where: str) -> Dict[str, List[str]]:
@@ -601,6 +641,9 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
         for key in ("name", "class", "endpoint", "kind"):
             if key not in entry:
                 raise WstsError(f"{where}: model entry is missing '{key}'")
+        unknown = set(entry) - MODEL_KEYS
+        if unknown:
+            raise WstsError(f"{where}: model {entry['name']}: unknown key(s): {unknown_keys(unknown, MODEL_KEYS)}")
         kind = str(entry["kind"]).lower()
         if kind not in MODEL_KINDS:
             raise WstsError(f"{where}: model '{entry['name']}': kind must be one of {', '.join(sorted(MODEL_KINDS))}")
@@ -611,10 +654,12 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
                 header=str(entry.get("header", "Wsts/Core/Models.hpp")),
                 endpoint=str(entry["endpoint"]),
                 kind=kind,
-                address=_int(entry.get("address", 0), f"{where}: model '{entry['name']}' address"),
+                address=_model_address(entry, where),
                 params={str(k): str(v) for k, v in (entry.get("params") or {}).items()},
+                telemetry=_flag(entry.get("telemetry", True), f"{where}: model '{entry['name']}' telemetry"),
             )
         )
+        check_model_params(manifest.models[-1].cls, manifest.models[-1].name, manifest.models[-1].params, where)
 
     control = data.get("control", {})
     if isinstance(control, str):

@@ -5,7 +5,7 @@
 | Command | Purpose |
 |---|---|
 | `fprime-wsts survey [DIR]... [--deployment NAME]... [--no-trial] [--json]` | For every F´ project under the directories (default: the current one), list each deployment's hardware instances and what the generator would do with each, byte stream drivers by role (ground link, hub link, device), register interface components, tick and time sources, entry points, ID range, and the result of a trial generation with a minimal manifest. Writes nothing. Exit status 1 when no project is found |
-| `fprime-wsts init <flight project> [--output DIR] [--deployment NAME]... [--no-trial] [--no-submodule] [--json]` | The same survey of one flight project, then a simulation project written from it: `wsts.yaml` for one deployment, or `<element>.yaml` for each and `wsts-system.yaml` for several, and a `.gitignore`. Default directory: `<project>-sim` beside the flight project. Decisions it cannot make are marked `TODO`. Never overwrites a file, and refuses a directory inside the flight project. A new project (no manifest in the directory yet) also gets the running toolkit as a git submodule at `lib/fprime-wsts`, at this checkout's commit, with its `origin` as the URL; the directory becomes a git repository if it is in none. Nothing is committed. `--no-submodule` leaves it out. In `--json`, `toolkit` says what was done |
+| `fprime-wsts init <flight project> [--output DIR] [--deployment NAME]... [--no-trial] [--no-submodule] [--models] [--json]` | The same survey of one flight project, then a simulation project written from it: `wsts.yaml` for one deployment, or `<element>.yaml` for each and `wsts-system.yaml` for several, and a `.gitignore`. Default directory: `<project>-sim` beside the flight project. Decisions it cannot make are marked `TODO`. Never overwrites a file, and refuses a directory inside the flight project. A new project (no manifest in the directory yet) also gets the running toolkit as a git submodule at `lib/fprime-wsts`, at this checkout's commit, with its `origin` as the URL; the directory becomes a git repository if it is in none. Nothing is committed. `--no-submodule` leaves it out. In `--json`, `toolkit` says what was done. `--models` also starts a device model for each bus endpoint the survey finds, as `new-model` does (`Models/<Endpoint>Model.hpp`, `.cpp`, the module and `library.cmake`), named in the manifests with `cmake.depends: [Models]`; an I2C one at `address: any`. A hub link end gets none: the other element is its device |
 | `fprime-wsts generate <wsts.yaml> [--project DIR] [--output DIR] [--check] [--json]` | Create or refresh a simulated deployment. `--project` defaults to the manifest's `project`, else the nearest `settings.ini` above the manifest. `--check` writes nothing and exits 1 if the output is out of date |
 | `fprime-wsts generate <wsts-system.yaml> [--output DIR] [--check] [--json]` | The same for every element of a [system](systems.md), plus `wsts-system.json` |
 | `fprime-wsts build [DIR or manifest] [-j N] [--element NAME]... [--fresh] [-D NAME=VALUE]... [--keep-going] [--project DIR] [--json]` | Configure and build a generated deployment, or every element of a generated system; given a manifest, `generate` first. The configure step (`fprime-util generate`, with the report's `configure_options` and the `-D` options) runs when there is no build directory, when one was left unfinished, with `--fresh`, and when what a build directory caches has changed since this command configured it (the overlay's cache entries, its `settings.ini`, the options; recorded in `wsts-build.json` in the build directory). A build directory configured by hand is used as it is. Output goes to `DIR/wsts-logs/build.log` (`wsts-logs/<element>/build.log` for a system). Exit status 1 when a build fails; it stops at the first element that fails unless `--keep-going` |
@@ -16,13 +16,14 @@
 | `fprime-wsts check-host <DIR or manifest> [--project DIR] [--json]` | List what the host must provide for the simulated build (system headers, libraries, packages, SDK files, sanitizer runtime) and whether it does, with the host and flight compilers. Compiles nothing of the project. Exit status 1 when something is missing; a check that cannot be made is a warning. Given a generated directory it also writes `wsts-host.md` and `wsts-host.json` there |
 | `fprime-wsts report [DIR] [--json]` | Print a generated deployment's fidelity report, and the host check of this machine if `generate` or `check-host` left one |
 | `fprime-wsts scaffold <Component> --output DIR [--project DIR] [--name NAME]` | Start a mirror surrogate for a flight component |
+| `fprime-wsts new-model <Name> --kind i2c\|spi\|bytestream\|gpio\|register [--endpoint E] [--address A\|any] [--python] [--project DIR] [--manifest FILE] [--namespace NS] [--json]` | Start a [device model](user-guide/device-models.md#start-one-with-new-model) that builds and answers from the first run, with TODOs where the device's behaviour goes. C++: `Models/<Name>.hpp` and `.cpp` in the simulation project (default: the current directory), added to `Models/CMakeLists.txt` (made, or added to when `new-model` made it), and `library.cmake` when there is none. `--python`: `pymodels/<name>.py`, which defines `serve(sim)`. The model is named in the manifest (`--manifest`, else the project's one deployment manifest) under `models` with `cmake.depends: [Models]`, or under `run.models`, edited as text so its comments stay; what cannot be placed is printed to add by hand. Its name there is the class name with a lowercase first letter. An I2C model is at `address: any` unless `--address` says. Never overwrites a file |
 
 Errors the user can fix are printed as `fprime-wsts: error: …` with exit code 2.
 
 A command given a path in a simulation project that pins the toolkit (a `lib/fprime-wsts`
 in the directory of the path or one above it) is run by that toolkit when it is not the
-one running: `generate`, `check-host`, `build`, `report`, `run`, `status`, `ctl` and
-`scaffold` (by `--output`). It runs in the same Python environment with the pinned
+one running: `generate`, `check-host`, `build`, `report`, `run`, `status`, `ctl`,
+`scaffold` (by `--output`) and `new-model` (by `--project`). It runs in the same Python environment with the pinned
 `python/` first on the path, and says so on stderr. A `lib/fprime-wsts` that is not checked
 out is an error ([Simulation project](user-guide/simulation-project.md#the-toolkit-submodule)).
 
@@ -101,8 +102,9 @@ models:                          # in-process C++ device models
     header: Wsts/Core/Models.hpp  # default
     endpoint: i2cBus
     kind: i2c                    # bytestream | i2c | spi | gpio | register | none
-    address: 0x68                # i2c only
+    address: 0x68                # i2c only; `any`: every address no other device on the endpoint has
     params: {"0x75": "0x68"}     # each becomes model.set(key, value) at start-up
+    telemetry: true              # default: a channel per register of a stock register model (below)
   - name: fpga                   # a block of memory-mapped registers (see "Register blocks")
     class: Wsts::RegisterFile
     endpoint: fpgaRegs           # the endpoint of a substituted register interface instance
@@ -858,6 +860,57 @@ lines starting with `#` are skipped.
 | `WSTS_START_PAUSED` | `1`: start paused. `fprime-wsts run` sets it for a deployment with `run.models`, and resumes once they are attached |
 | any in `run.env` or `--env` | Set by `fprime-wsts run` and the pytest plugin for the simulator components' phase code |
 | `WSTS_LINK_DIR` | Directory of the link sockets of a system. A stream link is `<link>.sock`; a datagram link binds `<link>.a.sock` at its `a` end and `<link>.b.sock` at its `b` end. Set by `fprime-wsts run`; without it links stay down |
+
+### Signals
+
+The registers of `Wsts::RegisterMapI2c` and `Wsts::RegisterFile` (and the `value` of a model
+`new-model` starts) take a signal of simulated time in place of a number: stored in the
+register on every tick, until a number is given (in the manifest, with `model_set`,
+`i2c_reg_set`, `reg_set`). `Wsts/Core/Signal.hpp` and `python/fprime_wsts/signals.py` are the
+same language, and give the same values.
+
+| Function (arguments by position or by name, all optional) | Value at `t` seconds |
+|---|---|
+| `sine(offset=0, amplitude=1, period=1, phase=0)` | `offset + amplitude·sin(2π(t/period + phase))` |
+| `square(low=0, high=1, period=1, duty=0.5, phase=0)` | `high` for the first `duty` of each period, else `low` |
+| `triangle(low=0, high=1, period=1, phase=0)` | `low` → `high` → `low` over each period |
+| `sawtooth(low=0, high=1, period=1, phase=0)` | `low` → `high` over each period |
+| `ramp(from=0, to=1, start=0, duration=1)` | `from` until `start`, linearly to `to` over `duration`, then `to` |
+| `step(before=0, after=1, at=0)` | `before` until `at`, then `after` |
+| `noise(sd=1, mean=0, seed=0)` | Gaussian; a hash of the seed and the instant, so the same in every run |
+| `uniform(low=0, high=1, seed=0)` | Uniform in [low, high); the same |
+
+`t` is simulated time in seconds (tick count times tick period: the same in two runs in
+stepped time); `+ - * /` and parentheses combine terms; arguments do not depend on `t`.
+`<expression> as <format>` says how the value is stored: `u8`, `s8`, `u16`, `s16`, `u24`,
+`s24`, `u32` or `s32`, rounded half away from zero and held at the ends of the range. For
+`RegisterMapI2c` the value fills as many registers from the one named, with `be` or `le`
+(`u16be`) when wider than a byte; the default is `u8`. For `RegisterFile` it is the low bits
+of the 32-bit word, no byte order; the default is `u32`. `generate` checks the signals of these
+two models; a model of the project checks its own parameters.
+
+```yaml
+params:
+  "0x02": "sine(offset=14000, amplitude=500, period=30) / 1.25 as u16be"   # RegisterMapI2c
+  "reg.0x0C": "215 + noise(sd=2) as s16"                                    # RegisterFile
+```
+
+### Register telemetry
+
+Each register a manifest gives `Wsts::RegisterMapI2c` (`"<register>"`) or `Wsts::RegisterFile`
+(`reg.<offset>`) a value is a telemetry channel of `wstsModelTlm`, with the register's current
+value: `<model>_0x<register>` (`power_0x02`, `fpga_0x000c`). A value of one to four bytes, or a
+signal stored in as many, is one channel, of the width (`U8`, `U16`, `U32`) and sign (`I…`) of the
+signal's format, big-endian in the order given otherwise; a longer list of bytes is a `U8`
+channel per register. A `RegisterFile` register is a `U32`, or the signal's format.
+`telemetry: false` on a model leaves its registers out.
+
+`wstsModelTlm` is a passive `WstsAdapted.ModelTelemetry` written for the deployment
+(`WstsAdapted/ModelTelemetry/` of the overlay), at the set-up anchor's base ID + 0x800. `Wsts.SimControl`
+writes its channels with its own, once a second (once a simulated second in stepped time),
+through `Wsts::Control::addTelemetrySource`; with `control: false` there is none, and
+`generate` warns. The report lists each model's channels; telemetry packets omit them, as they
+omit `wstsControl`'s.
 
 ## `Wsts.SimControl`
 

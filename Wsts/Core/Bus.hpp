@@ -190,6 +190,9 @@ struct BusCounters {
 // Bus
 // ----------------------------------------------------------------------
 
+//! The address of an I2C device that answers every address no other device on the endpoint has
+constexpr std::uint32_t I2C_ANY_ADDRESS = 0xFFFFFFFFu;
+
 class Bus {
   public:
     using RxHandler = std::function<void(const Bytes&)>;
@@ -233,6 +236,8 @@ class Bus {
     // ---- Device (model) side ----
 
     void attachByteStream(const std::string& endpoint, ByteStreamDevice* device);
+    //! A device at `addr`, or at I2C_ANY_ADDRESS: the device for every address that has none
+    //! of its own (a model that is attached before the device's address is known)
     void attachI2c(const std::string& endpoint, std::uint32_t addr, I2cDevice* device);
     void attachSpi(const std::string& endpoint, SpiDevice* device);
     void attachGpio(const std::string& endpoint, GpioDevice* device);

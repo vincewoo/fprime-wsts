@@ -210,8 +210,11 @@ def test_register_model_is_attached_and_reported(generated):
         "ports_without_a_role": [], "drivers": ["Payload.fpga"], "interrupt_to": ["Payload.fpga.interruptIn"],
         "model": "fpga",
     }]
-    assert {"name": "fpga", "class": "Wsts::RegisterFile", "endpoint": "fpgaRegs", "kind": "register", "address": 0} \
-        in report["models"]
+    fpga = next(m for m in report["models"] if m["name"] == "fpga")
+    assert {k: fpga[k] for k in ("class", "endpoint", "kind", "address")} == {
+        "class": "Wsts::RegisterFile", "endpoint": "fpgaRegs", "kind": "register", "address": 0}
+    # Each register the manifest gives the block is a channel (model_tlm.py)
+    assert fpga["channels"] == [{"channel": "fpga_0x0000", "type": "U32", "register": 0}]
     # The flight component's debug commands and events leave the dictionary, and the report says so
     removed = report["dictionary"]["removed"]
     assert removed["commands"] == ["Payload.fpgaRegs.REG_READ", "Payload.fpgaRegs.REG_WRITE"]
@@ -354,7 +357,8 @@ def test_a_mirror_keeps_the_flight_dictionary(tmp_path):
     block = result.report["register_blocks"][0]
     assert block["surrogate"] == "Sim.SimRegisterInterface" and block["written_for_the_component"] is False
     assert block["ports"]["read32In"] == "read32" and block["interrupt_to"] == ["Payload.fpga.interruptIn"]
-    assert not (tmp_path / "out" / "WstsAdapted").exists()
+    # Nothing is adapted: the only module written for the deployment is its register telemetry
+    assert [p.name for p in (tmp_path / "out" / "WstsAdapted").iterdir()] == ["ModelTelemetry"]
     removed = result.report["dictionary"]["removed"]
     assert not [name for names in removed.values() for name in names if ".fpgaRegs." in name]
     assert "Wsts::Bus::get().attachRegister(\"fpgaRegs\", &model_fpga);" in \

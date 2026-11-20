@@ -136,6 +136,9 @@ fprime_setup_included_code()
 
 # Wsts.SimRegister with the port names and types of the flight components it stands in for
 add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/WstsAdapted/SensorLib_RegisterInterface")
+
+# The registers of the device models, as telemetry
+add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/WstsAdapted/ModelTelemetry")
 set(WSTS_FLIGHT_PROJECT "${CMAKE_CURRENT_LIST_DIR}/../../../../mission")
 add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/Components/Adc")
 add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/Components/FpgaMonitor")

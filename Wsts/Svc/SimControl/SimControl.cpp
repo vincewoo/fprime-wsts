@@ -78,6 +78,8 @@ void SimControl::publishTelemetry() {
     this->tlmWrite_BusTransactions(static_cast<U32>(status.counters.transactions));
     this->tlmWrite_BusBytes(static_cast<U32>(status.counters.bytes));
     this->tlmWrite_BusErrors(static_cast<U32>(status.counters.errors));
+    // Telemetry written for the deployment (the registers of its models), at the same time
+    Control::get().publishTelemetrySources();
 }
 
 void SimControl::drainEvents() {

@@ -398,6 +398,21 @@ def test_flight_driver_reads_and_writes_the_register_block(gds, payload):
     assert [a["value"] for a in payload.register_accesses("fpgaRegs") if a.get("offset") == REG_LEDS] == [0xA5]
 
 
+def test_model_registers_are_telemetry(gds, payload):
+    # Each register the manifest gives the model is a channel of wstsModelTlm, with its value
+    gds.assert_telemetry("Payload.wstsModelTlm.fpga_0x0000", value=0xF00D0001, timeout=T)
+    gds.assert_telemetry("Payload.wstsModelTlm.fpga_0x000c", value=215, timeout=T)
+    try:
+        # A signal of simulated time: stored in the register on every tick, read by flight
+        # software, and seen on the register's channel
+        payload.model_set("fpga", "reg.0x0C", "215 + step(before=0, after=10, at=0)")
+        gds.assert_telemetry("Payload.wstsModelTlm.fpga_0x000c", value=225, timeout=T)
+        gds.assert_telemetry("Payload.fpga.Temperature", value=22.5, timeout=T)
+    finally:
+        payload.model_set("fpga", "reg.0x0C", 215)  # a number ends the signal
+    gds.assert_telemetry("Payload.wstsModelTlm.fpga_0x000c", value=215, timeout=T)
+
+
 def test_register_interrupt_is_serviced_by_flight_software(gds, payload):
     # The model sets "frame ready" and raises interrupt 1 once a second. The driver's
     # handler queues the service; its own thread reads the status and clears it.

@@ -28,6 +28,7 @@
 #include <Wsts/Core/LinkDatagram.hpp>
 #include <Wsts/Core/LinkRegistry.hpp>
 #include <Wsts/Core/LinkGpio.hpp>
+#include <Wsts/Core/Signal.hpp>
 #include <Wsts/Core/Models.hpp>
 #include <Wsts/Core/RegisterSurrogate.hpp>
 
@@ -2455,6 +2456,156 @@ TEST(Exit, SingletonsOutliveGlobalsThatUseThem) {
             std::exit(0);
         },
         ::testing::ExitedWithCode(0), "");
+}
+
+// ----------------------------------------------------------------------
+// Signals
+// ----------------------------------------------------------------------
+
+namespace {
+double signalAt(const std::string& text, double seconds) {
+    Wsts::Signal signal;
+    std::string error;
+    EXPECT_TRUE(Wsts::Signal::parse(text, signal, error)) << error;
+    return signal.at(static_cast<std::uint64_t>(seconds * 1e9 + 0.5));
+}
+std::string signalError(const std::string& text) {
+    Wsts::StoredSignal stored;
+    std::string error;
+    EXPECT_FALSE(Wsts::StoredSignal::parse(text, stored, error)) << text;
+    return error;
+}
+}  // namespace
+
+TEST(SignalTest, FunctionsOfSimulatedTime) {
+    EXPECT_DOUBLE_EQ(signalAt("sine(offset=25, amplitude=5, period=60)", 15), 30);
+    EXPECT_NEAR(signalAt("sine(25, 5, 60)", 45), 20, 1e-9);
+    EXPECT_DOUBLE_EQ(signalAt("square(low=0, high=1, period=2, duty=0.25)", 0.25), 1);
+    EXPECT_DOUBLE_EQ(signalAt("square(low=0, high=1, period=2, duty=0.25)", 1), 0);
+    EXPECT_DOUBLE_EQ(signalAt("triangle(0, 10, 4)", 1), 5);
+    EXPECT_DOUBLE_EQ(signalAt("triangle(0, 10, 4)", 3), 5);
+    EXPECT_DOUBLE_EQ(signalAt("sawtooth(0, 10, 4)", 3), 7.5);
+    EXPECT_DOUBLE_EQ(signalAt("ramp(from=12, to=10, start=10, duration=20)", 5), 12);
+    EXPECT_DOUBLE_EQ(signalAt("ramp(from=12, to=10, start=10, duration=20)", 20), 11);
+    EXPECT_DOUBLE_EQ(signalAt("ramp(from=12, to=10, start=10, duration=20)", 99), 10);
+    EXPECT_DOUBLE_EQ(signalAt("step(before=1, after=2, at=3)", 2.5), 1);
+    EXPECT_DOUBLE_EQ(signalAt("step(before=1, after=2, at=3)", 3), 2);
+    EXPECT_DOUBLE_EQ(signalAt("(t + 1) * 2 - 0x10 / 4", 3), 4);
+    EXPECT_DOUBLE_EQ(signalAt("-step(at=0)", 1), -1);
+}
+
+// Random samples are a hash of the seed and the instant: the same in every run, whatever
+// was read before, and the same as python/fprime_wsts/signals.py computes
+TEST(SignalTest, NoiseIsDeterministic) {
+    EXPECT_DOUBLE_EQ(signalAt("noise(sd=0.1, seed=3)", 1.5), signalAt("noise(sd=0.1, seed=3)", 1.5));
+    EXPECT_NE(signalAt("noise(seed=3)", 1.5), signalAt("noise(seed=4)", 1.5));
+    EXPECT_NEAR(signalAt("uniform(1, 2, seed=7) * 1000", 1.5), 1291.3598704631711, 1e-6);
+    double sum = 0;
+    for (int i = 0; i < 2000; i++) {
+        const double sample = signalAt("uniform(low=-1, high=1)", i * 0.01);
+        EXPECT_GE(sample, -1);
+        EXPECT_LT(sample, 1);
+        sum += signalAt("noise(sd=1, mean=5)", i * 0.01);
+    }
+    EXPECT_NEAR(sum / 2000, 5, 0.1);
+}
+
+TEST(SignalTest, Formats) {
+    Wsts::StoredSignal stored;
+    std::string error;
+    ASSERT_TRUE(Wsts::StoredSignal::parse("step(before=-2, after=70000, at=1) as s16be", stored, error)) << error;
+    EXPECT_EQ(stored.format.toBytes(stored.signal.at(0)), (std::vector<std::uint8_t>{0xFF, 0xFE}));
+    EXPECT_EQ(stored.format.toBytes(stored.signal.at(1000000000ull)), (std::vector<std::uint8_t>{0x7F, 0xFF}));
+    ASSERT_TRUE(Wsts::StoredSignal::parse("0x1234 + 0.4 as u16le", stored, error)) << error;
+    EXPECT_TRUE(stored.signal.constant());
+    EXPECT_EQ(stored.format.toBytes(stored.signal.at(0)), (std::vector<std::uint8_t>{0x34, 0x12}));
+    ASSERT_TRUE(Wsts::StoredSignal::parse("-1 as s8", stored, error));
+    EXPECT_EQ(stored.format.encode(-1), 0xFFu);
+    EXPECT_EQ(stored.format.encode(-500), 0x80u);
+    ASSERT_TRUE(Wsts::StoredSignal::parse("2.5 as u24be", stored, error));
+    EXPECT_EQ(stored.format.encode(2.5), 3u);  // half away from zero
+}
+
+TEST(SignalTest, ErrorsSayWhatIsWrong) {
+    EXPECT_NE(signalError("sine(1, period=0)").find("period must be greater than 0"), std::string::npos);
+    EXPECT_NE(signalError("foo(1)").find("unknown function 'foo'"), std::string::npos);
+    EXPECT_NE(signalError("sine(amp=1)").find("has no argument 'amp'"), std::string::npos);
+    EXPECT_NE(signalError("sine(phase=1, 2)").find("positional argument"), std::string::npos);
+    EXPECT_NE(signalError("sine(period=t)").find("must not depend on t"), std::string::npos);
+    EXPECT_NE(signalError("1 as u12").find("unknown format"), std::string::npos);
+    EXPECT_NE(signalError("(1 + 2").find("expected ')'"), std::string::npos);
+}
+
+TEST_F(CoreTest, RegisterMapI2cStoresSignals) {
+    Wsts::RegisterMapI2c device;
+    ASSERT_TRUE(device.set("0x10", "step(before=0x0102, after=0x0304, at=1) as u16be"));
+    EXPECT_EQ(device.peekRegister(0x10), 0x01);
+    EXPECT_EQ(device.peekRegister(0x11), 0x02);
+    device.update(2000000000ull);
+    EXPECT_EQ(device.peekRegister(0x10), 0x03);
+    EXPECT_EQ(device.peekRegister(0x11), 0x04);
+    // A multi-byte format needs its byte order; a one-byte one does not
+    EXPECT_FALSE(device.set("0x20", "t as u16"));
+    EXPECT_TRUE(device.set("0x20", "t * 10"));
+    device.update(3000000000ull);
+    EXPECT_EQ(device.peekRegister(0x20), 30);
+    // Bytes over any byte of a signal end it
+    ASSERT_TRUE(device.set("0x11", "0x55"));
+    device.update(0);
+    EXPECT_EQ(device.peekRegister(0x10), 0x03);
+    EXPECT_EQ(device.peekRegister(0x11), 0x55);
+    ASSERT_TRUE(device.pokeRegister(0x20, 7));
+    device.update(9000000000ull);
+    EXPECT_EQ(device.peekRegister(0x20), 7);
+}
+
+TEST_F(CoreTest, RegisterFileStoresSignals) {
+    Wsts::RegisterFile block;
+    ASSERT_TRUE(block.set("reg.0x8", "step(before=5, after=-1, at=1) as s16"));
+    EXPECT_EQ(block.peek(0x8), 5u);
+    block.update(1000000000ull);
+    EXPECT_EQ(block.peek(0x8), 0xFFFFu);
+    ASSERT_TRUE(block.set("reg.0xC", "sawtooth(0, 1000, 10)"));
+    block.update(2500000000ull);
+    EXPECT_EQ(block.peek(0xC), 250u);
+    EXPECT_FALSE(block.set("reg.0x10", "t as u16be"));  // a register has no byte order
+    EXPECT_FALSE(block.set("reg.0x12", "t"));           // not a register offset
+    ASSERT_TRUE(block.set("reg.0xC", "9"));
+    block.update(5000000000ull);
+    EXPECT_EQ(block.peek(0xC), 9u);
+    ASSERT_TRUE(block.set("reg.0x8", "t"));
+    ASSERT_TRUE(block.poke(0x8, 3));
+    block.update(5000000000ull);
+    EXPECT_EQ(block.peek(0x8), 3u);
+}
+
+// What a deployment publishes with the WSTS telemetry (the channels of its models'
+// registers) is called when Wsts.SimControl publishes, and forgotten on reset
+TEST_F(CoreTest, TelemetrySourcesArePublishedTogether) {
+    int published = 0;
+    Control::get().addTelemetrySource([&published] { published++; });
+    Control::get().addTelemetrySource([&published] { published += 10; });
+    Control::get().publishTelemetrySources();
+    EXPECT_EQ(published, 11);
+    Control::get().reset();
+    Control::get().publishTelemetrySources();
+    EXPECT_EQ(published, 11);
+}
+
+TEST_F(CoreTest, I2cDeviceAtAnyAddressAnswersTheRest) {
+    Wsts::RegisterMapI2c catchAll;
+    Wsts::RegisterMapI2c own;
+    ASSERT_TRUE(catchAll.set("0", "0xAA"));
+    ASSERT_TRUE(own.set("0", "0xBB"));
+    Bus::get().attachI2c("anyBus", Wsts::I2C_ANY_ADDRESS, &catchAll);
+    Bus::get().attachI2c("anyBus", 0x40, &own);
+    Bytes data(1, 0);
+    EXPECT_EQ(Bus::get().i2cTransact("anyBus", 0x40, Bytes{0}, data), 0);
+    EXPECT_EQ(data[0], 0xBB);
+    EXPECT_EQ(Bus::get().i2cTransact("anyBus", 0x13, Bytes{0}, data), 0);
+    EXPECT_EQ(data[0], 0xAA);
+    EXPECT_TRUE(Bus::get().i2cPoke("anyBus", 0x13, 0, 0x77));
+    EXPECT_EQ(catchAll.peekRegister(0), 0x77);
 }
 
 int main(int argc, char** argv) {

@@ -248,6 +248,11 @@ class Control : public BusObserver {
     //! Next queued event for the F Prime front end. False when the queue is empty.
     bool popEvent(SimEvent& event);
     void addTickListener(TickListener listener);
+    //! Something that writes telemetry of its own when the WSTS telemetry is published (the
+    //! channels of the models' registers): called by Wsts.SimControl, on its thread
+    void addTelemetrySource(std::function<void()> source);
+    //! Call every telemetry source (Wsts.SimControl, after writing its own channels)
+    void publishTelemetrySources();
     //! Bus records and executed actions, as JSON (bridge subscribers)
     void setRecordTap(RecordTap tap);
     void setEventTap(EventTap tap);
@@ -323,6 +328,7 @@ class Control : public BusObserver {
     std::map<std::string, Model*> m_models;
     std::deque<SimEvent> m_events;
     std::vector<TickListener> m_listeners;
+    std::vector<std::function<void()>> m_telemetrySources;
     RecordTap m_recordTap;
     EventTap m_eventTap;
 

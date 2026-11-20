@@ -71,6 +71,7 @@ Register interface components replaced at their ports: the flight drivers above 
 - `imu`: `Sim::ImuModel` on `i2cBus` (i2c address 0x68)
 - `adc`: `Wsts::LoopbackSpi` on `spiBus` (spi)
 - `fpga`: `Wsts::RegisterFile` on `fpgaRegs` (register)
+  - register telemetry (wstsModelTlm): `fpga_0x0000` (U32), `fpga_0x0004` (U32), `fpga_0x0008` (U32), `fpga_0x000c` (U32), `fpga_0x0010` (U32), `fpga_0x0014` (U32)
 - `tempSensor`: `Wsts::ScriptedByteStream` on `sensorUart` (bytestream)
 
 ## Dictionary changes
@@ -97,7 +98,7 @@ Register interface components replaced at their ports: the flight drivers above 
 - `Payload.sensorUart.BytesSent`
 - `Payload.spiBus.SPI_Bytes`
 
-**Added (WSTS):** 48
+**Added (WSTS):** 54
 - `Payload.wstsControl.FAULT_CLEAR`
 - `Payload.wstsControl.FAULT_SET`
 - `Payload.wstsControl.GPIO_FORCE`
@@ -146,6 +147,12 @@ Register interface components replaced at their ports: the flight drivers above 
 - `Payload.wstsControl.SimRunState`
 - `Payload.wstsControl.SimTicks`
 - `Payload.wstsControl.SimTimeScale`
+- `Payload.wstsModelTlm.fpga_0x0000`
+- `Payload.wstsModelTlm.fpga_0x0004`
+- `Payload.wstsModelTlm.fpga_0x0008`
+- `Payload.wstsModelTlm.fpga_0x000c`
+- `Payload.wstsModelTlm.fpga_0x0010`
+- `Payload.wstsModelTlm.fpga_0x0014`
 
 **Added (simulator components):** 7
 - `PayloadSim.powerSim.SET_CURRENT`

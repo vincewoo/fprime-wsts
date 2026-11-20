@@ -95,6 +95,7 @@ void Control::reset() {
         m_models.clear();
         m_events.clear();
         m_listeners.clear();
+        m_telemetrySources.clear();
         m_recordTap = nullptr;
         m_eventTap = nullptr;
     }
@@ -706,6 +707,22 @@ void Control::addModel(const std::string& name, Model* model) {
 void Control::addTickListener(TickListener listener) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_listeners.push_back(std::move(listener));
+}
+
+void Control::addTelemetrySource(std::function<void()> source) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_telemetrySources.push_back(std::move(source));
+}
+
+void Control::publishTelemetrySources() {
+    std::vector<std::function<void()>> sources;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        sources = m_telemetrySources;
+    }
+    for (const auto& source : sources) {
+        source();
+    }
 }
 
 void Control::setRecordTap(RecordTap tap) {

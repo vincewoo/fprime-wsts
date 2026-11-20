@@ -23,10 +23,11 @@ from . import flight_cmake
 from . import fpp
 from . import hostcheck
 from . import hostwait
+from . import model_tlm
 from . import registers
 from . import simulators as sims
 from .fpp import WstsError
-from .manifest import ALL_MODULES, DEFAULT_CATALOG, SHIMS, TOOLKIT_ROOT, LinkEnd, Manifest, ModelSpec, Surrogate, load_catalog
+from .manifest import ALL_MODULES, DEFAULT_CATALOG, I2C_ANY_ADDRESS, SHIMS, TOOLKIT_ROOT, LinkEnd, Manifest, ModelSpec, Surrogate, load_catalog
 
 SETUP_COMPONENT = "Wsts.SimSetup"
 CONTROL_COMPONENT = "Wsts.SimControl"
@@ -107,6 +108,10 @@ class Plan:
     sim: sims.SimulatorPlan = field(default_factory=sims.SimulatorPlan)
     # Wsts.SimRegister written for flight components, by the name of the component it is for
     adapted: Dict[str, registers.AdaptedSurrogate] = field(default_factory=dict)
+    # A channel per register of the stock register models (model_tlm.py), and the base ID of
+    # the instance that has them
+    model_channels: List[model_tlm.Channel] = field(default_factory=list)
+    model_tlm_base_id: int = 0
 
 
 def _host_restriction(text: str) -> Optional[re.Match]:
@@ -566,6 +571,17 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
                 raise WstsError(f"control.base_id {base:#x} overlaps the ID range of {name}")
     plan.setup_base_id = base
     plan.control_base_id = base + ID_BLOCK
+    channels = model_tlm.channels(manifest.models)
+    if channels and not manifest.control_enabled:
+        plan.warnings.append(
+            f"the models' registers have no telemetry ({len(channels)} channel(s)): it is published by "
+            f"{CONTROL_INSTANCE}, which 'control' leaves out")
+    elif channels:
+        problem = model_tlm.check(channels)
+        if problem:
+            raise WstsError(problem)
+        plan.model_channels = channels
+        plan.model_tlm_base_id = base + model_tlm.BASE_OFFSET
     if manifest.id_window:
         low, high = manifest.id_window
         if manifest.control_enabled:
@@ -592,7 +608,9 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
         plan.warnings.append(
             "topology lists explicit targets for pattern connections ("
             + ", ".join(sorted(set(topology.explicit_pattern_targets)))
-            + f"): add {CONTROL_INSTANCE} to them or its commands/events/telemetry will not be connected"
+            + f"): add {CONTROL_INSTANCE}"
+            + (f" and {model_tlm.INSTANCE}" if plan.model_channels else "")
+            + " to them or its commands/events/telemetry will not be connected"
         )
     endpoints: Dict[str, str] = {}
     # What an endpoint would have been called, for surrogates that have none
@@ -1437,6 +1455,12 @@ def render_instances(plan: Plan, manifest: Manifest) -> str:
             f"{indent}  priority 20",
             "",
         ]
+    if plan.model_channels:
+        lines += [
+            f"{indent}@ The registers of the device models, as telemetry",
+            f"{indent}instance {model_tlm.INSTANCE}: {model_tlm.COMPONENT} base id {plan.model_tlm_base_id:#010x}",
+            "",
+        ]
     if module:
         lines.append("}")
     return "\n".join(lines) + "\n"
@@ -1587,7 +1611,7 @@ def render_compat(plan: Plan, model: fpp.Model, manifest: Manifest, header_of) -
 
 ATTACH = {
     "bytestream": "Wsts::Bus::get().attachByteStream({endpoint}, &{var});",
-    "i2c": "Wsts::Bus::get().attachI2c({endpoint}, {address:#x}, &{var});",
+    "i2c": "Wsts::Bus::get().attachI2c({endpoint}, {address}, &{var});",
     "spi": "Wsts::Bus::get().attachSpi({endpoint}, &{var});",
     "gpio": "Wsts::Bus::get().attachGpio({endpoint}, &{var});",
     "register": "Wsts::Bus::get().attachRegister({endpoint}, &{var});",
@@ -1659,7 +1683,8 @@ def render_setup(plan: Plan, manifest: Manifest, topology_header: str) -> str:
                 f"    configure({name}, Wsts::configureModel(&{var}, {_cpp_string(key)}, {_cpp_string(value)}), {_cpp_string(key)});"
             )
         if spec.kind in ATTACH:
-            lines.append("    " + ATTACH[spec.kind].format(endpoint=_cpp_string(spec.endpoint), address=spec.address, var=var))
+            address = "Wsts::I2C_ANY_ADDRESS" if spec.address == I2C_ANY_ADDRESS else f"{spec.address:#x}"
+            lines.append("    " + ATTACH[spec.kind].format(endpoint=_cpp_string(spec.endpoint), address=address, var=var))
         lines.append(f"    Wsts::registerModel({name}, &{var});")
     if plan.links:
         lines += ["", "    // Links to the other elements of the system"]
@@ -1685,6 +1710,9 @@ def render_setup(plan: Plan, manifest: Manifest, topology_header: str) -> str:
     if manifest.control_enabled:
         control = _cpp_instance((plan.topology.module + "." if plan.topology.module else "") + CONTROL_INSTANCE)
         lines.append(f'    {control}.wstsBind("", "");')
+    lines += model_tlm.setup_lines(
+        plan.model_channels, _cpp_instance((plan.topology.module + "." if plan.topology.module else "") + model_tlm.INSTANCE),
+        lambda name: f"model_{_identifier(name)}")
     lines += [
         "    Wsts::RuntimeConfig config;",
         f"    config.bridge = {_cpp_string(manifest.bridge)};",
@@ -1828,6 +1856,9 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
         prefix = (plan.topology.module + "." if plan.topology.module else "") + CONTROL_INSTANCE
         for kind in added:
             added[kind] = [f"{prefix}.{n}" for n in getattr(control, kind)]
+    if plan.model_channels:
+        prefix = (plan.topology.module + "." if plan.topology.module else "") + model_tlm.INSTANCE
+        added["channels"] += [f"{prefix}.{c.name}" for c in plan.model_channels]
     identical = not any(removed.values()) and not any(added.values()) and not plan.sim.added
     time_source = None
     if plan.topology.time_source:
@@ -1911,7 +1942,12 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
         **({"ground_link": {"instance": plan.ground_servers[0], "component": "Drv.TcpServer"}}
            if plan.ground_servers else {}),
         "models": [
-            {"name": m.name, "class": m.cls, "endpoint": m.endpoint, "kind": m.kind, "address": m.address}
+            {"name": m.name, "class": m.cls, "endpoint": m.endpoint, "kind": m.kind,
+             "address": "any" if m.address == I2C_ANY_ADDRESS else m.address,
+             # Only when there are some, so that reports of other deployments are unchanged
+             **({"channels": [{"channel": c.name, "type": c.type, "register": c.register}
+                              for c in plan.model_channels if c.model == m.name]}
+                if any(c.model == m.name for c in plan.model_channels) else {})}
             for m in manifest.models
         ],
         "control": {
@@ -2208,8 +2244,12 @@ def render_report(report: dict) -> str:
                                if report["setup"]["headers"] else "")]
     lines += ["", "## Device models", ""]
     for model in report["models"]:
-        address = f" address {model['address']:#x}" if model["kind"] == "i2c" else ""
+        address = ((" any address" if model["address"] == "any" else f" address {model['address']:#x}")
+                   if model["kind"] == "i2c" else "")
         lines.append(f"- `{model['name']}`: `{model['class']}` on `{model['endpoint']}` ({model['kind']}{address})")
+        if model.get("channels"):
+            lines.append(f"  - register telemetry ({model_tlm.INSTANCE}): "
+                         + ", ".join(f"`{c['channel']}` ({c['type']})" for c in model["channels"]))
     if not report["models"]:
         lines.append("- none in-process (attach external models through the bridge)")
     lines += ["", "## Dictionary changes", ""]
@@ -2601,12 +2641,14 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         for sub in plan.substitutions:
             edit(sub.instance.file, sub.instance.type_line, sub.instance.type_col,
                  lambda text, sub=sub: patch_instance(text, sub), f"instance {sub.instance.name}")
-        added_instances = [SETUP_INSTANCE] + ([CONTROL_INSTANCE] if manifest.control_enabled else [])
+        added_instances = ([SETUP_INSTANCE] + ([CONTROL_INSTANCE] if manifest.control_enabled else [])
+                           + ([model_tlm.INSTANCE] if plan.model_channels else []))
         if topology.packet_sets:
             # Named relative to the topology's module, as the topology's own packets are: a
             # topology that shares its module's name would capture a fully qualified name
             channels = ([f"{CONTROL_INSTANCE}.{c}" for c in model.components[CONTROL_COMPONENT].channels]
                         if manifest.control_enabled else [])
+            channels += [f"{model_tlm.INSTANCE}.{c.name}" for c in plan.model_channels]
             # Channels of replaced drivers that the surrogate lacks (a UART's byte counts, say)
             dropped = [f"{sub.instance.name}.{c}" for sub in plan.substitutions
                        for c in sorted(set(sub.original.channels) - set(sub.surrogate.channels))]
@@ -2707,6 +2749,9 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
 
         # Wsts.SimRegister with the ports of a flight component: a module of the overlay each
         adapted_fpp = [registers.write(item, output, model.port_defs) for item in plan.adapted.values()]
+        # The channels of the models' registers: a component written for this deployment
+        if plan.model_channels:
+            adapted_fpp.append(model_tlm.write(plan.model_channels, output))
 
         # ---- Validate the patched model and find what it needs ----
         post_candidates = [c for c in candidates if c not in set(top_fpp) and c not in patchable] + list(copy_of) + adapted_fpp
@@ -2993,6 +3038,8 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         return path.name
 
     adapted_headers = {item.name: item.header for item in plan.adapted.values()}
+    if plan.model_channels:
+        adapted_headers[model_tlm.COMPONENT] = model_tlm.HEADER
 
     def header_of(component: fpp.Component) -> str:
         if component.name in adapted_headers:
@@ -3265,6 +3312,10 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
            f"# {registers.SURROGATE} with the port names and types of the flight components it stands in for",
            *[f'add_fprime_subdirectory("${{CMAKE_CURRENT_LIST_DIR}}/{item.directory}")' for item in plan.adapted.values()]]
           if plan.adapted else []),
+        *(["",
+           "# The registers of the device models, as telemetry",
+           f'add_fprime_subdirectory("${{CMAKE_CURRENT_LIST_DIR}}/{model_tlm.DIRECTORY}")']
+          if plan.model_channels else []),
         f'set(WSTS_FLIGHT_PROJECT "${{CMAKE_CURRENT_LIST_DIR}}/{rel(project_root)}")',
         *[
             f'add_fprime_subdirectory("${{WSTS_FLIGHT_PROJECT}}/{_rel(d, project_root)}")'

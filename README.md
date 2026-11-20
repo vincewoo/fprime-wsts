@@ -132,6 +132,10 @@ device models. [docs/design.md](docs/design.md) has more detailed diagrams of ea
 - **Memory-mapped registers**: `Wsts.SimRegister` takes the place of a project's register
   interface component, so drivers of FPGA blocks and SoC peripherals run as in flight
   against a model of the registers and their interrupts.
+- **Device models to start from**: stock models (register maps, scripted serial devices,
+  register blocks) whose registers take signals of simulated time (`sine`, `ramp`, `noise`,
+  …) and appear as telemetry channels, and `fprime-wsts new-model` (or `init --models`) for a
+  model of your own that builds and answers from the first run.
 - **`fprime-wsts generate`**: finds the hardware instances in a topology, retypes them to
   surrogates, wires in the WSTS control component, and writes a buildable overlay project.
   Hand-written topology code is reused unchanged.
@@ -211,7 +215,8 @@ is involved at any point.
 
 To start on a flight project of your own, `fprime-wsts init ../my-mission` surveys it and
 writes a simulation project with starter manifests beside it, with this toolkit pinned in
-it as a git submodule (`lib/fprime-wsts`); the
+it as a git submodule (`lib/fprime-wsts`); `--models` adds a device model to start from for
+every bus endpoint. The
 [user guide](https://vincewoo.github.io/fprime-wsts/) takes it from there.
 
 ## Driving a simulation

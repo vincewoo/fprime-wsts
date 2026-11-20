@@ -17,6 +17,7 @@
 
 #include <Wsts/Core/Bus.hpp>
 #include <Wsts/Core/Control.hpp>
+#include <Wsts/Core/Signal.hpp>
 
 namespace Wsts {
 
@@ -46,18 +47,28 @@ class ScriptedByteStream : public Model, public ByteStreamDevice {
 
 //! Register-addressed I2C device: a write sets the register pointer (first byte) and stores
 //! any following bytes; a read returns bytes from the pointer, which auto-increments.
-//! Parameters: "<register>" = "<byte> [<byte> ...]" (decimal or 0x hex), e.g. "0x75" = "0x68".
+//! Parameters: "<register>" = "<byte> [<byte> ...]" (decimal or 0x hex), e.g. "0x75" = "0x68",
+//! or a signal stored from that register on: "0x02" = "sine(offset=1400, amplitude=50,
+//! period=20) as u16be" (Signal.hpp). A signal is evaluated again on every tick; giving
+//! the register bytes (in the manifest, with model_set or i2c_reg_set) ends it.
 class RegisterMapI2c : public Model, public I2cDevice {
   public:
     bool set(const std::string& key, const std::string& value) override;
+    void onTick(std::uint64_t tick) override;
     int transact(std::uint32_t addr, const Bytes& write, Bytes& read) override;
     bool pokeRegister(std::uint8_t reg, std::uint8_t value) override;
     std::uint8_t peekRegister(std::uint8_t reg);
+    //! Store every signal's value at `ns` of simulated time (onTick does it at the tick's time)
+    void update(std::uint64_t ns);
 
   private:
+    //! Signals that cover any of the bytes [reg, reg + count) end (call with the lock held)
+    void endSignals(std::uint8_t reg, std::size_t count);
+
     std::mutex m_mutex;
     std::array<std::uint8_t, 256> m_registers{};
     std::uint8_t m_pointer = 0;
+    std::map<std::uint8_t, StoredSignal> m_signals;
 };
 
 //! SPI device that shifts back what was shifted in
@@ -82,7 +93,9 @@ class LoopbackSpi : public Model, public SpiDevice {
 //! `offset + 4`. Offsets are multiples of 4.
 //!
 //! Parameters (manifest `params`, model_set, MODEL_SET); numbers are decimal or 0x hex:
-//!   reg.<offset>     value of a register, defining it on first use (also its reset value then)
+//!   reg.<offset>     value of a register, defining it on first use (also its reset value then),
+//!                    or a signal (Signal.hpp), e.g. "sine(offset=100, amplitude=20, period=5)"
+//!                    or "... as s16": stored again on every tick, until a number is given
 //!   reset.<offset>   reset value
 //!   mask.<offset>    write mask: bits flight software can write (default 0xFFFFFFFF)
 //!   w1c.<offset>     1: writing a 1 clears the bit (within the write mask) instead of setting it
@@ -117,6 +130,8 @@ class RegisterFile : public Model, public RegisterDevice {
     int read(std::uint64_t offset, unsigned width, std::uint64_t& value) override;
     int write(std::uint64_t offset, unsigned width, std::uint64_t value) override;
     bool poke(std::uint64_t offset, std::uint64_t value) override;
+    //! Store every signal's value at `ns` of simulated time (onTick does it at the tick's time)
+    void update(std::uint64_t ns);
 
   private:
     struct Register {
@@ -135,6 +150,7 @@ class RegisterFile : public Model, public RegisterDevice {
 
     std::mutex m_mutex;
     std::map<std::uint64_t, Register> m_registers;
+    std::map<std::uint64_t, StoredSignal> m_signals;
     std::string m_endpoint;
     bool m_strict = true;
     std::uint32_t m_irqNumber = 0;

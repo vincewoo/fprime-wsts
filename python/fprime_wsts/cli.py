@@ -317,6 +317,12 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_new_model(args: argparse.Namespace) -> int:
+    from .newmodel import new_model_cli
+
+    return new_model_cli(args)
+
+
 def cmd_scaffold(args: argparse.Namespace) -> int:
     from .scaffold import scaffold_cli
 
@@ -325,7 +331,8 @@ def cmd_scaffold(args: argparse.Namespace) -> int:
 
 #: The argument that names what a command works on, for those that work on a simulation project
 TARGETS = {"generate": "manifest", "check-host": "target", "build": "target", "report": "directory",
-           "run": "directory", "status": "directory", "ctl": "directory", "scaffold": "output"}
+           "run": "directory", "status": "directory", "ctl": "directory", "scaffold": "output",
+           "new-model": "project"}
 
 
 def _target_of(args: argparse.Namespace):
@@ -359,6 +366,10 @@ def main(argv=None) -> int:
     init.add_argument("--no-submodule", action="store_true",
                       help="do not add this fprime-wsts checkout to the simulation project as a git submodule at "
                            "lib/fprime-wsts; the project is then generated with whichever fprime-wsts runs")
+    init.add_argument("--models", action="store_true",
+                      help="also start a device model for each bus endpoint the survey finds (Models/, as "
+                           "`new-model` does), named in the manifests, so that every endpoint answers from the "
+                           "first run")
     init.add_argument("--json", action="store_true", help="print the survey and what was written as JSON")
     init.set_defaults(handler=cmd_init)
 
@@ -476,6 +487,30 @@ def main(argv=None) -> int:
     scaffold.add_argument("--name", help="FPP name of the new surrogate (default: <Module>.Sim<Component>)")
     scaffold.add_argument("--output", required=True, help="directory to create the surrogate in")
     scaffold.set_defaults(handler=cmd_scaffold)
+
+    new_model = commands.add_parser(
+        "new-model", help="start a device model in a simulation project (C++, or Python with --python) and name it "
+                          "in the manifest",
+        description="Start a device model that builds and answers from the first run, with TODOs where the "
+                    "device's behaviour goes. C++: Models/<NAME>.hpp and .cpp, the Models module and library.cmake; "
+                    "Python: pymodels/<name>.py. The model is named in the manifest (models and cmake.depends, or "
+                    "run.models) when the project has one deployment manifest or --manifest says which. Its 'value' "
+                    "parameter takes a number or a signal, e.g. 'sine(offset=25, amplitude=5, period=60)'.")
+    new_model.add_argument("name", help="C++ class name of the model, e.g. Thermometer (the manifest name is "
+                                        "thermometer, the Python file thermometer.py)")
+    new_model.add_argument("--kind", required=True, choices=["i2c", "spi", "bytestream", "gpio", "register"],
+                           help="the device interface it answers on")
+    new_model.add_argument("--endpoint", help="bus endpoint it answers on (default: a TODO to fill in)")
+    new_model.add_argument("--address", help="I2C address, e.g. 0x48, or 'any' for every address no other device "
+                                             "has (default: any)")
+    new_model.add_argument("--python", action="store_true", help="a Python model the run starts (run.models) "
+                                                                 "instead of a C++ one")
+    new_model.add_argument("--project", default=".", help="the simulation project (default: the current directory)")
+    new_model.add_argument("--manifest", help="the deployment manifest to name the model in (default: the "
+                                              "project's, when it has exactly one)")
+    new_model.add_argument("--namespace", default="Sim", help="C++ namespace of the class (default: Sim)")
+    new_model.add_argument("--json", action="store_true", help="print what was written as JSON")
+    new_model.set_defaults(handler=cmd_new_model)
 
     args = parser.parse_args(argv)
     try:

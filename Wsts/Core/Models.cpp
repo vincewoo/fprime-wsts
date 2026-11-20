@@ -4,6 +4,7 @@
 // ======================================================================
 #include <Wsts/Core/Models.hpp>
 
+#include <iterator>
 #include <sstream>
 
 namespace Wsts {
@@ -75,21 +76,73 @@ bool RegisterMapI2c::set(const std::string& key, const std::string& value) {
     std::istringstream stream(spaced);
     std::string token;
     Bytes bytes;
+    bool numbers = true;
     while (stream >> token) {
         std::int64_t byte = 0;
-        if (!parseInt(token, byte) || byte < 0 || byte > 255) {
-            return false;
+        if (!parseInt(token, byte)) {
+            numbers = false;
+            break;
+        }
+        if (byte < 0 || byte > 255) {
+            return false;  // a number, but not a byte
         }
         bytes.push_back(static_cast<std::uint8_t>(byte));
     }
-    if (bytes.empty()) {
+    if (numbers) {
+        if (bytes.empty()) {
+            return false;
+        }
+        std::lock_guard<std::mutex> lock(m_mutex);
+        this->endSignals(static_cast<std::uint8_t>(reg), bytes.size());
+        for (std::size_t i = 0; i < bytes.size(); i++) {
+            m_registers[(static_cast<std::size_t>(reg) + i) & 0xFF] = bytes[i];
+        }
+        return true;
+    }
+    // Not bytes: a signal, stored from this register on
+    StoredSignal stored;
+    std::string error;
+    if (!StoredSignal::parse(value, stored, error) ||
+        (stored.hasFormat && stored.format.bytes > 1 && !stored.format.explicitOrder)) {
         return false;
     }
+    const std::uint64_t now = Control::get().elapsedNs();
     std::lock_guard<std::mutex> lock(m_mutex);
-    for (std::size_t i = 0; i < bytes.size(); i++) {
-        m_registers[(static_cast<std::size_t>(reg) + i) & 0xFF] = bytes[i];
+    const auto first = static_cast<std::uint8_t>(reg);
+    this->endSignals(first, stored.format.bytes);
+    const std::vector<std::uint8_t> encoded = stored.format.toBytes(stored.signal.at(now));
+    for (std::size_t i = 0; i < encoded.size(); i++) {
+        m_registers[(first + i) & 0xFF] = encoded[i];
     }
+    m_signals[first] = stored;
     return true;
+}
+
+void RegisterMapI2c::endSignals(std::uint8_t reg, std::size_t count) {
+    for (auto it = m_signals.begin(); it != m_signals.end();) {
+        // Both ranges wrap at 256, as the registers do
+        bool overlaps = false;
+        for (std::size_t i = 0; i < it->second.format.bytes && !overlaps; i++) {
+            const std::size_t byte = (it->first + i) & 0xFF;
+            overlaps = ((byte - reg) & 0xFF) < count;
+        }
+        it = overlaps ? m_signals.erase(it) : std::next(it);
+    }
+}
+
+void RegisterMapI2c::update(std::uint64_t ns) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (const auto& entry : m_signals) {
+        const std::vector<std::uint8_t> encoded = entry.second.format.toBytes(entry.second.signal.at(ns));
+        for (std::size_t i = 0; i < encoded.size(); i++) {
+            m_registers[(entry.first + i) & 0xFF] = encoded[i];
+        }
+    }
+}
+
+void RegisterMapI2c::onTick(std::uint64_t tick) {
+    (void)tick;
+    this->update(Control::get().elapsedNs());
 }
 
 int RegisterMapI2c::transact(std::uint32_t addr, const Bytes& write, Bytes& read) {
@@ -111,6 +164,7 @@ int RegisterMapI2c::transact(std::uint32_t addr, const Bytes& write, Bytes& read
 
 bool RegisterMapI2c::pokeRegister(std::uint8_t reg, std::uint8_t value) {
     std::lock_guard<std::mutex> lock(m_mutex);
+    this->endSignals(reg, 1);
     m_registers[reg] = value;
     return true;
 }
@@ -181,12 +235,35 @@ void RegisterFile::raise(std::uint32_t number) {
 }
 
 bool RegisterFile::set(const std::string& key, const std::string& value) {
+    std::uint64_t number = 0;
+    if (key.compare(0, 4, "reg.") == 0 && !parseUInt(value, number)) {
+        // A signal, stored in the register on every tick
+        std::uint64_t offset = 0;
+        StoredSignal stored;
+        std::string error;
+        if (!parseUInt(key.substr(4), offset) || (offset % 4) != 0 || !StoredSignal::parse(value, stored, error) ||
+            stored.format.explicitOrder) {
+            return false;
+        }
+        if (!stored.hasFormat) {
+            stored.format.bytes = 4;
+        }
+        const std::uint32_t word = stored.format.encode(stored.signal.at(Control::get().elapsedNs()));
+        std::lock_guard<std::mutex> lock(m_mutex);
+        const bool existed = m_registers.find(offset) != m_registers.end();
+        Register& reg = m_registers[offset];
+        reg.value = word;
+        if (!existed) {
+            reg.reset = word;
+        }
+        m_signals[offset] = stored;
+        return true;
+    }
     std::lock_guard<std::mutex> lock(m_mutex);
     if (key == "endpoint") {
         m_endpoint = value;
         return true;
     }
-    std::uint64_t number = 0;
     if (!parseUInt(value, number)) {
         return false;
     }
@@ -224,6 +301,7 @@ bool RegisterFile::set(const std::string& key, const std::string& value) {
     const std::string field = key.substr(0, dot);
     const auto word = static_cast<std::uint32_t>(number);
     if (field == "reg") {
+        m_signals.erase(offset);
         const bool existed = m_registers.find(offset) != m_registers.end();
         Register& reg = m_registers[offset];
         reg.value = word;
@@ -244,7 +322,15 @@ bool RegisterFile::set(const std::string& key, const std::string& value) {
     return true;
 }
 
+void RegisterFile::update(std::uint64_t ns) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (const auto& entry : m_signals) {
+        this->find(entry.first, true)->value = entry.second.format.encode(entry.second.signal.at(ns));
+    }
+}
+
 void RegisterFile::onTick(std::uint64_t tick) {
+    this->update(Control::get().elapsedNs());
     std::uint32_t number = 0;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
@@ -328,6 +414,7 @@ bool RegisterFile::poke(std::uint64_t offset, std::uint64_t value) {
         return false;
     }
     std::lock_guard<std::mutex> lock(m_mutex);
+    m_signals.erase(offset);
     this->find(offset, true)->value = static_cast<std::uint32_t>(value);
     return true;
 }

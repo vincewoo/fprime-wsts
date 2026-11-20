@@ -18,4 +18,7 @@ module Payload {
     stack size 64 * 1024 \
     priority 20
 
+  @ The registers of the device models, as telemetry
+  instance wstsModelTlm: WstsAdapted.ModelTelemetry base id 0x2f002800
+
 }

@@ -499,7 +499,10 @@ int Bus::i2cTransact(const std::string& endpoint, std::uint32_t addr, const Byte
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             Endpoint& ep = this->endpointLocked(endpoint);
-            const auto it = ep.i2c.find(addr);
+            auto it = ep.i2c.find(addr);
+            if (it == ep.i2c.end()) {
+                it = ep.i2c.find(I2C_ANY_ADDRESS);
+            }
             device = (it == ep.i2c.end()) ? nullptr : it->second;
         }
         if (toDevice.corrupt) {
@@ -608,7 +611,10 @@ bool Bus::i2cPoke(const std::string& endpoint, std::uint32_t addr, std::uint8_t 
         if (ep == m_endpoints.end()) {
             return false;
         }
-        const auto it = ep->second.i2c.find(addr);
+        auto it = ep->second.i2c.find(addr);
+        if (it == ep->second.i2c.end()) {
+            it = ep->second.i2c.find(I2C_ANY_ADDRESS);
+        }
         device = (it == ep->second.i2c.end()) ? nullptr : it->second;
     }
     return (device != nullptr) && device->pokeRegister(reg, value);
