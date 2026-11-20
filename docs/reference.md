@@ -144,8 +144,9 @@ time:
 
 catalogs: [wsts-catalog.yaml]    # project surrogate catalogs, searched before the built-in one
 sources:
-  fpp: [...]                     # topology model files (default: Top/CMakeLists.txt AUTOCODER_INPUTS)
-  topology: [...]                # hand-written topology sources (default: Top/CMakeLists.txt SOURCES)
+  fpp: [...]                     # topology model files (default: the AUTOCODER_INPUTS of the topology directory's
+                                 # CMakeLists.txt, Top/ or `topology_dir`; inputs of other autocoders are handed on)
+  topology: [...]                # hand-written topology sources (default: SOURCES of that CMakeLists.txt)
 main:
   sources: [...]                 # default: SOURCES of register_fprime_deployment
   generate: true                 # write a Linux main() for a deployment that has none

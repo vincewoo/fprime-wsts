@@ -24,7 +24,9 @@ Work through your deployment's `Top/` directory (`topology.fpp`, `instances.fpp`
 topology `.cpp`) and its `Main.cpp`:
 
 - [ ] **The deployment and its topology.** The deployment directory is the one containing
-      `Top/`. If `Top/` defines more than one topology, note the one to simulate.
+      `Top/`. If `Top/` defines more than one topology, note the one to simulate. A
+      topology kept in another directory (named after the deployment, say) is found from
+      the deployment's `CMakeLists.txt`, or named with `topology_dir`.
 - [ ] **Drivers of the standard F´ interfaces** (`Drv.LinuxI2cDriver`, `Drv.LinuxSpiDriver`,
       `Drv.LinuxGpioDriver`, `Drv.PosixUartDriver`, `Drv.LinuxUartDriver`,
       `VxWorksDrv.VxWorksUartDriver`). These are replaced automatically from the catalog.

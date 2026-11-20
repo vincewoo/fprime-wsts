@@ -299,7 +299,8 @@ flowchart LR
 <output>/
   settings.ini, CMakeLists.txt     host toolchain; adds only the project modules the topology needs
   <Deployment>/CMakeLists.txt      reuses the flight Main.cpp, or WstsMain.cpp when there is no main()
-  <Deployment>/Top/
+  <Deployment>/Top/                the topology directory, under its flight name (`Top/` or `topology_dir`);
+                                   its module also hands on the flight inputs of other autocoders
     *.fpp                          patched copies of the topology model
     wsts_instances.fpp              the wstsSetup and wstsControl instances
     WstsSetup.cpp                   binds surrogates, builds and attaches models, starts the runtime

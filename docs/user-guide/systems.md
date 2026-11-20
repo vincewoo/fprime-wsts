@@ -69,7 +69,11 @@ links:
 **Links.** Naming a byte stream driver instance in a link is enough to have it simulated:
 the catalog's surrogate if it has one, otherwise `Wsts.SimByteStream` (the report says
 "chosen by link"). What flight software sends on one end is delivered on the other. Link
-ends cannot be under `keep`, and cannot also have a device model.
+ends cannot be under `keep`, and cannot also have a device model. A link may also be a
+`kind: gpio` or `kind: datagram` link, end at a project surrogate with ports of its own shape
+(`bytestream_endpoint: true` or `gpio_endpoint: true` on its `substitute` entry), or, for a
+gpio link, end at a pin a model drives that the element's manifest lists under
+`gpio_endpoints`: see [Links](../systems.md) in the reference.
 
 **ID windows.** `ids` is the range of IDs that flight software routes to an element. Each
 element's `wstsControl` is placed inside its window, so its commands are routed to it
@@ -97,7 +101,8 @@ fprime-wsts run my-mission-sim/wsts/Mission --gds-gui
 
 `run` starts every element with its own bridge and logs (`wsts-logs/<element>/sim.log`),
 waits until every link is connected, merges the dictionaries (ground element first) into
-`wsts-logs/<System>Dictionary.json`, and starts one GDS on the ground element. Commands,
+`wsts-logs/<System>Dictionary.json`, and starts one GDS on the ground element (with that
+element's `run.gds_args`). Commands,
 events and channels of every element are then available under their usual names:
 `Payload.instrument.TAKE_SAMPLE`, `Cdh.wstsControl.SIM_PAUSE`,
 `Payload.wstsControl.FAULT_SET`.
