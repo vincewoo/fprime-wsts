@@ -66,6 +66,10 @@ Register interface components replaced at their ports: the flight drivers above 
 
 `WstsAdapted.SensorLib_RegisterInterface` is `Wsts.SimRegister` written with the ports of `SensorLib.RegisterInterface`, recognised by their signatures: `interrupt` (interrupt), `read32In` (read32), `read64In` (read64), `write32In` (write32), `write64In` (write64).
 
+## Simulation telemetry
+
+`wstsTlm` (63 channels, published with `wstsControl`'s): bus traffic of `fpgaRegs`, `heaterPin`, `hubDriver`, `i2cBus`, `sensorUart`, `spiBus`, `switchPin`; timing; links `hub`.
+
 ## Device models
 
 - `imu`: `Sim::ImuModel` on `i2cBus` (i2c address 0x68)
@@ -98,7 +102,7 @@ Register interface components replaced at their ports: the flight drivers above 
 - `Payload.sensorUart.BytesSent`
 - `Payload.spiBus.SPI_Bytes`
 
-**Added (WSTS):** 55
+**Added (WSTS):** 118
 - `Payload.wstsControl.FAULT_CLEAR`
 - `Payload.wstsControl.FAULT_SET`
 - `Payload.wstsControl.GPIO_FORCE`
@@ -154,6 +158,69 @@ Register interface components replaced at their ports: the flight drivers above 
 - `Payload.wstsModelTlm.fpga_0x000c`
 - `Payload.wstsModelTlm.fpga_0x0010`
 - `Payload.wstsModelTlm.fpga_0x0014`
+- `Payload.wstsTlm.fpgaRegs_FromFlight`
+- `Payload.wstsTlm.fpgaRegs_ToFlight`
+- `Payload.wstsTlm.fpgaRegs_BytesOut`
+- `Payload.wstsTlm.fpgaRegs_BytesIn`
+- `Payload.wstsTlm.fpgaRegs_Errors`
+- `Payload.wstsTlm.fpgaRegs_Unanswered`
+- `Payload.wstsTlm.heaterPin_FromFlight`
+- `Payload.wstsTlm.heaterPin_ToFlight`
+- `Payload.wstsTlm.heaterPin_BytesOut`
+- `Payload.wstsTlm.heaterPin_BytesIn`
+- `Payload.wstsTlm.heaterPin_Errors`
+- `Payload.wstsTlm.heaterPin_Unanswered`
+- `Payload.wstsTlm.hubDriver_FromFlight`
+- `Payload.wstsTlm.hubDriver_ToFlight`
+- `Payload.wstsTlm.hubDriver_BytesOut`
+- `Payload.wstsTlm.hubDriver_BytesIn`
+- `Payload.wstsTlm.hubDriver_Errors`
+- `Payload.wstsTlm.hubDriver_Unanswered`
+- `Payload.wstsTlm.i2cBus_FromFlight`
+- `Payload.wstsTlm.i2cBus_ToFlight`
+- `Payload.wstsTlm.i2cBus_BytesOut`
+- `Payload.wstsTlm.i2cBus_BytesIn`
+- `Payload.wstsTlm.i2cBus_Errors`
+- `Payload.wstsTlm.i2cBus_Unanswered`
+- `Payload.wstsTlm.sensorUart_FromFlight`
+- `Payload.wstsTlm.sensorUart_ToFlight`
+- `Payload.wstsTlm.sensorUart_BytesOut`
+- `Payload.wstsTlm.sensorUart_BytesIn`
+- `Payload.wstsTlm.sensorUart_Errors`
+- `Payload.wstsTlm.sensorUart_Unanswered`
+- `Payload.wstsTlm.spiBus_FromFlight`
+- `Payload.wstsTlm.spiBus_ToFlight`
+- `Payload.wstsTlm.spiBus_BytesOut`
+- `Payload.wstsTlm.spiBus_BytesIn`
+- `Payload.wstsTlm.spiBus_Errors`
+- `Payload.wstsTlm.spiBus_Unanswered`
+- `Payload.wstsTlm.switchPin_FromFlight`
+- `Payload.wstsTlm.switchPin_ToFlight`
+- `Payload.wstsTlm.switchPin_BytesOut`
+- `Payload.wstsTlm.switchPin_BytesIn`
+- `Payload.wstsTlm.switchPin_Errors`
+- `Payload.wstsTlm.switchPin_Unanswered`
+- `Payload.wstsTlm.fpgaRegs_RateOut`
+- `Payload.wstsTlm.fpgaRegs_RateIn`
+- `Payload.wstsTlm.heaterPin_RateOut`
+- `Payload.wstsTlm.heaterPin_RateIn`
+- `Payload.wstsTlm.hubDriver_RateOut`
+- `Payload.wstsTlm.hubDriver_RateIn`
+- `Payload.wstsTlm.i2cBus_RateOut`
+- `Payload.wstsTlm.i2cBus_RateIn`
+- `Payload.wstsTlm.sensorUart_RateOut`
+- `Payload.wstsTlm.sensorUart_RateIn`
+- `Payload.wstsTlm.spiBus_RateOut`
+- `Payload.wstsTlm.spiBus_RateIn`
+- `Payload.wstsTlm.switchPin_RateOut`
+- `Payload.wstsTlm.switchPin_RateIn`
+- `Payload.wstsTlm.SimSeconds`
+- `Payload.wstsTlm.BusyTicks`
+- `Payload.wstsTlm.LateTicks`
+- `Payload.wstsTlm.Speed`
+- `Payload.wstsTlm.hub_Sent`
+- `Payload.wstsTlm.hub_Received`
+- `Payload.wstsTlm.hub_Up`
 
 **Added (simulator components):** 7
 - `PayloadSim.powerSim.SET_CURRENT`

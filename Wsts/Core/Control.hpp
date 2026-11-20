@@ -114,6 +114,7 @@ struct SimStatus {
     std::uint64_t activity = 0;  //!< work flight software has been given and not finished
     std::uint64_t work = 0;      //!< pieces of work since start-up
     std::uint64_t busyTicks = 0; //!< ticks taken while work of an earlier one was outstanding
+    std::uint64_t lateTicks = 0; //!< real time: ticks taken after the next was already due (the host fell behind)
     bool stepped = false;        //!< stepped time: a tick is taken when the last one is finished
     bool lockstep = false;       //!< lockstep: a tick is taken when the system's conductor grants one
     bool settled = false;        //!< stepped time: start-up has settled, the first tick may be taken
@@ -322,6 +323,10 @@ class Control : public BusObserver {
     std::mutex m_inboundMutex;
     std::vector<Inbound*> m_inbound;
     std::atomic<std::uint64_t> m_busyTicks{0};  //!< ticks taken before the work of the last one was finished
+    std::atomic<std::uint64_t> m_lateTicks{0};  //!< real time: ticks taken after the next was already due
+    //! Real time: the last awaitTick() let a tick be taken (a tick after a pause is behind
+    //! its schedule, and is not late)
+    std::atomic<bool> m_lastTickTaken{false};
     std::atomic<std::uint64_t> m_stepUntil{0};  //!< tick at which a `step` pauses; 0: not stepping
     std::atomic<double> m_rate{1.0};
     std::atomic<bool> m_hasTickSource{false};

@@ -18,4 +18,7 @@ module Cdh {
     stack size 64 * 1024 \
     priority 20
 
+  @ The simulation's own telemetry: bus traffic, timing, links
+  instance wstsTlm: WstsAdapted.SimTelemetry base id 0x18008800
+
 }

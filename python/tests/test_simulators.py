@@ -64,7 +64,8 @@ def analyze_overlay(out: Path, tmp: Path, sim_project: Path = SIM) -> fpp.Topolo
     top = sorted((out / "Cdh" / "Top").glob("*.fpp"))
     candidates = [c for c in fpp.select_candidates(fpp.find_fpp_files(roots), settings.framework_path, overrides)
                   if FLIGHT / "Cdh" / "Top" not in c.parents and c not in originals]
-    fpp.locate_defs(tmp, candidates + copies)
+    adapted = sorted((out / "WstsAdapted").rglob("*.fpp"))  # components written for the deployment
+    fpp.locate_defs(tmp, candidates + copies + adapted)
     return fpp.analyze(tmp, fpp.depend(tmp, top) + top).topologies["Cdh.Cdh"]
 
 

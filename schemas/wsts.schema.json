@@ -633,6 +633,37 @@
       },
       "additionalProperties": false,
       "description": "The sandbox of the files of flight software"
+    },
+    "telemetry": {
+      "oneOf": [
+        {
+          "type": "boolean",
+          "description": "true or false for every group"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "models": {
+              "type": "boolean",
+              "description": "A channel per register of a stock register model (wstsModelTlm); default true"
+            },
+            "bus": {
+              "type": "boolean",
+              "description": "The traffic of each bus endpoint (wstsTlm.<endpoint>_*); default true"
+            },
+            "timing": {
+              "type": "boolean",
+              "description": "SimSeconds, BusyTicks, LateTicks, Speed (wstsTlm); default true"
+            },
+            "links": {
+              "type": "boolean",
+              "description": "Each link to another element of a system (wstsTlm.<link>_*); default true"
+            }
+          }
+        }
+      ],
+      "description": "The telemetry the generator writes for the deployment, by group. Published with wstsControl's: needs control"
     }
   },
   "additionalProperties": false,

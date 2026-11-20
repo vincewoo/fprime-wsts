@@ -96,6 +96,7 @@ substitute:                      # explicit choices; override the catalog
   - component: Proj.FpgaDriver   # ... or every instance of a component
     with: Proj.SimFpga
 
+telemetry: {bus: true, timing: true, links: true, models: true}   # what the generator adds (see "Simulation telemetry")
 models:                          # in-process C++ device models
   - name: imu                    # used by model_set / MODEL_SET
     class: Wsts::RegisterMapI2c
@@ -802,7 +803,7 @@ Newline-delimited JSON. A client sends `{"id": n, "op": …}` and receives
 | `subscribe` | Start receiving `{"ev": "rec", …}`, `{"ev": "action", …}` and `{"ev": "sim_event", …}` |
 | `gpio_get` (`endpoint`) | Level flight software last wrote |
 | `bus_stats` | The traffic of each endpoint since start-up (endpoints nothing has used yet with zeros), flat: `bus.<endpoint>.<counter>` with `transactions`, `to_device` (what flight software did: sends, reads, writes, transfers, pin writes), `to_flight` (what reached it unasked: received bytes, input levels, interrupts), `bytes_to_device`, `bytes_to_flight`, `errors`, `unanswered`, `fault_hits` (an endpoint's interrupts included) and `last_tick`; and `bus.<endpoint>.at.<address>.<counter>` (`transactions`, `errors`, `unanswered`) for each I2C address and register offset, the address in hex (`0x68`). `unanswered` counts what nothing answered: no device on the endpoint, none at the I2C address, nothing at the register offset (`NO_DEVICE`, from the bus or a `RegisterFile` that has not defined the offset). Byte streams and GPIO pins have no answer to miss (a client may serve them by subscribing) and are never `unanswered`. `WstsBridge.bus_stats()` nests them: `{endpoint: {counter: n, …, "addresses": {"0x68": {…}}}}` |
-| `attach` (`endpoint`, `kind`: `i2c`\|`spi`, `addr`) | Become the device model. The sim then sends `{"ev": "i2c_req", "rid", "endpoint", "addr", "write", "rlen"}` and waits up to 2 s for `{"op": "reply", "rid", "status", "data"}` |
+| `attach` (`endpoint`, `kind`: `i2c`\|`spi`, `addr`) | Become the device model (at `addr`; for SPI, the endpoint's one device). When the client disconnects, its devices leave the bus and other devices on the endpoint stay. The sim then sends `{"ev": "i2c_req", "rid", "endpoint", "addr", "write", "rlen"}` and waits up to 2 s for `{"op": "reply", "rid", "status", "data"}` |
 | `attach` (`endpoint`, `kind`: `register`) | Become the register block. The sim sends `{"ev": "reg_req", "rid", "endpoint", "access": "read", "offset": "0x…", "width", "rlen"}` or `{…, "access": "write", "offset", "width", "value": "0x…", "rlen": 0}` and waits up to 2 s for `{"op": "reply", "rid", "status", "data"}`, where `data` is the value read as little-endian hex (`width` bytes; empty for a write). Raise the block's interrupts with `irq_raise`. When the client disconnects, the block that was on the endpoint before answers again |
 
 Byte stream and GPIO models need no `attach`: subscribe, watch `bs_tx` / `gpio_out`
@@ -912,6 +913,35 @@ writes its channels with its own, once a second (once a simulated second in step
 through `Wsts::Control::addTelemetrySource`; with `control: false` there is none, and
 `generate` warns. The report lists each model's channels; telemetry packets omit them, as they
 omit `wstsControl`'s.
+
+### Simulation telemetry
+
+`wstsTlm` (a passive `WstsAdapted.SimTelemetry` written for the deployment, at
+`wstsControl`'s base ID + 0x800) has the simulation's own channels, published with
+`wstsControl`'s:
+
+| Group | Channels | Value |
+|---|---|---|
+| `bus` | `<endpoint>_FromFlight`, `_ToFlight`, `_BytesOut`, `_BytesIn`, `_Errors`, `_Unanswered` (U64) | The endpoint's traffic since start-up, as `bus_stats` counts it |
+| | `<endpoint>_RateOut`, `_RateIn` (F32) | Bytes per simulated second since the last publication |
+| `timing` | `SimSeconds` (F64), `BusyTicks` (U64) | Simulated time; ticks taken while work of an earlier one was outstanding |
+| | `LateTicks` (U64) | Real time: ticks taken after the next was already due, the host not keeping up (not the first after a pause) |
+| | `Speed` (F32) | Real time only: simulated seconds per second of the host's clock since the last publication. Not written in stepped time, where a system's telemetry crosses its links and two runs must send the same bytes |
+| `links` | `<link>_Sent`, `_Received` (U64), `_Up` (bool) | Messages each way on a link to another element; the other end is connected |
+
+The endpoints are those of the bound surrogates (not `Wsts.SimTick`'s) and the GPIO ends of
+links; the links are the system's. Every group is on; the manifest turns them off:
+
+```yaml
+telemetry:              # or `telemetry: false` for every group
+  models: true          # register channels (wstsModelTlm)
+  bus: false
+  timing: true
+  links: true
+```
+
+Without `wstsControl` (`control: false`) there is no `wstsTlm`. The report's
+`sim_telemetry` says what was written.
 
 ## `Wsts.SimControl`
 

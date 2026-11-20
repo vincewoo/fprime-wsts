@@ -144,6 +144,11 @@ MyDeployment: running at tick 412, rate 1
   nothing answered on i2cBus at: 0x48 (412)
 ```
 
+The same numbers are in the GDS: `wstsTlm` has, for each endpoint, `<endpoint>_FromFlight`,
+`_BytesIn`, `_Unanswered`, … and bytes per simulated second (`_RateOut`, `_RateIn`), with
+`SimSeconds`, `LateTicks` (the host not keeping up), `Speed` and each system link's messages
+and state ([Reference](../reference.md#simulation-telemetry)).
+
 `fprime-wsts ctl` sends any [action](control.md) the same way, with no Python and no GDS:
 
 ```bash

@@ -41,6 +41,9 @@ void setup() {
     Wsts::Bus::get().attachByteStream("hubDriver", &link_hub);
 
     ::Cdh::wstsControl.wstsBind("", "");
+
+    // The simulation's own telemetry: bus traffic, timing, links
+    Wsts::Control::get().addTelemetrySource([] { ::Cdh::wstsTlm.wstsPublish(); });
     Wsts::RuntimeConfig config;
     config.bridge = "tcp:50100";
     config.internalTickHz = 10;

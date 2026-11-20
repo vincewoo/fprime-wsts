@@ -100,6 +100,9 @@ function(add_fprime_subdirectory FP_SOURCE_DIR)
 endfunction()
 fprime_setup_included_code()
 
+
+# The simulation's own telemetry: bus traffic, timing, links
+add_fprime_subdirectory("${CMAKE_CURRENT_LIST_DIR}/WstsAdapted/SimTelemetry")
 set(WSTS_FLIGHT_PROJECT "${CMAKE_CURRENT_LIST_DIR}/../../../../mission")
 add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/Cdh/Heartbeat")
 add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/config/project")

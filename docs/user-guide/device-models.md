@@ -192,7 +192,8 @@ sim.serve_i2c("thermoBus", 0x48, lambda write, length: (0, bytes([42] * length))
 
 The handler runs for each transaction and returns `(status, data)`. If it does not answer
 within two seconds, flight software gets an error status. When the client disconnects
-the device disappears from the bus (I2C then reports an address error). `serve_spi` works
+its device disappears from the bus (I2C then reports an address error at that address);
+other devices on the endpoint, at other addresses, stay. `serve_spi` works
 the same way, and `serve_register` serves a [register block](registers.md#a-register-block-in-python).
 
 A byte stream device answers what flight software sends, and a GPIO model follows an

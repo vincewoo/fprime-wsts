@@ -359,6 +359,10 @@ class Manifest:
     element: Optional[str] = None
     links: List[LinkEnd] = field(default_factory=list)
     id_window: Optional[Tuple[int, int]] = None  # inclusive range of IDs routed to this element
+    # The telemetry the generator writes, by group (`telemetry` in the manifest): the models'
+    # registers (models), each bus endpoint's traffic (bus), the run's timing (timing), each
+    # system link (links). All on unless the manifest turns one off.
+    telemetry: Dict[str, bool] = field(default_factory=lambda: {key: True for key in TELEMETRY_KEYS})
 
     @property
     def sim_root(self) -> Optional[Path]:
@@ -388,11 +392,13 @@ class Manifest:
 KNOWN_KEYS = {
     "project", "deployment", "topology", "topology_dir", "output", "substitute", "keep", "models", "control", "bridge", "tick_hz",
     "catalogs", "sources", "main", "cmake", "libraries", "fpp_exclude", "defines", "simulators", "devices",
-    "clocks", "run", "host", "setup", "time", "shims", "files", "ids", "gpio_endpoints",
+    "clocks", "run", "host", "setup", "time", "shims", "files", "ids", "gpio_endpoints", "telemetry",
 }
 #: Operating system APIs the toolkit implements for project code that calls them (`shims`)
 SHIMS = {"vxworks": "Wsts/VxWorks"}
 TIME_KEYS = {"mode", "epoch"}
+#: Groups of telemetry the generator writes for a deployment (model_tlm.py, sim_tlm.py)
+TELEMETRY_KEYS = {"models", "bus", "timing", "links"}
 #: How a manifest may write the two ways simulated time advances, and how the report does
 TIME_MODES = {"realtime": "real-time", "real-time": "real-time", "stepped": "stepped"}
 SETUP_KEYS = {"code", "headers"}
@@ -736,6 +742,16 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
         raise WstsError(f"{where}: run.gds_args must be a list of command line arguments for fprime-gds "
                         "(for example [--framing-selection, fprime])")
     manifest.run_gds_args = [str(entry) for entry in gds_args]
+
+    telemetry = data.get("telemetry", {})
+    if isinstance(telemetry, bool):
+        telemetry = {key: telemetry for key in TELEMETRY_KEYS}
+    unknown = set(telemetry) - TELEMETRY_KEYS if isinstance(telemetry, dict) else {"(not a mapping)"}
+    if unknown:
+        raise WstsError(f"{where}: telemetry: unknown key(s): {unknown_keys(unknown, TELEMETRY_KEYS)} (or true/false "
+                        "for all of them)")
+    for key in TELEMETRY_KEYS:
+        manifest.telemetry[key] = _flag(telemetry.get(key, True), f"{where}: telemetry.{key}")
 
     files = data.get("files") or {}
     unknown = set(files) - FILES_KEYS if isinstance(files, dict) else {"(not a mapping)"}

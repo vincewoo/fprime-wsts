@@ -200,12 +200,13 @@ def test_original_subtopology_is_not_in_the_patched_model(default, tmp_path):
     candidates = [c for c in fpp.select_candidates(fpp.find_fpp_files(roots), settings.framework_path, overrides)
                   if MISSION / "Cdh" / "Top" not in c.parents]
     copy = out / "SensorLib" / "SensorLink" / "SensorLink.fpp"
-    fpp.locate_defs(tmp_path, [c for c in candidates if c != original] + [copy])
+    adapted = sorted((out / "WstsAdapted").rglob("*.fpp"))  # components written for the deployment
+    fpp.locate_defs(tmp_path, [c for c in candidates if c != original] + [copy] + adapted)
     closure = fpp.depend(tmp_path, top)
     assert copy in closure and original not in closure
     fpp.check(tmp_path, closure + top)
     # With both, every definition of the subtopology is seen twice
-    fpp.locate_defs(tmp_path, candidates + [copy])
+    fpp.locate_defs(tmp_path, candidates + [copy] + adapted)
     with pytest.raises(WstsError, match="inconsistent location"):
         fpp.depend(tmp_path, top)
 
@@ -474,6 +475,6 @@ def test_subtopology_inside_the_flight_project(tmp_path):
     # The project module is still added from the flight project, and redirected to the
     # copy; the module that overrides its configuration comes after it
     names = [line.split("/")[-1].rstrip('")') for line in added]
-    assert sorted(names) == ["Cdh", "Heartbeat", "SensorLink", "SerialSensor", "project"]
+    assert sorted(names) == ["Cdh", "Heartbeat", "SensorLink", "SerialSensor", "SimTelemetry", "project"]
     assert names.index("project") > names.index("SensorLink")
     assert 'add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/SensorLib/SensorLink")' in added

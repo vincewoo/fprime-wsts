@@ -142,7 +142,8 @@ device models. [docs/design.md](docs/design.md) has more detailed diagrams of ea
 - **Simulation control**: pause, resume, stepping by ticks and time scale; fault injection on any bus endpoint;
   direct input/output injection; scenario files; recording and replay. The same actions are
   available as F´ commands (`Wsts.SimControl`, with its own events and telemetry), over a
-  socket bridge, and in scenario files.
+  socket bridge, and in scenario files. Telemetry generated per deployment shows each bus
+  endpoint's traffic (and what nothing answered), the run's timing and each system link.
 - **A builder, a launcher and a Python client** for tests and agents: `fprime-wsts build`, `fprime-wsts run`, the `WstsBridge`
   class, and pytest fixtures.
 - **Multi-computer systems**: several deployments run as one simulated system, with the
