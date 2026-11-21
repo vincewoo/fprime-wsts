@@ -239,6 +239,8 @@ def _is_excluded_dir(path: Path) -> bool:
     name = path.name
     if name in EXCLUDED_DIR_NAMES or name.startswith(EXCLUDED_DIR_PREFIXES):
         return True
+    if "{{" in name:
+        return True  # a cookiecutter template: its FPP has {% %} in it and no build reads it
     return (path / GENERATED_MARKER).exists() or is_toolkit_checkout(path)
 
 
@@ -345,7 +347,8 @@ TOPOLOGY_DEFINITION = re.compile(r"^\s*(?:deployment\s+)?topology\s+\w+", re.M)
 def topology_directory(deployment: Path, named: Optional[str] = None) -> Optional[Path]:
     """The directory of a deployment that holds its topology: `named`, else `Top/`, else the one
     directory the deployment's CMakeLists.txt adds that defines a topology (`Payload/Payload/` for
-    deployment `Payload`). None when there is not exactly one."""
+    deployment `Payload`), else the deployment's own directory when its FPP files define one. None
+    when there is not exactly one."""
     if named:
         directory = (deployment / named).resolve()
         return directory if directory.is_dir() else None
@@ -363,6 +366,8 @@ def topology_directory(deployment: Path, named: Optional[str] = None) -> Optiona
             if directory.is_dir() and directory not in found and any(
                     TOPOLOGY_DEFINITION.search(f.read_text(errors="replace")) for f in directory.glob("*.fpp")):
                 found.append(directory)
+    if not found and any(TOPOLOGY_DEFINITION.search(f.read_text(errors="replace")) for f in deployment.glob("*.fpp")):
+        return deployment  # the model is registered with the deployment itself: there is no module of its own
     return found[0] if len(found) == 1 else None
 
 
