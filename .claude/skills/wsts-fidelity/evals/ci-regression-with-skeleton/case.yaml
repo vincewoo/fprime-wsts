@@ -1,0 +1,20 @@
+schema_version: "1.1"
+name: ci-regression-with-skeleton
+expected_outcome: |
+  A review for regression tests in CI on every flight pull request. The agent inventories
+  the simulation and, having built and run it briefly, its bus traffic. It reports the
+  barometer model as a skeleton (TODOs, a settable value) and, from the traffic, that
+  flight software never talks to 0x76, so the model neither helps nor hurts the tests yet.
+  For CI it raises repeatability: real-time runs order threads as the host does, so tests
+  must assert outcomes; stepped time makes runs identical, except where code waits on the
+  host (the report names Cdh.comDriver, a socket driver). It checks that every endpoint
+  flight software uses answers, and that no hardware driver is kept. It writes FIDELITY.md
+  and changes nothing else.
+context:
+  scaffold_script: place-files.sh
+---
+tags: [wsts-fidelity]
+max_turns: 100
+timeout_seconds: 3600
+allowed_tools: [Read, Glob, Grep, Skill, Write, Edit, Bash]
+---

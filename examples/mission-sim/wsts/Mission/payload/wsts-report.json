@@ -149,6 +149,7 @@
       "seam": "S1 topology",
       "chosen_by": "catalog",
       "endpoint": null,
+      "endpoint_kind": null,
       "options": "",
       "base_id": 536936448,
       "dictionary_items_removed": {
@@ -165,6 +166,7 @@
       "seam": "S1 topology",
       "chosen_by": "catalog",
       "endpoint": "linuxTimer",
+      "endpoint_kind": "other",
       "options": "mode=block",
       "base_id": 537067520,
       "dictionary_items_removed": {
@@ -181,6 +183,7 @@
       "seam": "S1 topology",
       "chosen_by": "link",
       "endpoint": "hubDriver",
+      "endpoint_kind": "bytestream",
       "options": "",
       "base_id": 537071616,
       "dictionary_items_removed": {
@@ -197,6 +200,7 @@
       "seam": "S1 topology",
       "chosen_by": "catalog",
       "endpoint": "i2cBus",
+      "endpoint_kind": "i2c",
       "options": "",
       "base_id": 537075712,
       "dictionary_items_removed": {
@@ -213,6 +217,7 @@
       "seam": "S1 topology",
       "chosen_by": "catalog",
       "endpoint": "sensorUart",
+      "endpoint_kind": "bytestream",
       "options": "",
       "base_id": 537079808,
       "dictionary_items_removed": {
@@ -240,6 +245,7 @@
       "seam": "S1 topology",
       "chosen_by": "catalog",
       "endpoint": "heaterPin",
+      "endpoint_kind": "gpio",
       "options": "",
       "base_id": 537083904,
       "dictionary_items_removed": {
@@ -256,6 +262,7 @@
       "seam": "S1 topology",
       "chosen_by": "catalog",
       "endpoint": "switchPin",
+      "endpoint_kind": "gpio",
       "options": "",
       "base_id": 537088000,
       "dictionary_items_removed": {
@@ -272,6 +279,7 @@
       "seam": "S1 topology",
       "chosen_by": "catalog",
       "endpoint": "spiBus",
+      "endpoint_kind": "spi",
       "options": "",
       "base_id": 537092096,
       "dictionary_items_removed": {
@@ -296,6 +304,7 @@
       "seam": "S1 topology",
       "chosen_by": "manifest",
       "endpoint": "fpgaRegs",
+      "endpoint_kind": "register",
       "options": "",
       "base_id": 537096192,
       "dictionary_items_removed": {

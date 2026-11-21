@@ -594,8 +594,10 @@ the root of the sandbox: what `Os::FileSystem::getWorkingDirectory` reports, and
 directory; anything else absolute is used as it is. The default is the files directory of
 the run (`WSTS_DIR`, the log directory unless `run --files-dir` says otherwise), so that
 the files of flight software land where they always did. A sandbox of its own —
-`./wsts-files`, say — survives the clearing of the log directory between runs. Report:
-`files`, and a line under "Simulation build and run inputs".
+`./wsts-files`, say — survives the clearing of the log directory between runs. A sandbox
+inside the generated directory also survives generating it again, and `generate --check`
+does not count what flight software saved there as a change. Report: `files`, and a line
+under "Simulation build and run inputs".
 
 ### Surrogates of another kind, or with other port names
 

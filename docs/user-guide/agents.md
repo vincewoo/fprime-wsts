@@ -58,6 +58,47 @@ real device:
 Ask for it in words like "add a model for the star tracker on /dev/ttyUSB0" or "write a
 Wsts::I2cDevice for this part".
 
+## `wsts-sync`
+
+Brings an existing simulation project back in step when the flight project has moved on,
+or when the toolkit it pins is bumped:
+
+1. Finds what would change before anything is written: a drift check generates into a
+   scratch directory with the pinned toolkit and compares the reports with the generated
+   tree, by area. It reports substitutions and renamed instances, new endpoints with
+   nothing answering, models, links, dictionary items missing, capacity, warnings and
+   modules. It also lists the flight commits since the last generation and where the
+   toolkit pin stands. When generation fails because flight renamed an instance the
+   manifest names, it suggests the new name.
+2. Settles each change in the manifests: renames are followed, and new devices, removed
+   ones and new modules come to you as decisions with a recommendation.
+3. Regenerates, builds, runs and reruns the project's tests, and tells you what changed
+   for the simulation.
+4. On request, bumps the toolkit pin as a step of its own, and writes a CI workflow for
+   the simulation project that checks out the flight project beside it.
+
+Ask for it in words like "I pulled the latest flight code, bring the sim up to date", "is
+our simulation still in step with flight?" or "update fprime-wsts in our sim project".
+
+## `wsts-fidelity`
+
+Reviews how far a simulation can be trusted for what you want to use it for, and writes
+`FIDELITY.md` in the simulation project:
+
+1. Asks the purpose: rehearsing operations, testing fault responses, regression tests in
+   CI, driver or FPGA work, integrating several computers, training.
+2. Inventories every element from its reports, and from a short run's bus traffic when it
+   can run one. The inventory covers the flight code that runs unchanged, what is
+   replaced, and what answers on each bus endpoint: a link, a simulator component, a
+   project model (and whether it is a skeleton, or was checked against hardware captures),
+   a stock model, or nothing, with what flight software sees there.
+3. Reads the flight code and models behind the endpoints that matter, ranks the gaps for
+   your purpose, and gives each one a next step. It also says what can be relied on.
+
+It changes nothing but the review. Ask in words like "how far can we trust the sim for
+rehearsing the heater over-temperature response?" or "what in our simulation is real and
+what's faked?"
+
 ## The MCP server
 
 `fprime-wsts mcp` gives an agent the simulation as tools, over the

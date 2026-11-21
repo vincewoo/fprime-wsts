@@ -1,0 +1,1 @@
+I just pulled the latest flight software into ../orbiter-fsw and now our simulation in ../orbiter-fsw-sim won't generate. Can you bring the sim back in step with flight and tell me what changed for the simulation? I'm in meetings, so make sensible calls and list them.

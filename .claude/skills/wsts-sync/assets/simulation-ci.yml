@@ -1,0 +1,95 @@
+# CI for a fprime-wsts simulation project: .github/workflows/simulation.yml
+#
+# Checks out the simulation project (with the toolkit it pins, lib/fprime-wsts, and that
+# toolkit's own submodules) and the flight project side by side, as the manifests'
+# `project:` keys expect them, then generates, checks the host, builds and runs the tests.
+#
+# Fill in the TODOs: the flight repository, and the directory name `project:` names.
+name: simulation
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      flight_ref:
+        description: "Flight project ref to build against"
+        required: false
+        default: ""
+
+env:
+  SIM_DIR: sim                     # where this repository is checked out
+  FLIGHT_DIR: my-mission           # TODO: the directory name the manifests' `project: ../<name>` expects
+  MANIFEST: wsts-system.yaml       # TODO: or wsts.yaml for one deployment
+
+jobs:
+  simulation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out the simulation project, with the toolkit it pins
+        uses: actions/checkout@v4
+        with:
+          path: ${{ env.SIM_DIR }}
+          submodules: recursive
+
+      - name: Check out the flight project beside it
+        uses: actions/checkout@v4
+        with:
+          repository: my-org/my-mission    # TODO: the flight repository
+          ref: ${{ inputs.flight_ref || '' }}
+          path: ${{ env.FLIGHT_DIR }}
+          submodules: recursive
+          # token: ${{ secrets.FLIGHT_REPO_TOKEN }}   # TODO: when the flight repository is private
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install F Prime tools and the pinned fprime-wsts
+        working-directory: ${{ env.SIM_DIR }}
+        run: pip install -r lib/fprime-wsts/lib/fprime/requirements.txt -e lib/fprime-wsts/python pytest
+
+      # With the generated tree checked in, it must match what the flight project and the
+      # toolkit give now. Without it (wsts/ in .gitignore), generate it instead.
+      - name: Generated tree is up to date
+        working-directory: ${{ env.SIM_DIR }}
+        run: |
+          if git ls-files --error-unmatch wsts > /dev/null 2>&1; then
+            fprime-wsts generate "$MANIFEST" --check
+          else
+            fprime-wsts generate "$MANIFEST"
+          fi
+
+      - name: The host has what the simulated build needs
+        working-directory: ${{ env.SIM_DIR }}
+        run: fprime-wsts check-host "$MANIFEST"
+
+      - name: Build
+        working-directory: ${{ env.SIM_DIR }}
+        run: fprime-wsts build "$MANIFEST"
+
+      - name: Short run
+        working-directory: ${{ env.SIM_DIR }}
+        run: |
+          out=$(fprime-wsts generate "$MANIFEST" --check --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["output"])')
+          fprime-wsts run "$out" --duration 20 --auto-ports --json
+
+      # TODO: the project's tests, if it has them (tests/ with the pytest plugin). For a system
+      # use --wsts-system and the merged dictionary; for one deployment --wsts-deployment.
+      - name: Tests
+        if: hashFiles(format('{0}/tests/**/*.py', env.SIM_DIR)) != ''
+        working-directory: ${{ env.SIM_DIR }}
+        run: |
+          out=$(fprime-wsts generate "$MANIFEST" --check --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["output"])')
+          pytest tests -p fprime_wsts.pytest_plugin --wsts-system "$out" --wsts-gds --wsts-auto-ports \
+            --dictionary "$out/wsts-logs/$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["system"])' "$out/wsts-system.json")Dictionary.json"
+
+      - name: Keep simulation logs when something fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wsts-logs
+          path: |
+            ${{ env.SIM_DIR }}/wsts/**/wsts-logs
+            ${{ env.SIM_DIR }}/wsts/**/build-wsts-loop

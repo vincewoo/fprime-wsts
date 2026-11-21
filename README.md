@@ -291,6 +291,13 @@ checkout to "set up a WSTS simulation of ../my-mission":
   generates, builds and runs it, and works through each error until it runs.
 - **`wsts-device-model`** writes a device model from a datasheet and checks it against the
   real device over its serial, I2C, SPI or GPIO interface.
+- **`wsts-sync`** brings a simulation project back in step after the flight project moves
+  on or the toolkit pin is bumped. It finds what would change before writing anything,
+  follows renames, brings you the new devices as decisions, rebuilds, runs and retests,
+  and can set up CI for the simulation project.
+- **`wsts-fidelity`** reviews what the simulation can be trusted for: what is flight code,
+  what is replaced, and what answers on every bus endpoint. It ranks the gaps for your
+  purpose, with the next step for each, in `FIDELITY.md`.
 
 Once a simulation builds, `fprime-wsts mcp` (an MCP server, registered in `.mcp.json`;
 `pip install -e './python[mcp]'`) lets an agent build, start and stop it, act on it through

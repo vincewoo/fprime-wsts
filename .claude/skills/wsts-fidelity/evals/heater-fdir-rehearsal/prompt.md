@@ -1,0 +1,1 @@
+Our ops team wants to use the simulation in ../orbiter-fsw-sim to rehearse how Payload responds to a heater over-temperature. How far can we trust it for that? Please write it up so I can share it with the team.

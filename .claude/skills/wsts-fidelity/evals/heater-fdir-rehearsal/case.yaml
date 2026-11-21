@@ -1,0 +1,24 @@
+schema_version: "1.1"
+name: heater-fdir-rehearsal
+expected_outcome: |
+  A review for one purpose: ops rehearsing the Payload heater's over-temperature response.
+  The agent inventories the simulation (the skill's inventory.py, ideally with a run's
+  traffic) and reads the heater component. It finds that the over-temperature switch
+  (switchPin, a GPIO input) has nothing behind it: a trip happens only when someone forces
+  the pin (gpio_force from the bridge, a scenario, the MCP tools), never because the heater
+  was on, so the trigger is scripted, not emergent; it says whether that is acceptable for
+  a rehearsal and what would make it emergent (a model tying heaterPin to switchPin). It
+  notes that the response is observable: the heaterPin level and the HeaterSet and
+  OverTemperature events, which stay in the dictionary because the pins use the project's
+  mirror surrogate Sim.SimLinuxGpio. It ranks the other gaps for this purpose (the
+  temperature on sensorUart is fixed text from a stock model; replaced drivers' dictionary
+  items) rather than listing everything equally, writes FIDELITY.md in the simulation
+  project, and changes nothing else.
+context:
+  scaffold_script: place-files.sh
+---
+tags: [wsts-fidelity]
+max_turns: 80
+timeout_seconds: 2400
+allowed_tools: [Read, Glob, Grep, Skill, Write, Edit, Bash]
+---

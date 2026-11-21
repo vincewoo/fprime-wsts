@@ -2,7 +2,9 @@
 
 A simulated deployment is the flight software with specific things replaced. This page
 says what those are. Each generated deployment also carries its own `wsts-report.md` with
-the concrete list for that deployment.
+the concrete list for that deployment. The [`wsts-fidelity` agent skill](user-guide/agents.md#wsts-fidelity)
+turns that list into a review for a stated purpose: what answers on each bus endpoint,
+the gaps that matter, and the step that closes each.
 
 ## What is the same as flight
 
