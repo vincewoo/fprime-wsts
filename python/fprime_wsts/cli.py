@@ -349,6 +349,12 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mcp(args: argparse.Namespace) -> int:
+    from .mcp_server import serve
+
+    return serve(Path(args.cwd) if args.cwd else None)
+
+
 def cmd_new_model(args: argparse.Namespace) -> int:
     from .newmodel import new_model_cli
 
@@ -546,6 +552,16 @@ def main(argv=None) -> int:
     new_model.add_argument("--namespace", default="Sim", help="C++ namespace of the class (default: Sim)")
     new_model.add_argument("--json", action="store_true", help="print what was written as JSON")
     new_model.set_defaults(handler=cmd_new_model)
+
+    mcp = commands.add_parser(
+        "mcp", help="serve the Model Context Protocol on stdio, for an agent (Claude Code, ...) to build, run and "
+                    "drive simulations with tools; needs the mcp package",
+        description="An MCP server on stdio: the client starts it and it ends with the client. Its tools build and "
+                    "start simulations (on free ports), act on them through their bridges, send flight commands and "
+                    "read events and telemetry through their GDS, and read their logs. Runs it started are stopped "
+                    "when it exits. Register it with: claude mcp add wsts -- fprime-wsts mcp")
+    mcp.add_argument("--cwd", help="directory relative paths in tool calls resolve against (default: the current one)")
+    mcp.set_defaults(handler=cmd_mcp)
 
     args = parser.parse_args(argv)
     try:

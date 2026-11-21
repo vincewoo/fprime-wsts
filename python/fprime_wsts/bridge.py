@@ -493,6 +493,13 @@ class WstsBridge:
                 self._events.clear()
             return copy
 
+    def trim_events(self, keep: int) -> None:
+        """Keep only the latest `keep` messages received since subscribe(), so that a long-lived
+        client (the MCP server) holds a bounded amount"""
+        with self._events_changed:
+            if len(self._events) > keep:
+                del self._events[:len(self._events) - keep]
+
     def wait_for(self, predicate: Callable[[dict], bool], timeout: float = 10.0) -> dict:
         """Block until a received message satisfies `predicate`; requires subscribe()"""
         deadline = time.monotonic() + timeout

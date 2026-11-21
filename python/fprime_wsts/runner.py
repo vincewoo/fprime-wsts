@@ -543,7 +543,8 @@ class Simulation:
         """Where this run can be reached: its bridge, and its GDS when it has one"""
         found: dict = {"bridge": self.bridge}
         if self.gds:
-            found.update(gds_port=self.gds_port, gds_gui=self.gds_gui_url, zmq_transport=self.zmq_transport)
+            found.update(gds_port=self.gds_port, gds_gui=self.gds_gui_url, zmq_transport=self.zmq_transport,
+                         dictionary=str(self.dictionary) if self.dictionary else None)
         return found
 
     def _start_models(self, files: List[str], timeout: float = 20.0) -> None:
@@ -957,7 +958,8 @@ class SystemSimulation:
         found: dict = {"elements": {name: simulation.bridge for name, simulation in self.elements.items()}}
         ground = self.elements.get(self.ground)
         if self.gds and ground:
-            found.update(gds_port=ground.gds_port, gds_gui=ground.gds_gui_url, zmq_transport=ground.zmq_transport)
+            found.update(gds_port=ground.gds_port, gds_gui=ground.gds_gui_url, zmq_transport=ground.zmq_transport,
+                         dictionary=str(self.dictionary) if self.dictionary else None)
         return found
 
     def _wait_for_links(self, timeout: float = 20.0) -> None:

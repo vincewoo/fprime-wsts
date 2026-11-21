@@ -58,6 +58,65 @@ real device:
 Ask for it in words like "add a model for the star tracker on /dev/ttyUSB0" or "write a
 Wsts::I2cDevice for this part".
 
+## The MCP server
+
+`fprime-wsts mcp` gives an agent the simulation as tools, over the
+[Model Context Protocol](https://modelcontextprotocol.io). It is a local process on stdio:
+the agent's client starts it and it ends with the client. It opens no port of its own, and
+everything it reaches is on the same machine: the runs it starts, the bridges of their
+elements, and their GDS, which it joins as a client the way fprime-gds's test API does.
+
+Install it once, in the environment that has the toolkit (Python 3.10 or later):
+
+```bash
+pip install -e './python[mcp]'
+```
+
+The repository's `.mcp.json` registers it for Claude Code started in the checkout, which
+asks once whether to use it. Elsewhere, for example in a simulation project:
+
+```bash
+claude mcp add wsts -- fprime-wsts mcp
+```
+
+Start the agent in the environment where `fprime-wsts` is on the `PATH` (the virtual
+environment activated). Relative paths in tool calls are taken from the directory the
+client starts the server in (`--cwd` to choose another).
+
+| Tools | What they do |
+|---|---|
+| `build`, `run_start`, `run_stop`, `runs_list` | Build a generated deployment or system; start it on free ports with a headless GDS (`fprime-wsts run --auto-ports`), stop it in order and return its summary (exit codes, final ticks, an F´ assert); list the runs the server knows |
+| `status`, `pause`, `resume`, `set_rate`, `step`, `wait_quiescent` | Where a run is (with `bus=true`, the traffic of each endpoint and what nothing answered), and its time |
+| `fault_set`, `fault_clear`, `inject`, `gpio`, `register_set`, `raise_irq`, `model_set`, `scenario_run`, `action` | [Actions](../reference.md#actions) through the bridge; `action` sends any of them with its fields |
+| `bus_records` | What flight software sent and received on each endpoint, since the first call |
+| `dictionary`, `send_command`, `wait_event`, `recent_events`, `read_telemetry` | The flight dictionary, and commands, events and telemetry through the GDS |
+| `tail_log`, `last_assert` | The logs of a run (`sim`, `gds`, `models`, `build`), and the F´ assert a deployment stopped on, with the instance to substitute |
+
+A run is named by its generated directory. Once the server knows one run, `run` can be
+left out. A run started elsewhere (`fprime-wsts run`, a test session) is found through the
+`wsts-run.json` in its log directory, so the server can attach to one started with
+`--auto-ports`. The server stops the runs it started when it exits, and leaves the others.
+
+The tools deal with what otherwise surprises an agent:
+
+- **Names.** Flight names are qualified by subtopology (`CdhCore.cmdDisp.CMD_NO_OP`). A tool
+  takes the full name or a unique end of it (`heater.HEATER_SET`), and refuses an ambiguous
+  one with the candidates: in a system, both elements have a `cmdDisp.CMD_NO_OP`.
+- **Commands.** `send_command` returns once the dispatcher reports the command completed or
+  failed, with the events seen meanwhile.
+- **Telemetry** is downlinked about once a second, with the latest value only:
+  `read_telemetry` waits for a sample sent after the call unless `fresh=false`.
+- **Late events.** Events of an element behind a hub arrive late. `wait_event` looks back
+  to the last command or action the server sent, so an event that arrived before the call
+  is still found.
+- **Systems.** Faults take a link name or `<element>.<endpoint>`. `step` takes an element,
+  because elements keep their own ticks. A system in lockstep is conducted by its own
+  `fprime-wsts run`: it can be paused and resumed, but not stepped through the server.
+
+Ask the agent in your own words, for example "start the Mission system, switch the heater
+on and check that the pin goes high", or "drop the hub link for five seconds and tell me
+which Payload events Cdh misses".
+
 ## Agents in the development loop
 
 Any agent can use a simulation the way the skills do:

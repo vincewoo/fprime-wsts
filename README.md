@@ -292,6 +292,11 @@ checkout to "set up a WSTS simulation of ../my-mission":
 - **`wsts-device-model`** writes a device model from a datasheet and checks it against the
   real device over its serial, I2C, SPI or GPIO interface.
 
+Once a simulation builds, `fprime-wsts mcp` (an MCP server, registered in `.mcp.json`;
+`pip install -e './python[mcp]'`) lets an agent build, start and stop it, act on it through
+the bridge, and send commands and read events and telemetry through its GDS, as tools
+([Configuring with an Agent](docs/user-guide/agents.md#the-mcp-server)).
+
 ## Running the tests
 
 ```bash

@@ -115,7 +115,8 @@ def test_free_ports_replace_the_fixed_ones(tmp_path):
         first, second = free.zmq_transport
         assert first.startswith("ipc://") and first.endswith("/in") and second.endswith("/out")
         assert free.addresses() == {"bridge": free.bridge, "gds_port": free.gds_port,
-                                    "gds_gui": f"http://127.0.0.1:{free.gds_gui}/", "zmq_transport": free.zmq_transport}
+                                    "gds_gui": f"http://127.0.0.1:{free.gds_gui}/", "zmq_transport": free.zmq_transport,
+                                    "dictionary": str(free.dictionary) if free.dictionary else None}
     finally:
         free.stop()
     assert not Path(first[len("ipc://"):]).parent.exists(), "the directory of the GDS sockets goes with the run"

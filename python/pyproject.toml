@@ -9,6 +9,10 @@ description = "Workstation Test Set (WSTS) toolkit for F Prime deployments"
 requires-python = ">=3.9"
 dependencies = ["pyyaml"]
 
+[project.optional-dependencies]
+# `fprime-wsts mcp`, the server agents drive simulations with (Python 3.10 or later)
+mcp = ["mcp>=1.2"]
+
 [project.scripts]
 fprime-wsts = "fprime_wsts.cli:main"
 
