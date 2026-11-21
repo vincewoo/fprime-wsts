@@ -86,3 +86,33 @@ def test_the_report_carries_the_sandbox(sandboxed, plain):
     # The sandbox is of the run: the generated build is the same whatever it is
     assert (sandboxed.output / "Cdh" / "CMakeLists.txt").read_text() == \
         (plain.output / "Cdh" / "CMakeLists.txt").read_text()
+
+
+def test_only_a_sandbox_inside_the_output_is_kept():
+    from fprime_wsts.generate import kept_in_output, sandbox_top
+
+    def top(sandbox):
+        return sandbox_top(parse_manifest({"deployment": "D", "files": {"sandbox": sandbox}}))
+
+    assert top("./wsts-files") == "wsts-files" and top("state/files/") == "state"
+    assert top("../shared-files") is None and top("/var/tmp/files") is None and top(".") is None
+    assert sandbox_top(parse_manifest({"deployment": "D"})) is None
+    assert kept_in_output("wsts-files", "wsts-files") and not kept_in_output("wsts-files", None)
+    assert kept_in_output("build-fprime-automatic-native") and kept_in_output("wsts-logs")
+
+
+@needs_fpp
+def test_what_flight_software_saved_in_the_sandbox_outlives_a_regeneration(tmp_path):
+    """A run leaves flight software's files in the sandbox (a saved parameter database). They are
+    neither deleted when the overlay is generated again nor reported as a change by --check."""
+    manifest = element_manifest("cdh", files={"sandbox": "./wsts-files"})
+    output = generate(MISSION, manifest, tmp_path / "out").output
+    saved = output / "wsts-files" / "ram0" / "SensorSimPrmDb.dat"
+    saved.parent.mkdir(parents=True)
+    saved.write_bytes(b"\x01\x02")
+    assert generate(MISSION, manifest, output, check=True).changed == []
+    generate(MISSION, manifest, output)
+    assert saved.read_bytes() == b"\x01\x02"
+    # Without a sandbox in the output, the directory is the generator's, as any other
+    plain = element_manifest("cdh", files=None)
+    assert "wsts-files/ram0/SensorSimPrmDb.dat" in generate(MISSION, plain, output, check=True).changed

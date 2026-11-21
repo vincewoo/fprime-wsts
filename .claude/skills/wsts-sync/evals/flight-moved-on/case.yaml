@@ -1,0 +1,21 @@
+schema_version: "1.1"
+name: flight-moved-on
+expected_outcome: |
+  The agent runs the drift check before writing anything, and finds that generation fails
+  because the manifest names fpgaRegs, which flight renamed to fpgaBlock (the flight commit
+  says so, and the drift hint names it). It renames the instance and the fpga model's
+  endpoint in payload.yaml (and its comment), keeping the model and its parameters. It
+  reports the new ledPin GPIO instance as a new endpoint that nothing answers, says what
+  flight software sees there, and leaves it unanswered or proposes a model with a reason,
+  rather than ignoring it. The flight project and the generated tree are not edited by
+  hand; the tree is regenerated; the system is built and run (or the agent says which
+  stage could not run and why). The final message says what moved in flight and what
+  changed in the simulation.
+context:
+  scaffold_script: place-files.sh
+---
+tags: [wsts-sync]
+max_turns: 120
+timeout_seconds: 3600
+allowed_tools: [Read, Glob, Grep, Skill, Write, Edit, Bash]
+---

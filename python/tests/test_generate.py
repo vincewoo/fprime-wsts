@@ -40,6 +40,10 @@ def test_manifest_in_the_flight_project(tmp_path):
         # The time source: the host's clock in real time, simulated time in stepped time
         "Payload.posixTime": ("Wsts.SimTime", "catalog"),
     }, "hubDriver is kept by the manifest"
+    kinds = {s["instance"]: s["endpoint_kind"] for s in report["substitutions"]}
+    assert (kinds["Payload.i2cBus"], kinds["Payload.sensorUart"], kinds["Payload.heaterPin"],
+            kinds["Payload.spiBus"]) == ("i2c", "bytestream", "gpio", "spi")
+    assert kinds["Payload.posixTime"] is None, "a surrogate without an endpoint has no kind"
     assert "simulation_project" not in report
     instances = (result.output / "Payload" / "Top" / "instances.fpp").read_text()
     assert "instance hubDriver: Drv.TcpClient" in instances

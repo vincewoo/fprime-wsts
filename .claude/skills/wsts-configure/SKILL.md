@@ -200,8 +200,9 @@ and models), and what is not. Then tell the user, briefly:
 - what flight software sees on each endpoint without a model, and the warnings that remain;
 - any flight-project change you proposed and did not make;
 - next steps: commit the simulation project with its `lib/fprime-wsts` submodule; device
-  models (`wsts-device-model`), scenarios, tests, CI with `fprime-wsts generate --check`
-  if they check the generated tree in (CI clones with `--recurse-submodules`);
+  models (`wsts-device-model`), scenarios, tests, a fidelity review for what they want to
+  use it for (`wsts-fidelity`), CI (`wsts-sync` has a workflow that checks out the flight
+  project beside it), and `wsts-sync` again whenever the flight project moves on;
 - the commands to rerun: `build_loop.py <manifest>`, or the plain `fprime-wsts generate` /
   `fprime-util build` / `fprime-wsts run` lines.
 

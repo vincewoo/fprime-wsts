@@ -326,6 +326,7 @@
       "seam": "S1 topology",
       "chosen_by": "manifest",
       "endpoint": null,
+      "endpoint_kind": null,
       "options": "",
       "base_id": 268500992,
       "dictionary_items_removed": {
@@ -342,6 +343,7 @@
       "seam": "S1 topology",
       "chosen_by": "link",
       "endpoint": "hubDriver",
+      "endpoint_kind": "bytestream",
       "options": "",
       "base_id": 268570624,
       "dictionary_items_removed": {
@@ -358,6 +360,7 @@
       "seam": "S1 topology",
       "chosen_by": "catalog",
       "endpoint": "vxTimer",
+      "endpoint_kind": "other",
       "options": "mode=thread tick_hz=60",
       "base_id": 268574720,
       "dictionary_items_removed": {
@@ -374,6 +377,7 @@
       "seam": "S1 topology",
       "chosen_by": "catalog",
       "endpoint": "uart",
+      "endpoint_kind": "bytestream",
       "options": "",
       "base_id": 100667392,
       "dictionary_items_removed": {

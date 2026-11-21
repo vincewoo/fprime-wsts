@@ -1858,6 +1858,12 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
             "seam": "S1 topology",
             "chosen_by": sub.reason,
             "endpoint": sub.endpoint if sub.bind else None,
+            # What the endpoint carries (bytestream, i2c, spi, gpio, register; other for a
+            # tick source), so that a reader of the report knows what an endpoint left without
+            # a model gives flight software
+            "endpoint_kind": (("register" if sub.is_register_endpoint else "bytestream" if sub.bytestream_endpoint
+                               else "gpio" if sub.gpio_endpoint else sims.endpoint_kind(sub.surrogate.ports))
+                              if sub.bind else None),
             "options": sub.options,
             "base_id": sub.instance.base_id,
             "dictionary_items_removed": lost,
@@ -2489,7 +2495,7 @@ def generate(project_root: Path, manifest: Manifest, output: Optional[Path] = No
         with tempfile.TemporaryDirectory(prefix="wsts-check-") as scratch:
             target = Path(scratch) / "out"
             result = _generate(project_root, settings, manifest, target, final_output=output)
-            result.changed = _diff(target, output)
+            result.changed = _diff(target, output, sandbox_top(manifest))
             result.output = output
             result.notices = notices
             return result
@@ -2508,14 +2514,34 @@ def symlink_notice(given: Path, output: Path) -> str:
     )
 
 
-def _diff(new: Path, old: Path) -> List[str]:
+def sandbox_top(manifest: Manifest) -> Optional[str]:
+    """The directory of the output that holds the sandbox of flight software's files
+    (`files.sandbox`, relative to the generated directory), when the sandbox is inside it: the
+    files a run leaves there (a saved parameter database) are flight software's, not output"""
+    sandbox = manifest.files_sandbox
+    if not sandbox or sandbox.startswith(("/", "~")):
+        return None
+    parts = Path(os.path.normpath(sandbox)).parts
+    if not parts or parts[0] in (".", ".."):
+        return None
+    return parts[0]
+
+
+def kept_in_output(name: str, sandbox: Optional[str] = None) -> bool:
+    """A top-level name of the output that generating leaves alone: the build cache (so that
+    regeneration is incremental), run logs, what the host check found, and the sandbox"""
+    return (name.startswith("build-") or name == "wsts-logs" or name.startswith(hostcheck.HOST_FILE + ".")
+            or (sandbox is not None and name == sandbox))
+
+
+def _diff(new: Path, old: Path, sandbox: Optional[str] = None) -> List[str]:
     if not old.is_dir():
         return ["(output directory missing)"]
     changed = []
     names = {p.relative_to(new).as_posix() for p in new.rglob("*") if p.is_file()}
     names |= {p.relative_to(old).as_posix() for p in old.rglob("*") if p.is_file()}
     for name in sorted(names):
-        if name.startswith(("build-", "wsts-logs/", hostcheck.HOST_FILE + ".")) or "/build-" in name:
+        if kept_in_output(name.split("/", 1)[0], sandbox) or "/build-" in name:
             continue
         a, b = new / name, old / name
         if not a.is_file() or not b.is_file() or not filecmp.cmp(a, b, shallow=False):
@@ -2758,9 +2784,10 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
 
         # ---- Write the overlay ----
         if output.exists():
+            sandbox = sandbox_top(manifest)
             for child in output.iterdir():
-                if child.name.startswith("build-") or child.name == "wsts-logs" or child.name.startswith(hostcheck.HOST_FILE + "."):
-                    continue  # keep the build cache (regeneration is incremental) and run logs
+                if kept_in_output(child.name, sandbox):
+                    continue  # the build cache, run logs, and the files flight software keeps
                 shutil.rmtree(child) if child.is_dir() else child.unlink()
         out_top = output / deployment_path / top_name
         out_top.mkdir(parents=True, exist_ok=True)

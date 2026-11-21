@@ -1,0 +1,1 @@
+We're about to run the tests of our simulation (../orbiter-fsw-sim) in CI on every flight pull request. What in it is real and what's faked, and is it solid enough for that? Write it up in the sim project.
