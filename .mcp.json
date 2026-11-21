@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "wsts": {
+      "command": "fprime-wsts",
+      "args": ["mcp"]
+    }
+  }
+}
