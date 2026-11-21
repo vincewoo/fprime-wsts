@@ -471,9 +471,12 @@ def order_modules(selected: List[Path], overriding: Set[Path], supplies: Dict[Pa
                 source = next(m for m in members[supplier] if name in supplies.get(m, set()))
                 user = next(m for m in members[overrider] if name in overrides.get(m, set()))
                 before[supplier].setdefault(overrider, (name, source, user))
-    # Only a module that another one brings in makes a constraint the old rule did not meet
+    # Only a module that another one brings in makes a constraint the old rule did not meet; so does
+    # a supplier that the rule puts after its overrider (an `extra_subdirectories` entry that supplies
+    # what a flight module overrides, `last` or not)
     brought_in = [(s, o) for s in roots for o, (_, source, user) in before[s].items() if source != s or user != o]
-    if not brought_in:
+    misplaced = [(s, o) for s in roots for o in before[s] if roots.index(s) > roots.index(o)]
+    if not brought_in and not misplaced:
         return ModuleOrder(roots, nested, members)
     ordered: List[Path] = []
     remaining = list(roots)

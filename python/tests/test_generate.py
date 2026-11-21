@@ -233,6 +233,73 @@ def test_topology_in_a_directory_other_than_top(tmp_path):
     assert {s["instance"] for s in result.report["substitutions"]} >= {"Payload.i2cBus", "Payload.sensorUart"}
 
 
+def merge_topology_into_deployment(project):
+    """The deployment Payload with its topology files in Payload/ itself and one
+    register_fprime_deployment() for the model and Main.cpp, as a project that has no Top/ has it"""
+    deployment = project / "Payload"
+    for path in sorted((deployment / "Top").iterdir()):
+        if path.name != "CMakeLists.txt":
+            path.rename(deployment / path.name)
+    (deployment / "Top" / "CMakeLists.txt").unlink()
+    (deployment / "Top").rmdir()
+    for path in deployment.iterdir():
+        if path.suffix in (".cpp", ".hpp", ".fpp"):
+            path.write_text(path.read_text().replace("Payload/Top/", "Payload/"))
+    (deployment / "CMakeLists.txt").write_text(
+        "register_fprime_deployment(\n"
+        "    AUTOCODER_INPUTS\n"
+        '        "${CMAKE_CURRENT_LIST_DIR}/instances.fpp"\n'
+        '        "${CMAKE_CURRENT_LIST_DIR}/topology.fpp"\n'
+        "    SOURCES\n"
+        '        "${CMAKE_CURRENT_LIST_DIR}/Main.cpp"\n'
+        '        "${CMAKE_CURRENT_LIST_DIR}/PayloadTopology.cpp"\n'
+        "    DEPENDS\n"
+        "        Fw_Logger\n"
+        "        SensorLib_Units\n"
+        ")\n")
+
+
+@needs_fpp
+def test_topology_in_the_deployment_directory_itself(tmp_path):
+    """No Top/: the model, the topology code and main() are one register_fprime_deployment(). The overlay
+    registers one deployment module with the model, the set-up and the flight sources together"""
+    from mission import copy_flight
+
+    project = copy_flight(tmp_path)
+    merge_topology_into_deployment(project)
+    result = generate(project, flight_manifest("Payload", topology_dir=".", keep=["hubDriver"], models=PAYLOAD_MODELS),
+                      tmp_path / "out")
+    overlay = tmp_path / "out" / "Payload"
+    cmake = (overlay / "CMakeLists.txt").read_text()
+    assert cmake.count("register_fprime_deployment(") == 1 and "register_fprime_module(" not in cmake
+    assert "add_fprime_subdirectory" not in cmake
+    for name in ("topology.fpp", "wsts_instances.fpp"):
+        assert name in cmake.split("AUTOCODER_INPUTS")[1].split("SOURCES")[0]
+    sources = cmake.split("SOURCES")[1].split("DEPENDS")[0]
+    assert "Main.cpp" in sources and "PayloadTopology.cpp" in sources and "WstsSetup.cpp" in sources
+    assert "WstsCompat.hpp" in cmake
+    assert "Payload/PayloadTopologyAc.hpp" in (overlay / "WstsSetup.cpp").read_text()
+    assert {s["instance"] for s in result.report["substitutions"]} >= {"Payload.i2cBus", "Payload.sensorUart"}
+
+
+@needs_fpp
+def test_includes_of_files_beside_the_topology_reach_the_original(tmp_path):
+    """The topology is copied to the overlay; an include of a file that is not copied with it points back at the
+    original, relative to where the copy is"""
+    from mission import copy_flight
+
+    project = copy_flight(tmp_path)
+    (project / "Shared").mkdir()
+    (project / "Shared" / "constants.fppi").write_text("constant SharedConstant = 7\n")
+    topology = project / "Payload" / "Top" / "topology.fpp"
+    topology.write_text('include "../../Shared/constants.fppi"\n' + topology.read_text())
+    generate(project, flight_manifest("Payload", keep=["hubDriver"], models=PAYLOAD_MODELS), tmp_path / "out")
+    copied = tmp_path / "out" / "Payload" / "Top" / "topology.fpp"
+    first = copied.read_text().splitlines()[0]
+    assert first.startswith('include "') and "Shared/constants.fppi" in first
+    assert ((copied.parent / first.split('"')[1]).resolve() == (project / "Shared" / "constants.fppi").resolve())
+
+
 def test_topology_directory_is_found_without_a_top_directory(tmp_path):
     from fprime_wsts.fpp import topology_directory
 
@@ -249,6 +316,11 @@ def test_topology_directory_is_found_without_a_top_directory(tmp_path):
     (deployment / "Config" / "other.fpp").write_text("topology Other {\n}\n")
     assert topology_directory(deployment) is None  # two directories define one: the manifest must say
     assert topology_directory(deployment, "Config") == deployment / "Config"
+    # No directory is added: the topology is in the deployment's own directory
+    (deployment / "Dep" / "topology.fpp").rename(deployment / "Dep.fpp")
+    (deployment / "Config" / "other.fpp").unlink()
+    cmake.write_text("register_fprime_deployment(SOURCES Main.cpp)\n")
+    assert topology_directory(deployment) == deployment
 
 
 @needs_fpp
