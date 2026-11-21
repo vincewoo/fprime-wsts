@@ -2489,7 +2489,7 @@ def generate(project_root: Path, manifest: Manifest, output: Optional[Path] = No
         with tempfile.TemporaryDirectory(prefix="wsts-check-") as scratch:
             target = Path(scratch) / "out"
             result = _generate(project_root, settings, manifest, target, final_output=output)
-            result.changed = _diff(target, output)
+            result.changed = _diff(target, output, sandbox_top(manifest.files_sandbox, output))
             result.output = output
             result.notices = notices
             return result
@@ -2508,7 +2508,33 @@ def symlink_notice(given: Path, output: Path) -> str:
     )
 
 
-def _diff(new: Path, old: Path) -> List[str]:
+#: Names at the top of a generated directory that a regeneration writes, or that a run clears
+#: (`wsts-logs`): a sandbox of the files of flight software must not be under one of them
+_OWNED_TOP_NAMES = {"CMakeLists.txt", "settings.ini", "wsts-report.json", "wsts-report.md", "wsts-include",
+                    "WstsAdapted", "wsts-logs", fpp.GENERATED_MARKER}
+
+
+def sandbox_top(sandbox: Optional[str], output: Path) -> Optional[str]:
+    """The name at the top of `output` under which the sandbox of the files of flight software
+    (`files.sandbox`) lies, or None when it lies outside `output`.
+
+    A relative sandbox is relative to the generated directory (where the runner resolves it), so
+    `./wsts-files` is `<output>/wsts-files`: a regeneration keeps that name, and `generate --check`
+    does not compare what is under it.
+    """
+    if not sandbox:
+        return None
+    base = Path(os.path.normpath(os.path.abspath(output)))
+    path = Path(os.path.normpath(base / os.path.expanduser(sandbox)))  # an absolute sandbox replaces base
+    if path == base:
+        raise WstsError(f"files.sandbox '{sandbox}' is the generated directory itself: name a directory inside it "
+                        "(./wsts-files) or outside it")
+    if base not in path.parents:
+        return None
+    return path.relative_to(base).parts[0]
+
+
+def _diff(new: Path, old: Path, keep: Optional[str] = None) -> List[str]:
     if not old.is_dir():
         return ["(output directory missing)"]
     changed = []
@@ -2517,6 +2543,8 @@ def _diff(new: Path, old: Path) -> List[str]:
     for name in sorted(names):
         if name.startswith(("build-", "wsts-logs/", hostcheck.HOST_FILE + ".")) or "/build-" in name:
             continue
+        if keep is not None and name.startswith(keep + "/"):
+            continue  # the files of flight software, in a sandbox inside the generated directory
         a, b = new / name, old / name
         if not a.is_file() or not b.is_file() or not filecmp.cmp(a, b, shallow=False):
             changed.append(name)
@@ -2757,10 +2785,20 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
                 )
 
         # ---- Write the overlay ----
+        # A sandbox of the files of flight software inside the generated directory is kept, and
+        # must not share a name with what the overlay writes
+        sandbox_name = sandbox_top(manifest.files_sandbox, final_output)
+        owned = _OWNED_TOP_NAMES | {deployment_path.split("/")[0]} | {m.relative.split("/")[0] for m in replaced.values()}
+        if sandbox_name is not None and (sandbox_name in owned or sandbox_name.startswith(("build-", hostcheck.HOST_FILE + "."))):
+            raise WstsError(f"files.sandbox '{manifest.files_sandbox}' is relative to the generated directory "
+                            f"{final_output}, and '{sandbox_name}' there is written by generate or cleared by run: "
+                            "choose another name (./wsts-files)")
         if output.exists():
             for child in output.iterdir():
                 if child.name.startswith("build-") or child.name == "wsts-logs" or child.name.startswith(hostcheck.HOST_FILE + "."):
                     continue  # keep the build cache (regeneration is incremental) and run logs
+                if child.name == sandbox_name:
+                    continue  # and the files of flight software
                 shutil.rmtree(child) if child.is_dir() else child.unlink()
         out_top = output / deployment_path / top_name
         out_top.mkdir(parents=True, exist_ok=True)

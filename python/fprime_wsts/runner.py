@@ -386,6 +386,20 @@ def gds_command(executable: str, dictionary: Path, gds_port: int, log_dir: Path,
     return command + list(extra or [])
 
 
+def sandbox_directory(report: dict, directory: Path) -> Optional[Path]:
+    """The sandbox of the files of flight software a run exports as WSTS_FILES_DIR: `files.sandbox`
+    of the manifest, carried by the report as written. A relative one is relative to the generated
+    directory (`directory`, the one that holds wsts-report.json; an element's own directory in a
+    system), `~` is the user's home. None without the key: the files directory of the run
+    (WSTS_DIR) is the sandbox.
+    """
+    sandbox = report.get("files", {}).get("sandbox")
+    if not sandbox:
+        return None
+    expanded = Path(os.path.expanduser(sandbox))
+    return (expanded if expanded.is_absolute() else Path(directory) / expanded).resolve()
+
+
 class Simulation:
     """A running simulated deployment, optionally with a GDS (headless, or with its browser GUI)"""
 
@@ -484,11 +498,10 @@ class Simulation:
         env.setdefault("WSTS_DIR", str(self.files_dir))
         # The sandbox of the files of flight software (`files.sandbox` in the manifest): where
         # target paths and relative names of flight software land on the host
-        sandbox = self.report.get("files", {}).get("sandbox")
-        if sandbox:
-            resolved = sandbox if os.path.isabs(sandbox) else str((self.directory / sandbox).resolve())
-            env["WSTS_FILES_DIR"] = resolved
-            Path(resolved).mkdir(parents=True, exist_ok=True)
+        sandbox = sandbox_directory(self.report, self.directory)
+        if sandbox is not None:
+            env["WSTS_FILES_DIR"] = str(sandbox)
+            sandbox.mkdir(parents=True, exist_ok=True)
         if self.scenario:
             env["WSTS_SCENARIO"] = str(Path(self.scenario).resolve())
             env["WSTS_SCENARIO_MODE"] = self.scenario_mode

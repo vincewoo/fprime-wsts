@@ -351,8 +351,9 @@ class Manifest:
     defines: List[str] = field(default_factory=list)
     # Operating system APIs implemented for project code (SHIMS): "vxworks"
     shims: List[str] = field(default_factory=list)
-    # Where the files of flight software land on the host (`files.sandbox`), relative to the
-    # manifest when it starts ./ or ../; None is the files directory of the run (WSTS_DIR)
+    # Where the files of flight software land on the host (`files.sandbox`). Carried into the
+    # report as written: a relative path is relative to the generated directory (the runner
+    # resolves it there), not to the manifest. None is the files directory of the run (WSTS_DIR)
     files_sandbox: Optional[str] = None
     # Set when the deployment is generated as one element of a system (see system.py)
     system: Optional[str] = None
@@ -760,7 +761,7 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
     sandbox = files.get("sandbox")
     if sandbox is not None and (not isinstance(sandbox, str) or not sandbox.strip()):
         raise WstsError(f"{where}: files.sandbox must be a directory for the files of flight software, relative to "
-                        "the manifest (./wsts-files) or on the host")
+                        "the generated directory (./wsts-files) or absolute")
     manifest.files_sandbox = None if sandbox is None else str(sandbox)
 
     cmake = data.get("cmake") or {}

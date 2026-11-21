@@ -194,8 +194,8 @@ host:
   ignore: [vendor/gen.h, -lcodec]    # names the host check does not report (header, -l<library>, package, SDK entry)
 shims: [vxworks]                     # operating system APIs the toolkit implements for project code (see "Shims")
 files:
-  sandbox: ./wsts-files              # where the files of flight software land on the host (see "Files");
-                                     # default: the files directory of the run
+  sandbox: ./wsts-files              # where the files of flight software land on the host (see "Files"),
+                                     # relative to the generated directory; default: the files directory of the run
 ```
 
 ### Instance names
@@ -590,12 +590,21 @@ Relative names resolve against the working directory of flight software, which s
 the root of the sandbox: what `Os::FileSystem::getWorkingDirectory` reports, and what
 `changeWorkingDirectory` changes.
 
-`files.sandbox` is where the sandbox is. `./` and `../` are relative to the manifest's
-directory; anything else absolute is used as it is. The default is the files directory of
+`files.sandbox` is where the sandbox is. A relative path is relative to the **generated
+directory** of the deployment (the one that holds `wsts-report.json`; for an element of a
+system, the element's own directory, such as `wsts/Mission/cdh/`), not to the manifest:
+`./wsts-files` in the example's `cdh.yaml` is `wsts/Mission/cdh/wsts-files/`. An absolute
+path is used as it is, and `~` is the user's home. The default is the files directory of
 the run (`WSTS_DIR`, the log directory unless `run --files-dir` says otherwise), so that
 the files of flight software land where they always did. A sandbox of its own —
-`./wsts-files`, say — survives the clearing of the log directory between runs. Report:
-`files`, and a line under "Simulation build and run inputs".
+`./wsts-files`, say — survives the clearing of the log directory between runs.
+
+A sandbox inside the generated directory survives regeneration too: `generate` keeps the
+directory at its top (`wsts-files`) and `generate --check` does not compare what is in it.
+It cannot be the generated directory itself, nor under a name that `generate` writes there
+(the deployment's directory, `WstsAdapted`, `wsts-include`, …) or that `run` clears
+(`wsts-logs`). Report: `files`, as written in the manifest, and a line under "Simulation
+build and run inputs".
 
 ### Surrogates of another kind, or with other port names
 

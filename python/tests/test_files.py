@@ -8,11 +8,16 @@ run (WSTS_DIR), which the C++ implementation reads itself.
 The generator tests need the FPP tools.
 """
 
+import os
+from pathlib import Path
+
 import pytest
 
 from fprime_wsts.fpp import WstsError
-from fprime_wsts.generate import generate
+from fprime_wsts.generate import generate, sandbox_top
 from fprime_wsts.manifest import FILES_KEYS, parse_manifest
+
+from fprime_wsts.runner import Simulation, sandbox_directory
 
 from mission import MISSION, element_manifest, needs_fpp
 
@@ -86,3 +91,71 @@ def test_the_report_carries_the_sandbox(sandboxed, plain):
     # The sandbox is of the run: the generated build is the same whatever it is
     assert (sandboxed.output / "Cdh" / "CMakeLists.txt").read_text() == \
         (plain.output / "Cdh" / "CMakeLists.txt").read_text()
+
+
+# ----------------------------------------------------------------------
+# Where the sandbox is: relative to the generated directory
+# ----------------------------------------------------------------------
+
+
+def test_a_relative_sandbox_is_relative_to_the_generated_directory(tmp_path):
+    report = {"files": {"sandbox": "./wsts-files"}}
+    assert sandbox_directory(report, tmp_path) == (tmp_path / "wsts-files").resolve()
+    assert sandbox_directory({"files": {"sandbox": "../shared/files"}}, tmp_path / "cdh") == \
+        (tmp_path / "shared" / "files").resolve()
+    assert sandbox_directory({"files": {"sandbox": "/srv/files"}}, tmp_path) == Path("/srv/files")
+    assert sandbox_directory({"files": {"sandbox": "~/files"}}, tmp_path) == Path(os.path.expanduser("~/files"))
+    assert sandbox_directory({}, tmp_path) is None, "the files directory of the run (WSTS_DIR)"
+
+
+def test_a_sandbox_inside_the_generated_directory_is_named_by_its_top(tmp_path):
+    assert sandbox_top("./wsts-files", tmp_path) == "wsts-files"
+    assert sandbox_top("wsts-files/ram", tmp_path) == "wsts-files"
+    assert sandbox_top("../out/files", tmp_path / "out") == "files", "out of the directory and back in"
+    assert sandbox_top(str(tmp_path / "files" / "a"), tmp_path) == "files"
+    assert sandbox_top("../wsts-files", tmp_path) is None
+    assert sandbox_top("/srv/files", tmp_path) is None
+    assert sandbox_top(None, tmp_path) is None
+    with pytest.raises(WstsError, match="is the generated directory itself"):
+        sandbox_top("./", tmp_path)
+
+
+def fake_deployment(directory: Path, seen: Path) -> Path:
+    """A stand-in for the built deployment: writes down the sandbox it was given, and exits"""
+    binary = directory / "build-artifacts" / "Linux" / "sim" / "bin" / "Cdh"
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    binary.write_text(f'#!/bin/sh\nprintf %s "$WSTS_FILES_DIR" > "{seen}"\n')
+    binary.chmod(0o755)
+    return seen
+
+
+@needs_fpp
+def test_the_sandbox_goes_from_the_manifest_to_the_run_and_survives_regeneration(tmp_path):
+    output = tmp_path / "wsts" / "cdh"
+    manifest = element_manifest("cdh", files={"sandbox": "./wsts-files"})
+    generated = generate(MISSION, manifest, output)
+    assert generated.report["files"] == {"sandbox": "./wsts-files"}, "as written: the runner resolves it"
+
+    seen = fake_deployment(output, tmp_path / "seen-files-dir")
+    simulation = Simulation(output, bridge="none").start()
+    assert simulation.sim.wait(timeout=30) == 0
+    simulation.stop()
+    assert seen.read_text() == str((output / "wsts-files").resolve()), \
+        "relative to the generated directory, not to the manifest"
+    assert (output / "wsts-files").is_dir(), "made by the run"
+
+    # Files flight software wrote there are neither deleted by a regeneration nor a change
+    # for --check
+    saved = output / "wsts-files" / "ram0" / "SensorSimPrmDb.dat"
+    saved.parent.mkdir(parents=True)
+    saved.write_bytes(b"\x01\x02")
+    assert generate(MISSION, manifest, output, check=True).changed == []
+    generate(MISSION, manifest, output)
+    assert saved.read_bytes() == b"\x01\x02"
+
+
+@needs_fpp
+def test_a_sandbox_cannot_be_where_generate_writes(tmp_path):
+    for number, sandbox in enumerate(("./Cdh/files", "./WstsAdapted", "./wsts-logs/files")):
+        with pytest.raises(WstsError, match="written by generate or cleared by run"):
+            generate(MISSION, element_manifest("cdh", files={"sandbox": sandbox}), tmp_path / str(number))
