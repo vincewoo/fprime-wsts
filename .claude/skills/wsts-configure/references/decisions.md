@@ -296,4 +296,5 @@ wants those files. A file that must survive between runs is the reason to set
 | A parameter database or other state read back at the next start | `files.sandbox: ./wsts-files` |
 
 The example's `cdh.yaml` sets it, so the parameter database `SensorSim.prmDb` saves as
-`/ram0/SensorSimPrmDb.dat` lands in `./wsts-files/ram0/` and survives the next run.
+`/ram0/SensorSimPrmDb.dat` lands in `wsts/Mission/cdh/wsts-files/ram0/` and survives the next run
+and regeneration. A relative sandbox is relative to the generated directory, not to the manifest.

@@ -628,7 +628,7 @@
       "properties": {
         "sandbox": {
           "type": "string",
-          "description": "Where the files of flight software land on the host: target paths (/ram0, /tffs0) and relative names are mapped into it. Relative to this file when it starts ./ or ../, else on the host. Default: the files directory of the run (WSTS_DIR)"
+          "description": "Where the files of flight software land on the host: target paths (/ram0, /tffs0) and relative names are mapped into it. A relative path is relative to the generated directory (where wsts-report.json is), not to this file; an absolute one is used as it is. Default: the files directory of the run (WSTS_DIR)"
         }
       },
       "additionalProperties": false,
