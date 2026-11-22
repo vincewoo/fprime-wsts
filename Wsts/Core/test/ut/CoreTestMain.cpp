@@ -538,11 +538,16 @@ TEST_F(CoreTest, SteppedTimeTimesItsTicksInHostTime) {
             }).detach();
         }
     });
-    Ticker ticker(1000);  // a period of 1 ms
-    ASSERT_TRUE(eventually([&control]() { return control.tick() >= 5; }));
+    {
+        Ticker realTime(1000);  // a period of 1 ms
+        ASSERT_TRUE(eventually([&control]() { return control.tick() >= 5; }));
+    }
     EXPECT_EQ(control.tickTimes().ticks, 0u) << "real time is not timed";
+    // The tick source starts again in stepped time: one that is in the middle of a real-time
+    // wait when stepping begins takes its next tick unbracketed, and that tick is not timed
     ASSERT_TRUE(run(R"({"op": "pause"})"));
     ASSERT_TRUE(run(R"({"op": "set_stepped", "stepped": true})"));
+    Ticker ticker(1000);
     const std::uint64_t first = control.tick() + 1;
     slowTick.store(first + 2);
     ASSERT_TRUE(run(R"({"op": "step", "ticks": 10})"));
