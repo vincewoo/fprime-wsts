@@ -292,3 +292,29 @@ def test_bus_traffic_is_nested_by_endpoint_and_address():
     assert "  nothing answered on i2cBus at: 0x40 (2)" in lines
     assert "  nothing answered on spiBus: no device is attached" in lines
     assert render_traffic({}) == ["  bus traffic: no endpoints"]
+
+
+def test_tick_times_are_nested_and_described():
+    from fprime_wsts.bridge import tick_times
+    from fprime_wsts.runner import describe_tick_times, with_traffic
+
+    flat = {"id": 4, "ticks": 120, "mean_us": 812.5, "max_us": 12345.6, "over_period": 2,
+            "slowest.0.tick": 37, "slowest.0.us": 12345.6, "slowest.1.tick": 90, "slowest.1.us": 9100.0}
+    times = tick_times(flat)
+    assert times == {"ticks": 120, "mean_ms": 0.812, "max_ms": 12.346, "over_period": 2,
+                     "slowest": [{"tick": 37, "ms": 12.346}, {"tick": 90, "ms": 9.1}]}
+    line = describe_tick_times(times, 8_000_000)
+    assert line.startswith("slowest ticks in host time: tick 37 12.346 ms, tick 90 9.1 ms (mean 0.812 ms over 120")
+    assert "2 took longer than the tick period of 8 ms" in line
+    assert "longer than" not in describe_tick_times({**times, "over_period": 0})
+    assert describe_tick_times(None) is None and describe_tick_times(tick_times({})) is None
+
+    class Bridge:
+        def bus_stats(self):
+            return {}
+
+        def tick_times(self):
+            return times
+
+    assert with_traffic(Bridge(), {"stepped": True})["tick_times"] == times
+    assert "tick_times" not in with_traffic(Bridge(), {"stepped": False}), "real time is not timed"

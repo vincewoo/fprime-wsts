@@ -499,6 +499,64 @@ TEST_F(CoreTest, ATickIsTakenWhenTheLastOneIsFinished) {
     Wsts::Activity::get().end();
 }
 
+TEST_F(CoreTest, TickTimesKeepTheSlowestTicks) {
+    Wsts::TickTimes times;
+    const std::uint64_t ns[] = {100, 900, 300, 900, 50, 700, 1200, 200};
+    for (std::uint64_t i = 0; i < 8; i++) {
+        times.add(i + 1, ns[i], 800);
+    }
+    EXPECT_EQ(times.ticks, 8u);
+    EXPECT_EQ(times.maxNs, 1200u);
+    EXPECT_EQ(times.totalNs, 4350u);
+    EXPECT_EQ(times.overPeriod, 3u) << "900, 900 and 1200 ns against a period of 800";
+    ASSERT_EQ(times.slowest.size(), Wsts::TickTimes::SLOWEST);
+    const std::uint64_t ticks[] = {7, 2, 4, 6, 3};  // of two equal ticks the earlier first
+    for (std::size_t i = 0; i < Wsts::TickTimes::SLOWEST; i++) {
+        EXPECT_EQ(times.slowest[i].tick, ticks[i]) << "place " << i;
+    }
+    Wsts::JsonObj obj;
+    times.addTo(obj);
+    EXPECT_EQ(obj.num("ticks"), 8);
+    EXPECT_EQ(obj.num("over_period"), 3);
+    EXPECT_DOUBLE_EQ(obj.real("max_us"), 1.2);
+    EXPECT_EQ(obj.num("slowest.0.tick"), 7);
+    EXPECT_DOUBLE_EQ(obj.real("slowest.0.us"), 1.2);
+    EXPECT_EQ(obj.num("slowest.4.tick"), 3);
+    EXPECT_FALSE(obj.has("slowest.5.tick"));
+}
+
+TEST_F(CoreTest, SteppedTimeTimesItsTicksInHostTime) {
+    Control& control = Control::get();
+    std::atomic<std::uint64_t> slowTick{0};
+    // Flight software: one tick keeps a handler busy for 30 ms of host time
+    control.addTickListener([&slowTick](std::uint64_t tick, bool paused) {
+        if (!paused && tick == slowTick.load()) {
+            Wsts::Activity::get().begin();
+            std::thread([]() {
+                std::this_thread::sleep_for(std::chrono::milliseconds(30));
+                Wsts::Activity::get().end();
+            }).detach();
+        }
+    });
+    Ticker ticker(1000);  // a period of 1 ms
+    ASSERT_TRUE(eventually([&control]() { return control.tick() >= 5; }));
+    EXPECT_EQ(control.tickTimes().ticks, 0u) << "real time is not timed";
+    ASSERT_TRUE(run(R"({"op": "pause"})"));
+    ASSERT_TRUE(run(R"({"op": "set_stepped", "stepped": true})"));
+    const std::uint64_t first = control.tick() + 1;
+    slowTick.store(first + 2);
+    ASSERT_TRUE(run(R"({"op": "step", "ticks": 10})"));
+    ASSERT_TRUE(eventually([&control, first]() { return control.paused() && control.tick() == first + 9; }));
+    ASSERT_TRUE(eventually([&control]() { return control.tickTimes().ticks == 10; }));
+    const Wsts::TickTimes times = control.tickTimes();
+    ASSERT_FALSE(times.slowest.empty());
+    EXPECT_EQ(times.slowest[0].tick, first + 2) << "the tick whose work took longest";
+    EXPECT_GE(times.slowest[0].ns, 30000000u);
+    EXPECT_GE(times.overPeriod, 1u);
+    EXPECT_EQ(times.maxNs, times.slowest[0].ns);
+    control.setStepped(false);
+}
+
 TEST_F(CoreTest, ALimitPacesSteppedTime) {
     Control& control = Control::get();
     control.setStepped(true);

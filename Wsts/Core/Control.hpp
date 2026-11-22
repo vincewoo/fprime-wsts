@@ -131,6 +131,27 @@ struct SimStatus {
     JsonObj toJson() const;
 };
 
+//! Stepped time: how long ticks took in host time, from onTick() until finishTick() found
+//! their work finished (docs/stepped-time.md, decision 4). A hint at what would overrun on
+//! the target, where stepped time hides it: never a failure, and never seen by flight
+//! software, so two runs stay the same.
+struct TickTimes {
+    static constexpr std::size_t SLOWEST = 5;  //!< ticks kept in `slowest`
+    struct Slow {
+        std::uint64_t tick = 0;
+        std::uint64_t ns = 0;
+    };
+    std::uint64_t ticks = 0;       //!< ticks timed: those taken in stepped time that finished
+    std::uint64_t totalNs = 0;
+    std::uint64_t maxNs = 0;
+    std::uint64_t overPeriod = 0;  //!< ticks that took longer than the tick period
+    std::vector<Slow> slowest;     //!< the slowest ticks, slowest first; the earlier tick of two equal ones
+    void add(std::uint64_t tick, std::uint64_t ns, std::uint64_t periodNs);
+    //! Flat, as every bridge message is: `ticks`, `mean_us`, `max_us`, `over_period`, and
+    //! `slowest.<i>.tick`, `slowest.<i>.us` (fprime_wsts.bridge.tick_times nests them)
+    void addTo(JsonObj& obj) const;
+};
+
 class Control : public BusObserver {
   public:
     using TickListener = std::function<void(std::uint64_t tick, bool paused)>;
@@ -181,6 +202,8 @@ class Control : public BusObserver {
     void setStepLimit(std::uint32_t milliseconds) { m_stepLimitMs.store(milliseconds); }
     //! Where the work of a tick that did not finish is; empty when none has been stuck
     std::string stuck();
+    //! How long the ticks taken in stepped time took in host time
+    TickTimes tickTimes();
 
     //! Held around an action that comes from outside the simulation (a bridge client). In
     //! stepped time it waits for the tick being taken to finish, keeps the next one from
@@ -324,6 +347,10 @@ class Control : public BusObserver {
     std::vector<Inbound*> m_inbound;
     std::atomic<std::uint64_t> m_busyTicks{0};  //!< ticks taken before the work of the last one was finished
     std::atomic<std::uint64_t> m_lateTicks{0};  //!< real time: ticks taken after the next was already due
+    Clock::time_point m_tickStarted;  //!< stepped time: when onTick() began this tick (tick thread only)
+    bool m_tickTimed = false;         //!< ... and it is to be timed (tick thread only)
+    std::mutex m_tickTimesMutex;
+    TickTimes m_tickTimes;
     //! Real time: the last awaitTick() let a tick be taken (a tick after a pause is behind
     //! its schedule, and is not late)
     std::atomic<bool> m_lastTickTaken{false};

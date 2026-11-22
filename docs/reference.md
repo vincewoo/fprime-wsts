@@ -42,8 +42,10 @@ directory holds the addresses it uses (`bridge` or `elements: {<name>: <bridge>}
 `WstsSystem(<directory>)` and `fprime_wsts.bridge.bridge_address(<directory>)` read it, so
 they find a run started with `--auto-ports`. It is removed when the run stops. A run in
 stepped time adds `stepped`, `sim_seconds` (simulated time reached), `speed` (simulated
-over wall time) and, when a tick did not finish, `stuck` (the queues that held work; the
-exit status is then 1). When the
+over wall time), `tick_times` (how long the ticks took in host time: below, `tick_times`
+under the bridge's queries; in a system, in each element's `final_status`) and, when a tick
+did not finish, `stuck` (the queues that held work; the exit status is then 1). The text
+summary names the slowest ticks, and how many took longer than the tick period. When the
 deployment exits on its own and its log ends with an F´ assert, the summary has
 `assert: {file, line, instances}` (and `id` when the log printed a file ID, `0x…:line`,
 which is resolved with `hashes.txt` of the build cache). `instances` are the instances of
@@ -820,6 +822,7 @@ Newline-delimited JSON. A client sends `{"id": n, "op": …}` and receives
 | `subscribe` | Start receiving `{"ev": "rec", …}`, `{"ev": "action", …}` and `{"ev": "sim_event", …}` |
 | `gpio_get` (`endpoint`) | Level flight software last wrote |
 | `bus_stats` | The traffic of each endpoint since start-up (endpoints nothing has used yet with zeros), flat: `bus.<endpoint>.<counter>` with `transactions`, `to_device` (what flight software did: sends, reads, writes, transfers, pin writes), `to_flight` (what reached it unasked: received bytes, input levels, interrupts), `bytes_to_device`, `bytes_to_flight`, `errors`, `unanswered`, `fault_hits` (an endpoint's interrupts included) and `last_tick`; and `bus.<endpoint>.at.<address>.<counter>` (`transactions`, `errors`, `unanswered`) for each I2C address and register offset, the address in hex (`0x68`). `unanswered` counts what nothing answered: no device on the endpoint, none at the I2C address, nothing at the register offset (`NO_DEVICE`, from the bus or a `RegisterFile` that has not defined the offset). Byte streams and GPIO pins have no answer to miss (a client may serve them by subscribing) and are never `unanswered`. `WstsBridge.bus_stats()` nests them: `{endpoint: {counter: n, …, "addresses": {"0x68": {…}}}}` |
+| `tick_times` | Stepped time: how long the ticks took in host time, each from its start until its work was finished (the cycles of the simulation's own clocks in it included, the pace of `set_rate` and what was done between two ticks not), flat: `ticks` (ticks timed), `mean_us`, `max_us`, `over_period` (ticks that took longer than the tick period: on the target they could have overrun, which stepped time hides) and `slowest.<i>.tick`, `slowest.<i>.us` for the five slowest, slowest first. Ticks taken in real time, and one that did not finish (`stuck`), are not timed. A hint, never a failure: the host is not the target, and nothing of it reaches flight software, so two runs still record the same bytes. `WstsBridge.tick_times()` nests it: `{"ticks", "mean_ms", "max_ms", "over_period", "slowest": [{"tick", "ms"}, …]}` |
 | `attach` (`endpoint`, `kind`: `i2c`\|`spi`, `addr`) | Become the device model (at `addr`; for SPI, the endpoint's one device). When the client disconnects, its devices leave the bus and other devices on the endpoint stay. The sim then sends `{"ev": "i2c_req", "rid", "endpoint", "addr", "write", "rlen"}` and waits up to 2 s for `{"op": "reply", "rid", "status", "data"}` |
 | `attach` (`endpoint`, `kind`: `register`) | Become the register block. The sim sends `{"ev": "reg_req", "rid", "endpoint", "access": "read", "offset": "0x…", "width", "rlen"}` or `{…, "access": "write", "offset", "width", "value": "0x…", "rlen": 0}` and waits up to 2 s for `{"op": "reply", "rid", "status", "data"}`, where `data` is the value read as little-endian hex (`width` bytes; empty for a write). Raise the block's interrupts with `irq_raise`. When the client disconnects, the block that was on the endpoint before answers again |
 

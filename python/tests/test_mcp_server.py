@@ -305,3 +305,13 @@ def test_the_session_starts_and_stops_a_run(tmp_path):
         assert time.monotonic() - started < 10
     finally:
         session.close()
+
+
+def test_status_in_stepped_time_has_the_slowest_ticks(tmp_path, session):
+    sim = FakeSim()
+    sim.answer_status = lambda message: {"id": message["id"], "ok": True, "tick": 40, "endpoints": "", "stepped": True}
+    sim.answers["tick_times"] = {"ticks": 40, "mean_us": 500.0, "max_us": 2500.0, "over_period": 1,
+                                 "slowest.0.tick": 12, "slowest.0.us": 2500.0}
+    make_deployment(tmp_path / "dep", f"tcp:{sim.port}")
+    times = session.status("dep")["status"]["tick_times"]
+    assert times == {"ticks": 40, "mean_ms": 0.5, "max_ms": 2.5, "over_period": 1, "slowest": [{"tick": 12, "ms": 2.5}]}
