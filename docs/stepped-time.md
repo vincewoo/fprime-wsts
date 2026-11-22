@@ -366,8 +366,12 @@ costs nothing and is still listed; a wait reached through a function of another 
 or through a variable that holds a function, is not seen. Whether a sleep is in a handler
 or in a task of its own is not known either: the report gives the consequence for each.
 
-Not built, of what the design listed: the slowest ticks in host time in the run summary
-([decision 4](#what-to-decide)).
+The slowest ticks in host time ([decision 4](#what-to-decide)) were built later:
+`Control` times each tick in stepped time from `onTick()` until `finishTick()` finds its
+work finished, and keeps the count, the mean, the five slowest and how many took longer
+than the tick period (`over_period`). The bridge answers them to `tick_times`, and the run
+summary has them as `tick_times` (each element's, in a system). They are never given to
+flight software or written to telemetry, so two runs still record the same bytes.
 
 **Found while building it: three races of phase 2**, where the host's timing still
 decided something. CI failed `test_two_runs_in_stepped_time_are_the_same_byte_for_byte`
@@ -448,8 +452,14 @@ What it is **not**:
   finish, a queue that overflows in flight because a consumer is slow may not overflow
   here. This is the price of removing overlap, and belongs in the fidelity page.
 - **Maintenance.** `Wsts_Os_Queue` wraps the generic queue rather than copying it, so it
-  follows the framework; the task and time implementations are small. All three need the
-  framework's own OS conformance tests run against them.
+  follows the framework; the task and time implementations are small. The framework's own
+  OS conformance tests (`Os/test/ut/queue`, `task`, `rawtime`, `file` and `directory`) are
+  built against the toolkit's implementations in `Wsts/Os` and run in CI, so a new
+  framework release that they do not follow fails there. They run in real time only:
+  stepped time changes what those tests assert (time stands still within a tick, tasks
+  run one at a time), and its own behaviour is covered by the toolkit's tests beside them.
+  The `filesystem` suite is not run: its working-directory rule expects the host's paths,
+  which a sandbox at the root cannot give.
 
 ## What to decide
 

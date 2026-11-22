@@ -70,6 +70,41 @@ JsonObj SimStatus::toJson() const {
     return obj;
 }
 
+constexpr std::size_t TickTimes::SLOWEST;
+
+void TickTimes::add(std::uint64_t tick, std::uint64_t ns, std::uint64_t periodNs) {
+    ticks++;
+    totalNs += ns;
+    maxNs = std::max(maxNs, ns);
+    if (periodNs > 0 && ns > periodNs) {
+        overPeriod++;
+    }
+    if (slowest.size() == SLOWEST && ns <= slowest.back().ns) {
+        return;
+    }
+    Slow slow;
+    slow.tick = tick;
+    slow.ns = ns;
+    // After the ones at least as slow: of two equal ticks the earlier stays ahead
+    const auto at = std::find_if(slowest.begin(), slowest.end(), [ns](const Slow& s) { return s.ns < ns; });
+    slowest.insert(at, slow);
+    if (slowest.size() > SLOWEST) {
+        slowest.pop_back();
+    }
+}
+
+void TickTimes::addTo(JsonObj& obj) const {
+    obj.setNum("ticks", static_cast<std::int64_t>(ticks));
+    obj.setReal("mean_us", ticks > 0 ? static_cast<double>(totalNs) / static_cast<double>(ticks) / 1e3 : 0.0);
+    obj.setReal("max_us", static_cast<double>(maxNs) / 1e3);
+    obj.setNum("over_period", static_cast<std::int64_t>(overPeriod));
+    for (std::size_t i = 0; i < slowest.size(); i++) {
+        const std::string prefix = "slowest." + std::to_string(i) + ".";
+        obj.setNum(prefix + "tick", static_cast<std::int64_t>(slowest[i].tick));
+        obj.setReal(prefix + "us", static_cast<double>(slowest[i].ns) / 1e3);
+    }
+}
+
 Control& Control::get() {
     // Never destroyed, as the Bus: tick sources and clocks of the deployment's components report to it until the
     // process is gone
@@ -106,6 +141,11 @@ void Control::reset() {
     m_stepUntil.store(0);
     m_busyTicks.store(0);
     m_lateTicks.store(0);
+    m_tickTimed = false;
+    {
+        std::lock_guard<std::mutex> lock(m_tickTimesMutex);
+        m_tickTimes = TickTimes();
+    }
     m_lastTickTaken.store(false);
     m_startedUp = false;
     m_settled = false;
@@ -145,6 +185,11 @@ void Control::reset() {
 // ----------------------------------------------------------------------
 
 void Control::onTick() {
+    // Stepped time: the tick is timed from here until finishTick() finds its work finished
+    m_tickTimed = m_stepped.load();
+    if (m_tickTimed) {
+        m_tickStarted = Clock::now();
+    }
     // Whatever the last tick caused should be finished by now. In real time nothing waits
     // for that: counted here, it says how far a deployment is from being steppable.
     if (Activity::get().pendingElsewhere() > 0) {
@@ -321,6 +366,11 @@ std::string Control::stuck() {
     return m_stuck;
 }
 
+TickTimes Control::tickTimes() {
+    std::lock_guard<std::mutex> lock(m_tickTimesMutex);
+    return m_tickTimes;
+}
+
 bool Control::awaitTick(std::uint64_t periodUs, Clock::time_point& next, const std::atomic<bool>& quit) {
     if (!m_stepped.load()) {
         // Real time: simulated time advances `rate` times faster than the wall clock
@@ -453,6 +503,13 @@ void Control::finishTick() {
         stuck += (stuck.empty() ? "" : "; ") + m_late;
     }
     m_late.clear();
+    if (m_tickTimed && stuck.empty() && m_stepped.load()) {
+        // A tick that did not finish is reported as stuck, not timed
+        const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - m_tickStarted).count();
+        std::lock_guard<std::mutex> lock(m_tickTimesMutex);
+        m_tickTimes.add(m_tick.load(), static_cast<std::uint64_t>(std::max<std::int64_t>(0, ns)), this->tickPeriodNs());
+    }
+    m_tickTimed = false;
     if (!stuck.empty()) {
         {
             // Before the pause shows: whoever sees it paused finds the reason

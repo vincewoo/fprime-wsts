@@ -704,6 +704,11 @@ class Session:
             status.pop("ok", None)
             if bus:
                 status["bus_traffic"] = bridge.bus_stats()
+            if status.get("stepped"):
+                try:
+                    status["tick_times"] = bridge.tick_times()
+                except BridgeError:
+                    pass  # a deployment built with an older toolkit
             found[name] = status
         return {"run": run.name, "state": run.state(),
                 **({"elements": found} if run.is_system else {"status": next(iter(found.values()))})}
@@ -1073,7 +1078,8 @@ def _tools(session: Session) -> List[Callable]:
     def status(run: Optional[str] = None, element: Optional[str] = None, bus: bool = False) -> dict:
         """Where a run is: tick, simulated seconds, paused, stepped, faults, scenario, recording, links,
         endpoint names. bus=true adds the traffic of each endpoint, with what nothing answered (a missing
-        device model or a wrong address)."""
+        device model or a wrong address). In stepped time, tick_times: the slowest ticks in host time and
+        over_period, how many took longer than the tick period (a hint at what could overrun on the target)."""
         return s.status(run, element, bus)
 
     def pause(run: Optional[str] = None, element: Optional[str] = None) -> dict:

@@ -86,6 +86,13 @@ def test_a_whole_run_in_stepped_time(request, tmp_path):
     assert summary["sim_seconds"] == 300.0, "five minutes of flight time, to the tick"
     assert summary["final_status"]["tick"] == 6000 and summary["final_status"]["busy_ticks"] == 0
     assert summary["speed"] > 10 and wall < 60, f"{summary['speed']} times real time"
+    # How long the ticks took in host time: every tick timed, the slowest first
+    times = summary["tick_times"]
+    assert 5999 <= times["ticks"] <= 6000, "the last tick may still be finishing when the summary is read"
+    assert summary["final_status"]["tick_times"] == times
+    assert 1 <= len(times["slowest"]) <= 5 and times["slowest"][0]["ms"] == times["max_ms"] >= times["mean_ms"]
+    assert [s["ms"] for s in times["slowest"]] == sorted((s["ms"] for s in times["slowest"]), reverse=True)
+    assert all(1 <= s["tick"] <= 6000 for s in times["slowest"])
 
 
 @pytest.mark.parametrize("element, seconds", [("payload", 120), ("cdh", 120)])

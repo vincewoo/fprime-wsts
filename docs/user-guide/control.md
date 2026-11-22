@@ -77,7 +77,11 @@ fprime-wsts run my-mission-sim/wsts/MyDeployment --stepped --duration 600 --json
 ```
 
 runs ten minutes of flight time, to the tick, usually in seconds; the summary has
-`sim_seconds` and `speed`. `time: {mode: stepped}` in the manifest makes it the default,
+`sim_seconds`, `speed` and `tick_times`: the slowest ticks in host time, and how many took
+longer than the tick period. Stepped time removes overruns (a tick waits for the last one
+however long it takes), so these are where to look for a rate group that could overrun on
+the target; the host is not the target, so they are a hint, never a failure
+(`sim.tick_times()` asks a running simulation). `time: {mode: stepped}` in the manifest makes it the default,
 and `sim.set_stepped(True)` switches a running simulation. Paused and stepped, a test
 gets exact control:
 

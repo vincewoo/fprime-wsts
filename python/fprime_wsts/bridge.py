@@ -103,6 +103,25 @@ def bus_traffic(response: dict) -> Dict[str, dict]:
     return traffic
 
 
+def tick_times(response: dict) -> dict:
+    """Nest the flat answer of `tick_times` (`slowest.<i>.tick`, `slowest.<i>.us`) as
+    {"ticks", "mean_ms", "max_ms", "over_period", "slowest": [{"tick", "ms"}, ...]}, the
+    slowest tick first"""
+    slowest = []
+    i = 0
+    while f"slowest.{i}.tick" in response:
+        slowest.append({"tick": int(response[f"slowest.{i}.tick"]),
+                        "ms": round(float(response[f"slowest.{i}.us"]) / 1e3, 3)})
+        i += 1
+    return {
+        "ticks": int(response.get("ticks", 0)),
+        "mean_ms": round(float(response.get("mean_us", 0.0)) / 1e3, 3),
+        "max_ms": round(float(response.get("max_us", 0.0)) / 1e3, 3),
+        "over_period": int(response.get("over_period", 0)),
+        "slowest": slowest,
+    }
+
+
 def links_expected_up(description: dict) -> Dict[str, int]:
     """The link ends of each element that have a connection and so can come up. A datagram
     link has none: it is started, and counted in `links`, but has nothing to wait for."""
@@ -334,6 +353,14 @@ class WstsBridge:
         address, nothing at the register offset); "addresses" are I2C addresses or register
         offsets."""
         return bus_traffic(self.request("bus_stats"))
+
+    def tick_times(self) -> dict:
+        """Stepped time: how long the ticks took in host time, from the start of a tick until
+        its work was finished: {"ticks" (ticks timed), "mean_ms", "max_ms", "over_period"
+        (ticks that took longer than the tick period: on the target they would have overrun),
+        "slowest": [{"tick", "ms"}, ...]} with the five slowest, slowest first. Ticks taken in
+        real time, and one that did not finish, are not timed. A hint, never a failure."""
+        return tick_times(self.request("tick_times"))
 
     # ---- Run control ----
 

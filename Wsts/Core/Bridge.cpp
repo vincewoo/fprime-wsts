@@ -255,6 +255,9 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
                     response.setNum(key + "unanswered", static_cast<std::int64_t>(at.second.unanswered));
                 }
             }
+        } else if (op == "tick_times") {
+            // Stepped time: how long ticks took in host time (fprime_wsts.bridge.tick_times nests it)
+            Control::get().tickTimes().addTo(response);
         } else if (op == "subscribe") {
             m_subscribed.store(true);
         } else if (op == "attach") {

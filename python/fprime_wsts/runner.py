@@ -180,11 +180,32 @@ def explain_assert(directory: Path, log: str, report: Optional[dict] = None) -> 
 
 def with_traffic(bridge, status: dict) -> dict:
     """The final status with the bus traffic of each endpoint (`bus_traffic`), when the
-    deployment answers `bus_stats` (one built with an older toolkit does not)"""
+    deployment answers `bus_stats` (one built with an older toolkit does not), and in stepped
+    time how long its ticks took in host time (`tick_times`)"""
     try:
-        return {**status, "bus_traffic": bridge.bus_stats()}
+        status = {**status, "bus_traffic": bridge.bus_stats()}
     except Exception:
-        return status
+        pass
+    if status.get("stepped"):
+        try:
+            status = {**status, "tick_times": bridge.tick_times()}
+        except Exception:
+            pass
+    return status
+
+
+def describe_tick_times(times: Optional[dict], period_ns: int = 0) -> Optional[str]:
+    """One line on the slowest ticks of a stepped run, for the text summary; None when none
+    were timed"""
+    if not times or not times.get("ticks"):
+        return None
+    slowest = ", ".join(f"tick {s['tick']} {s['ms']} ms" for s in times.get("slowest", []))
+    line = f"slowest ticks in host time: {slowest} (mean {times['mean_ms']} ms over {times['ticks']} ticks)"
+    if times.get("over_period"):
+        period = f" of {period_ns / 1e6:g} ms" if period_ns else ""
+        line += (f"; {times['over_period']} took longer than the tick period{period} and could overrun on the "
+                 "target (a hint: the host is not the target)")
+    return line
 
 
 def _wait_for_port(port: int, timeout: float, process: Optional[subprocess.Popen] = None) -> bool:
@@ -1251,6 +1272,10 @@ def _run_system_cli(args) -> int:
               + ", ".join(f"{name} {code}" for name, code in codes.items())
               + (f"; {timing['sim_seconds']} s simulated in lockstep, {timing['speed']} times real time"
                  if timing and timing.get("speed") else ""))
+        for name, status in statuses.items():
+            line = describe_tick_times(status.get("tick_times"), int(status.get("tick_period_ns", 0) or 0))
+            if line:
+                print(f"{name}: {line}")
         if system.record_merged and system.merged_lines is not None:
             print(f"merged recording: {system.merged_lines} lines of {len(system.records)} element(s) in "
                   f"{system.record_merged}")
@@ -1412,7 +1437,8 @@ def _run_cli(args) -> int:
     if is_stepped:
         simulated = round(float(status.get("sim_seconds", 0.0)), 3)
         timing = {"stepped": True, "sim_seconds": simulated, "speed": round(simulated / wall, 1) if wall > 0 else None,
-                  **({"stuck": stuck} if stuck else {})}
+                  **({"stuck": stuck} if stuck else {}),
+                  **({"tick_times": status["tick_times"]} if status.get("tick_times") else {})}
     summary = {
         "deployment": simulation.binary.name,
         "exit_code": code,
@@ -1432,6 +1458,9 @@ def _run_cli(args) -> int:
     else:
         print(f"simulation stopped after {summary['seconds']} s, exit code {code}"
               + (f"; {timing['sim_seconds']} s simulated, {timing['speed']} times real time" if timing else ""))
+        line = describe_tick_times(timing.get("tick_times"), int(status.get("tick_period_ns", 0) or 0))
+        if line:
+            print(line)
     if stuck:
         print(f"stepped time: a tick did not finish, and the simulation paused. Work outstanding: {stuck}. A component "
               "that waits on the host (sleeps, polls, blocks in a handler) cannot be stepped: give it a surrogate, or "
