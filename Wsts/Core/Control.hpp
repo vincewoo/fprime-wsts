@@ -313,6 +313,11 @@ class Control : public BusObserver {
     bool scenarioStart(std::string& error);
     void scenarioStop(bool completed);
     void scenarioRun();
+    //! Stepped time: whether the scenario has steps due before the next tick is taken
+    bool scenarioDue();
+    //! Stepped time: apply the scenario's actions that are due before the next tick, between
+    //! two ticks as an action from outside is (the caller holds an ActionGate)
+    void scenarioBetween();
     void notifyListeners(bool paused);
     void grantClocks();
     bool waitFinished(Clock::time_point limit);
@@ -378,6 +383,10 @@ class Control : public BusObserver {
     std::vector<Step> m_steps;
     std::atomic<ScenarioState> m_scenarioState{ScenarioState::IDLE};
     ReplayMode m_scenarioMode = ReplayMode::STIMULUS;
+    //! Stepped time: recorded device answers due at the start of the next tick (responses
+    //! mode), collected between ticks with the actions (tick thread only)
+    std::vector<JsonObj> m_dueRecords;
+    bool m_scenarioFinishing = false;  //!< ... and the last of them ends the scenario (tick thread only)
     std::uint64_t m_scenarioStartTick = 0;
     std::atomic<std::uint32_t> m_scenarioNext{0};
     std::atomic<std::uint32_t> m_scenarioSize{0};

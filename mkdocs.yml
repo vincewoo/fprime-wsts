@@ -136,6 +136,7 @@ nav:
       - Design: design.md
       - Fidelity: fidelity.md
       - Stepped Time (draft): stepped-time.md
+      - Snapshots (draft): snapshots.md
       - Systems: systems.md
       - Surrogates and Device Models: surrogate-guide.md
       - Converting Other Targets: vxworks-conversion.md

@@ -154,6 +154,12 @@ exactly when the fault was felt.
 Its telemetry, once a second, includes `SimTicks`, `SimRunState`, `SimTimeScale`,
 `ActiveFaults`, `FaultHits`, `BusTransactions`, `BusBytes` and `BusErrors`.
 
+In stepped time the ground does not see how the run is driven: `SimPaused`, `SimResumed`,
+`SimRateSet` and the scenario and recording events are not posted to flight software, and
+`SimRunState`, `SimTimeScale` and the scenario and recording channels are not written
+([reference](../reference.md#wstssimcontrol)). `status` and the bridge's events still have
+them. That keeps a replay identical to the run it replays.
+
 !!! note "Command string length"
 
     Command string arguments are limited by `FW_CMD_STRING_MAX_SIZE` (40 characters by

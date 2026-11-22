@@ -67,14 +67,20 @@ void SimControl::tickNotify_internalInterfaceHandler() {
 void SimControl::publishTelemetry() {
     const SimStatus status = Control::get().status();
     this->tlmWrite_SimTicks(status.tick);
-    this->tlmWrite_SimRunState(status.paused ? SimRunState::PAUSED : SimRunState::RUNNING);
-    this->tlmWrite_SimTimeScale(static_cast<F32>(status.rate));
     this->tlmWrite_ActiveFaults(status.activeFaults);
     this->tlmWrite_FaultHits(static_cast<U32>(status.counters.faultHits));
-    this->tlmWrite_ScenarioRunState(static_cast<SimScenarioState::T>(status.scenarioState));
-    this->tlmWrite_ScenarioStep(status.scenarioStep);
-    this->tlmWrite_ScenarioSteps(status.scenarioSteps);
-    this->tlmWrite_Recording(status.recording);
+    if (!status.stepped) {
+        // How the run is driven, not what it simulates: pausing, stepping and a pace change
+        // nothing for flight software in stepped time, and a replay of a recording runs a
+        // scenario where the recorded run did not. In stepped time these stay out of flight
+        // software, so that a replay gives it the same bytes (docs/snapshots.md)
+        this->tlmWrite_SimRunState(status.paused ? SimRunState::PAUSED : SimRunState::RUNNING);
+        this->tlmWrite_SimTimeScale(static_cast<F32>(status.rate));
+        this->tlmWrite_ScenarioRunState(static_cast<SimScenarioState::T>(status.scenarioState));
+        this->tlmWrite_ScenarioStep(status.scenarioStep);
+        this->tlmWrite_ScenarioSteps(status.scenarioSteps);
+        this->tlmWrite_Recording(status.recording);
+    }
     this->tlmWrite_BusTransactions(static_cast<U32>(status.counters.transactions));
     this->tlmWrite_BusBytes(static_cast<U32>(status.counters.bytes));
     this->tlmWrite_BusErrors(static_cast<U32>(status.counters.errors));
@@ -82,11 +88,40 @@ void SimControl::publishTelemetry() {
     Control::get().publishTelemetrySources();
 }
 
+namespace {
+
+//! Events about how a run is driven (pause, resume, step and pace; its scenario and its
+//! recording), which a replay does differently from the run it replays, and which change
+//! nothing for flight software in stepped time. There they stay out of flight software,
+//! whose event counters and downlink would otherwise differ (docs/snapshots.md)
+bool drivenNotSimulated(SimEvent::Code code) {
+    switch (code) {
+        case SimEvent::PAUSED:
+        case SimEvent::RESUMED:
+        case SimEvent::RATE_SET:
+        case SimEvent::SCENARIO_LOADED:
+        case SimEvent::SCENARIO_STARTED:
+        case SimEvent::SCENARIO_COMPLETED:
+        case SimEvent::SCENARIO_STOPPED:
+        case SimEvent::SCENARIO_ERROR:
+        case SimEvent::RECORD_STARTED:
+        case SimEvent::RECORD_STOPPED:
+            return true;
+        default:
+            return false;
+    }
+}
+
+}  // namespace
+
 void SimControl::drainEvents() {
     SimEvent event;
     while (Control::get().popEvent(event)) {
         const Fw::String endpoint(event.endpoint.c_str());
         const Fw::String text(event.text.c_str());
+        if (Control::get().stepped() && drivenNotSimulated(event.code)) {
+            continue;  // in the simulation's log and to bridge clients, not to flight software
+        }
         switch (event.code) {
             case SimEvent::PAUSED:
                 this->log_ACTIVITY_HI_SimPaused(event.a);

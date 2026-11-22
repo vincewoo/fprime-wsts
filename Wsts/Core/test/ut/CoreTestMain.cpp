@@ -562,6 +562,55 @@ TEST_F(CoreTest, SteppedTimeTimesItsTicksInHostTime) {
     control.setStepped(false);
 }
 
+TEST_F(CoreTest, InSteppedTimeAReplayAppliesRecordedActionsBetweenTheSameTicks) {
+    Control& control = Control::get();
+    // The tick at which flight software receives what a probe endpoint is given
+    std::vector<std::uint64_t> received_at;
+    Bus::get().bindByteStream("probe", [&received_at](const Bytes&) { received_at.push_back(Control::get().tick()); });
+    const std::string path = tempFile("between.jsonl");
+    ASSERT_TRUE(run(R"({"op": "pause"})"));
+    ASSERT_TRUE(run(R"({"op": "set_stepped", "stepped": true})"));
+    ASSERT_TRUE(run(R"({"op": "record_start", "path": ")" + path + R"("})"));
+    Ticker ticker(1000);
+    // A client between steps, as a test drives a paused simulation
+    ASSERT_TRUE(run(R"({"op": "step", "ticks": 5})"));
+    ASSERT_TRUE(eventually([&control]() { return control.paused() && control.tick() == 5; }));
+    ASSERT_TRUE(run(R"({"op": "inject_bytes", "endpoint": "probe", "text": "x"})"));
+    ASSERT_TRUE(run(R"({"op": "step", "ticks": 3})"));
+    ASSERT_TRUE(eventually([&control]() { return control.paused() && control.tick() == 8; }));
+    ASSERT_TRUE(run(R"({"op": "record_stop"})"));
+    ASSERT_EQ(received_at, (std::vector<std::uint64_t>{5})) << "between the fifth tick and the sixth";
+
+    // Recorded at the tick each takes effect in: the one after the last tick taken
+    std::ifstream file(path);
+    std::vector<std::pair<std::string, std::int64_t>> actions;
+    std::string line;
+    while (std::getline(file, line)) {
+        JsonObj obj;
+        std::string error;
+        ASSERT_TRUE(obj.parse(line, error)) << line;
+        if (obj.has("op")) {
+            actions.emplace_back(obj.str("op"), obj.num("tick"));
+        }
+    }
+    const std::vector<std::pair<std::string, std::int64_t>> expected = {
+        {"step", 1}, {"inject_bytes", 6}, {"step", 6}};
+    EXPECT_EQ(actions, expected);
+
+    // Replayed from where the run is (paused, at tick 8): the same steps and the bytes at
+    // the same place between two ticks, five ticks into the replay
+    ASSERT_TRUE(run(R"({"op": "scenario_load", "path": ")" + path + R"(", "mode": "stimulus"})"));
+    ASSERT_TRUE(run(R"({"op": "scenario_start"})"));
+    ASSERT_TRUE(eventually([&control]() { return control.paused() && control.tick() == 16; }))
+        << "a paused replay takes its first step itself; tick " << control.tick();
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    EXPECT_EQ(control.tick(), 16u) << "and pauses where the run it replays did";
+    EXPECT_EQ(received_at, (std::vector<std::uint64_t>{5, 13}));
+    EXPECT_EQ(control.status().scenarioState, Wsts::ScenarioState::COMPLETED);
+    control.setStepped(false);
+    std::remove(path.c_str());
+}
+
 TEST_F(CoreTest, ALimitPacesSteppedTime) {
     Control& control = Control::get();
     control.setStepped(true);
@@ -1029,12 +1078,14 @@ TEST_F(CoreTest, RecordingReplaysAsStimulusAndAsResponses) {
     ASSERT_TRUE(run(R"({"op": "record_stop"})"));
     received.clear();
 
-    // Stimulus replay: the injection happens again, at the same relative tick
+    // Stimulus replay: the injection happens again, at the tick it took effect in. It came
+    // after the second tick, so it is recorded at the third, the first that began after it
     ASSERT_TRUE(run(R"({"op": "scenario_load", "path": ")" + path + R"(", "mode": "stimulus"})"));
     EXPECT_EQ(Control::get().status().scenarioSteps, 1u);
     ASSERT_TRUE(run(R"({"op": "scenario_start"})"));
     Control::get().onTick();
-    EXPECT_TRUE(received.empty());
+    Control::get().onTick();
+    EXPECT_TRUE(received.empty()) << "not earlier than it happened";
     Control::get().onTick();
     ASSERT_EQ(received.size(), 1u);
     EXPECT_EQ(received[0], text("stim"));
@@ -1426,6 +1477,7 @@ TEST_F(RegisterTest, RecordingHoldsRegisterTrafficAndReplaysIt) {
     EXPECT_EQ(lines[5].str("rec"), "reg_irq");
     EXPECT_EQ(lines[5].str("src"), "inject");
     EXPECT_EQ(lines[6].str("op"), "irq_raise");
+    EXPECT_EQ(lines[6].num("tick"), 4) << "raised after the third tick: it takes effect in the fourth";
 
     // Stimulus replay: the injected interrupt happens again, the model's own does not
     interrupts.clear();
@@ -1435,6 +1487,8 @@ TEST_F(RegisterTest, RecordingHoldsRegisterTrafficAndReplaysIt) {
     for (int i = 0; i < 3; i++) {
         Control::get().onTick();
     }
+    EXPECT_EQ(interruptCount(), 0u);
+    Control::get().onTick();
     ASSERT_EQ(interruptCount(), 1u);
     EXPECT_EQ(interrupts[0], 9u);
 
@@ -1457,7 +1511,7 @@ TEST_F(RegisterTest, RecordingHoldsRegisterTrafficAndReplaysIt) {
     EXPECT_EQ(status, Wsts::RegisterStatus::OTHER_ERR);
     EXPECT_EQ(read32(0x14, &status), 0xFFFFFFFFu);
     EXPECT_EQ(status, Wsts::RegisterStatus::OTHER_ERR);
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {  // the injected interrupt is in the fourth tick
         Control::get().onTick();
     }
     ASSERT_EQ(interruptCount(), 2u) << "the model's interrupt from the recording, and the injected one";

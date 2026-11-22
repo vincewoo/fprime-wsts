@@ -145,6 +145,14 @@ version, unset `JAVA_HOME` so the bundled JRE is used.
   epoch); in lockstep `LinkByteStream` holds them and `Control::onTick` delivers those sent
   before the tick's time (`Inbound::deliverDue`). Anything new that carries bytes between
   elements must do the same, or two runs differ. `tests/e2e/test_lockstep.py` holds it.
+- Exact replay (`docs/snapshots.md`, phase 1): an action is recorded at the tick it takes
+  effect in (from outside: `m_tick + 1`; from a scenario inside a tick: `m_tick`), and in
+  stepped time a scenario applies its actions between ticks (`Control::scenarioBetween`,
+  under an `ActionGate` from the tick thread), as a client's were. In stepped time what only
+  says how a run is driven (pause, resume, step, pace, scenarios, recordings) stays out of
+  flight software (`drivenNotSimulated` and the real-time-only channels of `SimControl`):
+  a replay is driven differently. Anything new that tells flight software how a run is
+  driven must do the same, or a replay differs from what it replays.
 - VxWorks API shim (`Wsts/VxWorks`, `shims: [vxworks]`): `OK`, `ERROR`, `NO_WAIT` are
   enumerators, not macros, as `fprime-vxworks` makes them (F´ headers use the names). Its
   headers are found only when the manifest names the shim: the header index of `generate`

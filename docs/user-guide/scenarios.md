@@ -88,4 +88,6 @@ separately for each offset. When they run out, a read fails.
     should assert on outcomes (an event occurred, a channel reached a value) rather than
     exact interleavings. In [stepped time](control.md#stepped-time-experimental) two runs
     record the same bytes, unless the report's Time section lists code that waits on the
-    host.
+    host, and so does a replay of a recording: what a client did between two steps is
+    recorded at the tick it took effect in, and the replay applies it between the same two
+    ticks.
