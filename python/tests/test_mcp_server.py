@@ -315,3 +315,12 @@ def test_status_in_stepped_time_has_the_slowest_ticks(tmp_path, session):
     make_deployment(tmp_path / "dep", f"tcp:{sim.port}")
     times = session.status("dep")["status"]["tick_times"]
     assert times == {"ticks": 40, "mean_ms": 0.5, "max_ms": 2.5, "over_period": 1, "slowest": [{"tick": 12, "ms": 2.5}]}
+
+
+def test_the_server_refuses_mcp_2_with_the_reason():
+    from fprime_wsts.mcp_server import check_mcp_version
+
+    for supported in ("1.2.0", "1.30.0", None):
+        check_mcp_version(supported)
+    with pytest.raises(WstsError, match=r"needs mcp 1\.x, and mcp 2\.3\.0 is installed: 2\.0 renamed FastMCP.*<2"):
+        check_mcp_version("2.3.0")

@@ -10,8 +10,11 @@ requires-python = ">=3.9"
 dependencies = ["pyyaml"]
 
 [project.optional-dependencies]
-# `fprime-wsts mcp`, the server agents drive simulations with (Python 3.10 or later)
-mcp = ["mcp>=1.2"]
+# `fprime-wsts mcp`, the server agents drive simulations with (Python 3.10 or later).
+# Not mcp 2.x yet: the server is built on FastMCP, which 2.0 renamed MCPServer (with other
+# API changes), and 2.x needs idna>=3.18 (through httpx2) where F Prime pins idna==3.15.
+# docs/user-guide/agents.md, "The MCP server"
+mcp = ["mcp>=1.2,<2"]
 
 [project.scripts]
 fprime-wsts = "fprime_wsts.cli:main"

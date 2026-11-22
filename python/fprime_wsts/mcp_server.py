@@ -1244,13 +1244,32 @@ def create_server(session: Session):
     return server
 
 
+def _mcp_version() -> Optional[str]:
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("mcp")
+    except PackageNotFoundError:
+        return None
+
+
+def check_mcp_version(installed: Optional[str]) -> None:
+    """The server is written for mcp 1.x: 2.0 renamed FastMCP to MCPServer and changed other
+    APIs (docs/user-guide/agents.md, "The MCP server")"""
+    if installed and installed.split(".")[0].isdigit() and int(installed.split(".")[0]) >= 2:
+        raise WstsError(f"the MCP server needs mcp 1.x, and mcp {installed} is installed: 2.0 renamed FastMCP, which "
+                        "the server is built on, and changed other APIs. pip install 'mcp>=1.2,<2', or "
+                        "pip install -e './python[mcp]', which pins it")
+
+
 def serve(cwd: Optional[Path] = None) -> int:
     """Run the server on stdio until the client goes away"""
     try:
         import mcp  # noqa: F401
     except ImportError:
-        raise WstsError("the MCP server needs the mcp package: pip install 'mcp>=1.2' (Python 3.10 or later), "
+        raise WstsError("the MCP server needs the mcp package: pip install 'mcp>=1.2,<2' (Python 3.10 or later), "
                         "or pip install -e './python[mcp]'") from None
+    check_mcp_version(_mcp_version())
     import logging
 
     session = Session(cwd)
