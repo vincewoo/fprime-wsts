@@ -57,6 +57,21 @@ fprime-wsts --help
     unset JAVA_HOME
     ```
 
+## Or open it in a dev container
+
+The repository has a [dev container](https://containers.dev) (`.devcontainer/`): Ubuntu
+24.04, as CI runs on, with the compiler and the 32-bit runtime (for `cmake.bits: 32`). It
+can be opened in VS Code (*Dev Containers: Reopen in Container*), in GitHub Codespaces or
+with the `devcontainer` CLI. When it is created, `.devcontainer/post-create.sh` fetches
+the submodules (and googletest, for the C++ unit tests) and installs the toolkit and the F´
+tools into `/opt/venv`, which is first on `PATH`. Nothing else is needed: `fprime-wsts`,
+`fprime-util`, `pytest` and the [MCP server](../user-guide/agents.md#the-mcp-server) of
+`.mcp.json` work from the first terminal. Port 5000, the GDS's browser GUI
+(`fprime-wsts run --gds-gui`), is forwarded.
+
+The container holds the toolkit only. To simulate your own flight project, clone it inside
+the container or add a mount for it (`mounts` in `devcontainer.json`), in the layout below.
+
 ## Where your projects go
 
 `fprime-wsts` reads a flight project and writes a simulation next to it. The layout that

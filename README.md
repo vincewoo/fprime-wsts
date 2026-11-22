@@ -168,6 +168,10 @@ python3 -m venv venv && . venv/bin/activate
 pip install -r lib/fprime/requirements.txt -e ./python
 ```
 
+Or open the repository in its dev container (`.devcontainer/`, for VS Code or Codespaces),
+which does all of this when it is created
+([Installation](docs/getting-started/installation.md#or-open-it-in-a-dev-container)).
+
 The repository has one example, which uses every part of the toolkit
 ([examples/README.md](examples/README.md) maps each feature to where it is). It is the
 flight software of a spacecraft with two computers joined by an F´ `GenericHub`:

@@ -72,6 +72,20 @@ Install it once, in the environment that has the toolkit (Python 3.10 or later):
 pip install -e './python[mcp]'
 ```
 
+This installs `mcp` 1.x (`mcp>=1.2,<2`). The server does not run on `mcp` 2.x yet, for two
+reasons:
+
+- It is written against the 1.x API. `mcp` 2.0 renamed `FastMCP`, which the server is built
+  on, to `MCPServer`, and changed other APIs
+  ([migration guide](https://py.sdk.modelcontextprotocol.io/v2/migration/)). With 2.x
+  installed, `fprime-wsts mcp` stops with an error that says so.
+- `mcp` 2.x needs `httpx2`, which requires `idna>=3.18`, and F´'s
+  `lib/fprime/requirements.txt` pins `idna==3.15`: the two cannot be installed together
+  at the versions F´ pins, so pip would settle on a 1.x anyway.
+
+Moving to 2.x means porting the server to `MCPServer` and waiting for an F´ release whose
+pins allow `idna>=3.18`.
+
 The repository's `.mcp.json` registers it for Claude Code started in the checkout, which
 asks once whether to use it. Elsewhere, for example in a simulation project:
 
