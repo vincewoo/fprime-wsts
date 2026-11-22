@@ -1,0 +1,20 @@
+{
+  "name": "fprime-wsts",
+  "build": { "dockerfile": "Dockerfile" },
+  "remoteUser": "vscode",
+  "containerEnv": {
+    "PATH": "/opt/venv/bin:${containerEnv:PATH}",
+    "VIRTUAL_ENV": "/opt/venv"
+  },
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+  "forwardPorts": [5000],
+  "portsAttributes": { "5000": { "label": "F Prime GDS (fprime-wsts run --gds-gui)" } },
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python", "ms-vscode.cmake-tools", "redhat.vscode-yaml"],
+      "settings": {
+        "python.defaultInterpreterPath": "/opt/venv/bin/python"
+      }
+    }
+  }
+}
