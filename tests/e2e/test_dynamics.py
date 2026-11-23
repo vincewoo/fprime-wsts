@@ -6,6 +6,7 @@ over-temperature switch read it; HeaterControl turns the heater off when the swi
 The first test closes the loop on the session's system, with a ground command. The others
 start runs of their own, without a GDS, and compare their recordings."""
 
+import json
 import shutil
 import time
 from pathlib import Path
@@ -46,8 +47,8 @@ def test_the_heater_loop_closes_through_flight_software_and_the_plant(gds, coupl
             break
     assert payload.gpio_get("heaterPin"), "flight software turned the heater on"
     heated_at = coupled.time()
-    for _ in range(300):  # 2 K/s from 21.5 C: the switch closes at 45 C, some 12 s later
-        coupled.step(seconds=0.1)
+    for _ in range(400):  # 2 K/s from 21.5 C: the switch closes at 45 C, some 12 s later
+        coupled.step(instants=1)  # one at a time: the last exchange is the one that closed the switch
         if not payload.gpio_get("heaterPin"):
             break
     tripped_at = coupled.time()
@@ -149,3 +150,77 @@ def test_two_coupled_runs_and_the_fmu_record_the_same_bytes(runs):
         assert reference, element
         assert (second / f"{element}.jsonl").read_bytes() == reference, f"{element}: two runs of the Python plant"
         assert (fmu / f"{element}.jsonl").read_bytes() == reference, f"{element}: the FMU computes the same bits"
+
+
+def test_a_restored_run_goes_on_coupled_as_if_it_had_not_stopped(request, runs, tmp_path):
+    """Phase 3: a journaled run with the plant, snapshotted at 10 s, restored (the plant
+    re-driven along its trace, compared exchange by exchange) and run on to 30 s, is the run
+    that never stopped: the same bus records on both elements, the same trace, the same plant.
+    The switch opens again at about 21.6 s, after the restore: the threshold's state came back."""
+    from fprime_wsts import snapshots
+
+    spec = hot_start("python", PLANTS / "thermal.py")
+    system_dir = Path(request.config.getoption("--wsts-system"))
+    first = SystemSimulation(system_dir, auto_ports=True, stepped=True, journal=True, log_dir=tmp_path / "first")
+    first.start()
+    try:
+        with Conductor(first.description, dynamics=[spec]) as conductor:
+            conductor.wait_ready(20.0, alive=lambda: not first.exited())
+            conductor.run(until_ns=10_000_000_000)
+            snap = snapshots.take(first.log_dir, tmp_path / "at-10s")
+    finally:
+        first.stop()
+    assert snap.meta["plants"] == ["thermal"]
+    assert json.loads((snap.path / "dynamics-thermal.jsonl").read_text().splitlines()[-1])["t"] == 10.0
+
+    restored = SystemSimulation(snap.directory, auto_ports=True, restore=snap, log_dir=tmp_path / "restored")
+    restored.start()
+    try:
+        with Conductor(restored.description, dynamics=[spec]) as conductor:
+            conductor.wait_ready(20.0, alive=lambda: not restored.exited())
+            restored.complete_restore(conductor, keep_going=lambda: not restored.exited())
+            assert conductor.dynamics("thermal")["time"] == 10.0
+            conductor.run(until_ns=30_000_000_000)
+            state = conductor.dynamics("thermal")
+    finally:
+        restored.stop()
+
+    reference, reference_state, _ = runs["python-1"]
+    assert state == reference_state
+    assert (tmp_path / "restored" / "dynamics-thermal.jsonl").read_text() == \
+        (reference / "logs" / "dynamics-thermal.jsonl").read_text()
+    for element in ("payload", "cdh"):
+        assert snapshots.bus_records(tmp_path / "restored" / element / "journal.jsonl") == \
+            snapshots.bus_records(reference / f"{element}.jsonl"), element
+
+
+def test_a_plant_that_differs_from_the_snapshot_fails_its_restore(request, tmp_path):
+    """The same snapshot, restored with the plant changed (a heater twice as strong does not
+    matter while it is off; a panel that cools faster does): the first exchange that differs
+    stops the restore, and says where"""
+    from fprime_wsts import snapshots
+    from fprime_wsts.dynamics import PlantMismatch
+
+    spec = hot_start("python", PLANTS / "thermal.py")
+    system_dir = Path(request.config.getoption("--wsts-system"))
+    first = SystemSimulation(system_dir, auto_ports=True, stepped=True, journal=True, log_dir=tmp_path / "first")
+    first.start()
+    try:
+        with Conductor(first.description, dynamics=[spec]) as conductor:
+            conductor.wait_ready(20.0, alive=lambda: not first.exited())
+            conductor.run(until_ns=2_000_000_000)
+            snap = snapshots.take(first.log_dir, tmp_path / "at-2s")
+    finally:
+        first.stop()
+    changed = json.loads(json.dumps(spec))
+    changed["params"]["G"] = 0.2
+    restored = SystemSimulation(snap.directory, auto_ports=True, restore=snap, log_dir=tmp_path / "restored")
+    restored.start()
+    try:
+        with Conductor(restored.description, dynamics=[changed]) as conductor:
+            conductor.wait_ready(20.0, alive=lambda: not restored.exited())
+            with pytest.raises(PlantMismatch, match="exchange 0") as raised:
+                restored.complete_restore(conductor, keep_going=lambda: not restored.exited())
+    finally:
+        restored.stop()
+    assert raised.value.expected["out"]["T"] > raised.value.found["out"]["T"], "it cooled faster"

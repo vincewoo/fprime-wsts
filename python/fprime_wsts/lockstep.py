@@ -171,6 +171,25 @@ class Conductor:
         finally:
             self.system.close()
 
+    def shadow_plants(self, traces: Dict[str, List[dict]]) -> None:
+        """A restore (docs/dynamics.md, phase 3): re-drive each plant along its trace in the
+        snapshot while `advance_to` replays the journal, comparing instead of writing. Every
+        plant of this conductor must have one."""
+        from .dynamics import DynamicsError
+
+        for coupling in self.couplings:
+            if coupling.name not in traces:
+                raise DynamicsError(f"the snapshot holds no trace of plant '{coupling.name}': it was taken of a run "
+                                    "without it. Restore it without plants (dynamics=False), or take the snapshot "
+                                    "again with the plant")
+            coupling.shadow(traces[coupling.name])
+
+    def end_shadow(self) -> None:
+        """The restore is at the snapshot: each plant must have taken every exchange of its
+        trace again. From here the plants are coupled as usual, from where the restore left them."""
+        for coupling in self.couplings:
+            coupling.end_shadow()
+
     def dynamics(self, name: Optional[str] = None) -> dict:
         """What the plants were last given and gave (`time`, `inputs`, `outputs`), by name; or
         one plant's"""
@@ -270,11 +289,15 @@ class Conductor:
             return
         from .dynamics import DynamicsError
 
+        from .dynamics import PlantMismatch
+
         touched = set()
         for coupling in self.couplings:
             if coupling.due(self.time_ns, at):
                 try:
                     touched |= coupling.exchange(self.time_ns, at)
+                except PlantMismatch:
+                    raise  # a restore that differs: said as it is
                 except DynamicsError as error:
                     raise LockstepError(f"at {at / 1e9:g} s of simulated time: {error}") from None
         if touched:
@@ -298,6 +321,8 @@ class Conductor:
             upcoming = {name: (int(self.state[name]["tick"]) + 1) * int(self.state[name]["tick_period_ns"])
                         for name in behind}
             at = min(upcoming.values())
+            if any(coupling.shadowing for coupling in self.couplings):
+                self._couple(at)  # plants re-driven along the snapshot's traces (shadow_plants)
             self._grant(at, [name for name in behind if upcoming[name] == at])
 
     def _grant(self, at: int, due: List[str]) -> int:

@@ -60,6 +60,23 @@ class DynamicsError(WstsError):
     """A plant cannot be set up, or failed during an exchange"""
 
 
+class PlantMismatch(DynamicsError):
+    """A plant re-driven during a restore did not do what it did in the run that was
+    snapshotted: `index` is the exchange (from 0), `expected` and `found` the two lines of its
+    trace (None where one of them has none)"""
+
+    def __init__(self, plant: str, index: int, expected: Optional[dict], found: Optional[dict], why: str = ""):
+        self.plant, self.index, self.expected, self.found = plant, index, expected, found
+        line = lambda value: json.dumps(value, separators=(",", ":")) if value is not None else None
+        super().__init__(
+            f"plant '{plant}': the restored run differs from the snapshotted one at exchange {index}"
+            + (f" ({why})" if why else "") + ":\n"
+            f"  snapshot: {line(expected) or '(none: the restore took more exchanges)'}\n"
+            f"  restored: {line(found) or '(none: the restore stopped short)'}\n"
+            "A plant must give the same values for the same inputs: no host clock, no unseeded randomness, "
+            "the same plant file and parameters, and the same machine and build for compiled code")
+
+
 # ---------------------------------------------------------------------------
 # Manifests
 # ---------------------------------------------------------------------------
@@ -416,6 +433,10 @@ class Coupling:
         self.exchanges = 0
         self.actions = 0
         self.state: dict = {"inputs": {}, "outputs": {}, "time": None}
+        # A restore: the trace of the run that was snapshotted, which the plant is re-driven
+        # along (shadow mode: compared, not written, as the journal writes it)
+        self.reference: Optional[List[dict]] = None
+        self.shadowed = 0
         self.trace_path = Path(trace_dir) / f"dynamics-{self.name}.jsonl" if trace_dir else None
         self._trace = None
 
@@ -447,6 +468,31 @@ class Coupling:
     @property
     def started(self) -> bool:
         return self.plant is not None
+
+    # ---- Restores (docs/dynamics.md, phase 3) ----
+
+    def shadow(self, reference: List[dict]) -> None:
+        """Re-drive the plant along the trace of a snapshotted run: until the trace's exchanges
+        are used up, each exchange reads its inputs and steps the plant as usual, compares the
+        line it would trace with the reference, and writes nothing (the restored run's journal
+        gives flight software the plant's values)"""
+        self.reference = list(reference)
+        self.shadowed = 0
+
+    @property
+    def shadowing(self) -> bool:
+        return self.reference is not None
+
+    def end_shadow(self) -> None:
+        """The restore has reached the snapshot: every exchange of the reference must have been
+        taken again. Coupling goes on from here, from the re-driven plant."""
+        if self.reference is None:
+            return
+        left = self.reference[self.shadowed:]
+        self.reference = None
+        if left:
+            raise PlantMismatch(self.name, self.shadowed, left[0], None,
+                                f"{len(left)} exchange(s) of the snapshot not taken again")
 
     def due(self, now_ns: int, at_ns: int) -> bool:
         """Whether the instant at `at_ns` ends a step. A plant without a step of its own
@@ -509,6 +555,17 @@ class Coupling:
             if action != output.last:  # only what changed: every action is a journal line
                 output.last = action
                 batches.setdefault(output.element, []).append({**action, "via": self.name})
+        plain = {name: _plain(value) for name, value in outputs.items()}
+        line = {"t": at_ns / 1e9, "dt": dt, "in": {k: _plain(v) for k, v in inputs.items()}, "out": plain}
+        if self.reference is not None:
+            # Shadow mode: the same exchange as in the snapshotted run, to the bit (a trace line
+            # read back from JSON is the same float), and nothing written
+            found = json.loads(json.dumps(line))
+            expected = self.reference[self.shadowed] if self.shadowed < len(self.reference) else None
+            if found != expected:
+                raise PlantMismatch(self.name, self.shadowed, expected, found)
+            self.shadowed += 1
+            batches = {}
         pending = {element: self.bridges[element].submit("batch", actions="\n".join(
             json.dumps(action, separators=(",", ":")) for action in actions)) for element, actions in batches.items()}
         for element, request in pending.items():
@@ -519,11 +576,9 @@ class Coupling:
             self.actions += len(batches[element])
         self.time_ns = at_ns
         self.exchanges += 1
-        plain = {name: _plain(value) for name, value in outputs.items()}
-        self.state = {"time": at_ns / 1e9, "inputs": {k: _plain(v) for k, v in inputs.items()}, "outputs": plain}
+        self.state = {"time": line["t"], "inputs": line["in"], "outputs": plain}
         if self._trace is not None:
-            self._trace.write(json.dumps({"t": at_ns / 1e9, "dt": dt, "in": self.state["inputs"], "out": plain},
-                                         separators=(",", ":")) + "\n")
+            self._trace.write(json.dumps(line, separators=(",", ":")) + "\n")
             self._trace.flush()
         return set(batches)
 

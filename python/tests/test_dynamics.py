@@ -163,30 +163,32 @@ class PlantElement(FakeElement):
 
     def _serve(self, connection):
         for line in connection.makefile("r"):
-            message = json.loads(line)
-            op = message["op"]
-            response = {"id": message["id"], "ok": True}
-            if op == "gpio_get":
-                self.reads.append((self.tick, op))
-                response["level"] = self.pins[message["endpoint"]]
-            elif op == "model_get":
-                self.reads.append((self.tick, op))
-                response["value"] = self.models[(message["model"], message["key"])]
-            elif op == "reg_get":
-                response["value"] = "0x2a"
-            elif op == "batch":
-                actions = [json.loads(text) for text in message["actions"].split("\n")]
-                self.batches.append((self.tick, actions))
-                for action in actions:
-                    if action["op"] == "model_set":
-                        self.models[(action["model"], action["key"])] = action["value"]
-                response["applied"] = len(actions)
-            elif op in ("status", "advance"):
-                response.update(self.status())
-                if op == "advance":
-                    self.tick += message["ticks"]
-                    response.update(self.status(), done=True)
-            connection.sendall((json.dumps(response) + "\n").encode())
+            connection.sendall((json.dumps(self.respond(json.loads(line))) + "\n").encode())
+
+    def respond(self, message):
+        op = message["op"]
+        response = {"id": message["id"], "ok": True}
+        if op == "gpio_get":
+            self.reads.append((self.tick, op))
+            response["level"] = self.pins[message["endpoint"]]
+        elif op == "model_get":
+            self.reads.append((self.tick, op))
+            response["value"] = self.models[(message["model"], message["key"])]
+        elif op == "reg_get":
+            response["value"] = "0x2a"
+        elif op == "batch":
+            actions = [json.loads(text) for text in message["actions"].split("\n")]
+            self.batches.append((self.tick, actions))
+            for action in actions:
+                if action["op"] == "model_set":
+                    self.models[(action["model"], action["key"])] = action["value"]
+            response["applied"] = len(actions)
+        elif op in ("status", "advance"):
+            response.update(self.status())
+            if op == "advance":
+                self.tick += message["ticks"]
+                response.update(self.status(), done=True)
+        return response
 
 
 PLANT = textwrap.dedent('''
@@ -310,3 +312,89 @@ def test_the_example_plant_trips_the_switch_when_heated():
         t += 0.05
     assert 13.0 < t < 15.0
     assert plant.step(t, 0.05, {"heater": 0.0})["T"] < temperature
+
+
+# ---------------------------------------------------------------------------
+# Restores: plants re-driven along their traces (docs/dynamics.md, phase 3)
+# ---------------------------------------------------------------------------
+
+class TimedHeater(PlantElement):
+    """An element whose flight software turns the heater on at a tick, in every run"""
+
+    def __init__(self, *args, on_at=3, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.on_at = on_at
+
+    def respond(self, message):
+        if message["op"] == "gpio_get":
+            self.pins["heaterPin"] = self.tick >= self.on_at
+        return super().respond(message)
+
+
+def run_and_trace(plant_dir, instants):
+    payload = TimedHeater("payload", 50_000_000)
+    description = {**one_element_system(payload), "directory": str(plant_dir), "log_dir": str(plant_dir / "logs")}
+    with Conductor(description, request_timeout=2, dynamics=spec()) as conductor:
+        conductor.run(instants=instants)
+    trace = [json.loads(line) for line in (plant_dir / "logs" / "dynamics-heated.jsonl").read_text().splitlines()]
+    return payload, trace
+
+
+def test_a_restore_re_drives_the_plant_and_coupling_goes_on_from_there(plant_dir):
+    original, trace = run_and_trace(plant_dir, 9)
+    first = trace[:6]  # a snapshot taken at the sixth instant
+    restored = TimedHeater("payload", 50_000_000)
+    description = {**one_element_system(restored), "directory": str(plant_dir), "log_dir": str(plant_dir / "again")}
+    with Conductor(description, request_timeout=2, dynamics=spec()) as conductor:
+        conductor.shadow_plants({"heated": first})
+        conductor.advance_to({"payload": 6})
+        assert restored.batches == [], "the journal writes what the plant gave; the re-driven plant writes nothing"
+        assert len(restored.reads) == 6, "but it reads its inputs as the original did"
+        conductor.end_shadow()
+        conductor.run(instants=3)
+    # From the snapshot on, it writes what the original wrote, at the same ticks: its outputs
+    # and what it last wrote are where they were
+    assert restored.batches == [batch for batch in original.batches if batch[0] >= 6]
+    again = [json.loads(line) for line in (plant_dir / "again" / "dynamics-heated.jsonl").read_text().splitlines()]
+    assert again == trace, "the restored run's trace is whole, from the start"
+
+
+def test_a_plant_that_differs_from_its_trace_fails_the_restore(plant_dir):
+    _, trace = run_and_trace(plant_dir, 6)
+    trace[4]["out"]["T"] += 1e-12
+    restored = TimedHeater("payload", 50_000_000)
+    with Conductor({**one_element_system(restored), "directory": str(plant_dir)}, request_timeout=2,
+                   dynamics=spec()) as conductor:
+        conductor.shadow_plants({"heated": trace})
+        with pytest.raises(dynamics.PlantMismatch, match="exchange 4") as raised:
+            conductor.advance_to({"payload": 6})
+    assert raised.value.index == 4 and raised.value.expected["out"]["T"] != raised.value.found["out"]["T"]
+    assert restored.tick == 4, "stopped before the instant whose exchange differs"
+
+
+def test_a_restore_that_stops_short_or_has_no_trace_is_refused(plant_dir):
+    _, trace = run_and_trace(plant_dir, 6)
+    restored = TimedHeater("payload", 50_000_000)
+    with Conductor({**one_element_system(restored), "directory": str(plant_dir)}, request_timeout=2,
+                   dynamics=spec()) as conductor:
+        conductor.shadow_plants({"heated": trace})
+        conductor.advance_to({"payload": 4})
+        with pytest.raises(dynamics.PlantMismatch, match="2 exchange\\(s\\) of the snapshot not taken again"):
+            conductor.end_shadow()
+        with pytest.raises(DynamicsError, match="holds no trace of plant 'heated'"):
+            conductor.shadow_plants({})
+
+
+def test_a_snapshot_keeps_the_traces_up_to_its_time(tmp_path):
+    from fprime_wsts import snapshots
+
+    logs, snap = tmp_path / "logs", tmp_path / "snap"
+    logs.mkdir()
+    snap.mkdir()
+    lines = [json.dumps({"t": round(0.05 * i, 2), "dt": 0.05, "in": {}, "out": {"T": i}}) for i in range(1, 11)]
+    (logs / "dynamics-thermal.jsonl").write_text("\n".join(lines) + "\n" + '{"t": 0.')
+    (logs / "sim.log").write_text("not a trace")
+    assert snapshots.copy_traces(logs, snap, 0.3) == ["thermal"]
+    (snap / "snapshot.json").write_text(json.dumps({"format": snapshots.FORMAT, "plants": ["thermal"]}))
+    traces = snapshots.load_traces(snapshots.load(snap))
+    assert [line["out"]["T"] for line in traces["thermal"]] == [1, 2, 3, 4, 5, 6]

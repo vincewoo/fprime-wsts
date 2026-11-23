@@ -611,6 +611,8 @@ class Simulation:
     def addresses(self) -> dict:
         """Where this run can be reached: its bridge, and its GDS when it has one"""
         found: dict = {"bridge": self.bridge, "directory": str(self.directory)}
+        if getattr(self, "conducted", False):
+            found["conducted"] = True  # in lockstep, stepped with its plants by a conductor
         if self.gds:
             found.update(gds_port=self.gds_port, gds_gui=self.gds_gui_url, zmq_transport=self.zmq_transport,
                          dictionary=str(self.dictionary) if self.dictionary else None)
@@ -1047,6 +1049,9 @@ class SystemSimulation:
         from . import snapshots
 
         targets = {name: element.tick for name, element in self.restore.elements.items()}
+        if conductor.couplings:
+            # Plants (docs/dynamics.md) re-driven along their traces, compared, not written
+            conductor.shadow_plants(snapshots.load_traces(self.restore))
         conductor.advance_to(targets, keep_going)
         # The journals end with the pauses of the snapshot: applied before each element's next tick
         deadline = time.monotonic() + 30
@@ -1063,6 +1068,7 @@ class SystemSimulation:
             with simulation.connect() as bridge:
                 bridge.wait_quiescent(timeout=30)
             snapshots.check_replay(simulation, self.restore.elements[name], name)
+        conductor.end_shadow()
 
     def addresses(self) -> dict:
         """Where this run can be reached: each element's bridge, and the GDS on the ground element"""
@@ -1477,9 +1483,13 @@ def _run_cli(args) -> int:
     # runs in lockstep, as a system of one. A restore replays what they gave (it is in the
     # journal) without them.
     plants = simulation.report.get("dynamics") or []
-    conducted = bool(plants and is_stepped and simulation.restore is None and simulation.bridge != "none")
+    restore_conducted = restore is None or bool(restore.meta.get("conducted"))
+    conducted = bool(plants and is_stepped and restore_conducted and simulation.bridge != "none")
+    if plants and not restore_conducted and not args.json:
+        print(f"{restore.path} was taken of a run without plants: restored, and run, without them")
     if conducted:
         simulation.extra_env["WSTS_LOCKSTEP"] = "1"
+        simulation.conducted = True
         simulation.hold = False
     try:
         simulation.start()
@@ -1504,7 +1514,10 @@ def _run_cli(args) -> int:
         raise
     if not args.json:
         print(f"simulation running: {simulation.binary.name} (bridge {simulation.bridge}, logs {simulation.log_dir})")
-        if simulation.restore is not None:
+        if simulation.restore is not None and conducted:
+            print(f"restoring from {simulation.restore.path} to tick {simulation.restore.tick}, its plants re-driven "
+                  "along their traces")
+        elif simulation.restore is not None:
             print(f"restored from {simulation.restore.path}: tick {simulation.restore.tick}, "
                   f"{simulation.restore.meta.get('records', 0)} bus records the same as when it was taken; paused there"
                   + ("" if args.duration else " (resume it through the bridge or the GDS)"))
@@ -1523,8 +1536,13 @@ def _run_cli(args) -> int:
             if not args.json:
                 print("plants " + ", ".join(spec["name"] for spec in plants) + " stepped with the deployment, in "
                       "lockstep")
-            stuck, lockstep_error = conduct_deployment(simulation, plants, args.duration,
-                                                       keep_going=lambda: simulation.sim.poll() is None)
+            try:
+                stuck, lockstep_error = conduct_deployment(simulation, plants, args.duration,
+                                                           keep_going=lambda: simulation.sim.poll() is None,
+                                                           restore=simulation.restore)
+            except WstsError:
+                simulation.stop()  # a restore that differs from its snapshot: nothing is handed over
+                raise
         deadline = time.monotonic() + args.duration if args.duration else None
         watch = simulation.connect() if is_stepped and simulation.bridge != "none" and not conducted else None
         if watch is not None and simulation.hold:
@@ -1651,16 +1669,44 @@ def deployment_description(simulation: "Simulation", plants: List[dict]) -> dict
             "dynamics": plants, "directory": str(simulation.directory), "log_dir": str(simulation.log_dir)}
 
 
+def restore_deployment(simulation: "Simulation", conductor, keep_going: Callable[[], bool] = lambda: True) -> None:
+    """Bring a restored deployment that has plants back to its snapshot under its conductor:
+    the journal replays while the conductor grants the ticks and re-drives the plants along
+    their traces; then the replay is checked, record by record"""
+    from . import snapshots
+
+    snapshot = simulation.restore
+    conductor.shadow_plants(snapshots.load_traces(snapshot))
+    conductor.advance_to({"deployment": snapshot.tick}, keep_going)
+    deadline = time.monotonic() + 30
+    with simulation.connect() as bridge:
+        while not snapshots.replay_done(bridge.status(), snapshot):  # its journal ends with the pause
+            if time.monotonic() >= deadline or not keep_going():
+                raise WstsError(f"the restored run did not come to rest at its snapshot (tick {snapshot.tick})")
+            time.sleep(0.02)
+        bridge.wait_quiescent(timeout=30)
+    snapshots.check_replay(simulation, snapshot, snapshot.meta["deployment"])
+    conductor.end_shadow()
+
+
 def conduct_deployment(simulation: "Simulation", plants: List[dict], duration: Optional[float],
-                       keep_going: Callable[[], bool]) -> Tuple[Optional[str], Optional[str]]:
+                       keep_going: Callable[[], bool], restore=None) -> Tuple[Optional[str], Optional[str]]:
     """Step a deployment started in lockstep, with its plants, for `duration` simulated seconds,
-    or until it is interrupted (a pause holds it). Returns (stuck, error)."""
+    or until it is interrupted (a pause holds it). A restored one is first brought back to its
+    snapshot, and its duration counts from there. Returns (stuck, error)."""
     from .lockstep import Conductor, LockstepError, Stuck
 
     conductor = Conductor(deployment_description(simulation, plants))
     try:
         conductor.wait_ready(TICK_SOURCE_WAIT, alive=keep_going)
-        conductor.run(until_ns=int(round(duration * 1e9)) if duration else None, hold_while_paused=True,
+        from_ns = 0
+        if restore is not None:
+            restore_deployment(simulation, conductor, keep_going)
+            from_ns = conductor.time_ns
+            if duration:
+                for bridge in conductor.bridges.values():
+                    bridge.resume()
+        conductor.run(until_ns=from_ns + int(round(duration * 1e9)) if duration else None, hold_while_paused=True,
                       keep_going=keep_going)
     except Stuck as error:
         return error.stuck.get("deployment", str(error)), None
