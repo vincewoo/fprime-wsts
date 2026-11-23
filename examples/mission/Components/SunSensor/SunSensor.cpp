@@ -45,7 +45,8 @@ SunSensor::SunSensor(const char* compName)
       m_writeTransaction(0),
       m_writeValue(0),
       m_replies(0),
-      m_errors(0) {}
+      m_errors(0),
+      m_troubled(false) {}
 
 void SunSensor::send(U8 command, U32 address, U32 length, const U8* data, U32 dataLength) {
     // Target, protocol, instruction (a command, no reply address), key, initiator,
@@ -83,6 +84,7 @@ void SunSensor::run_handler(FwIndexType portNum, U32 context) {
     (void)context;
     if (m_readPending) {
         m_errors++;
+        m_troubled = true;
         this->log_WARNING_LO_NoReply(m_readTransaction);
     }
     // Pending before it is sent: the reply may come back before the send returns
@@ -136,13 +138,23 @@ void SunSensor::handle(const U8* reply, FwSizeType size) {
     if (size < 12 || rmapCrc(reply, 11) != reply[11] || size != 12 + length + 1 ||
         rmapCrc(reply + 12, length) != reply[12 + length]) {
         m_errors++;
+        m_troubled = true;
         this->log_WARNING_LO_BadReply(transaction);
         return;
     }
     if (status != 0 || length != 4) {
         m_errors++;
+        m_troubled = true;
         this->log_WARNING_LO_RmapError(transaction, status);
         return;
+    }
+    if (m_troubled) {
+        // The sensor answers again: the next outage is reported afresh, not swallowed by
+        // the throttles the last one used up
+        m_troubled = false;
+        this->log_WARNING_LO_NoReply_ThrottleClear();
+        this->log_WARNING_LO_BadReply_ThrottleClear();
+        this->log_WARNING_LO_RmapError_ThrottleClear();
     }
     m_replies++;
     const I32 millidegrees = static_cast<I32>(bigEndian(reply + 12, 4));

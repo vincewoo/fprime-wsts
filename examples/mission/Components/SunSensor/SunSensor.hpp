@@ -41,6 +41,7 @@ class SunSensor final : public SunSensorComponentBase {
     U16 m_writeValue;
     U32 m_replies;
     U32 m_errors;
+    bool m_troubled;  //!< an error was reported since the last good read
 };
 
 }  // namespace Components

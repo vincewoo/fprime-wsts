@@ -2,7 +2,8 @@ module Components {
 
   @ A sun sensor on the payload's SpaceWire network, read over RMAP (ECSS-E-ST-50-52C).
   @ Each tick it reads the sun angle from the sensor's memory; a read that has no reply by
-  @ the next tick is reported. Its integration time is set with a verified write.
+  @ the next tick is reported. Its warnings are throttled, and the throttles are cleared when
+  @ a read succeeds again. Its integration time is set with a verified write.
   passive component SunSensor {
 
     @ 10 Hz rate group: one read of the sun angle a tick

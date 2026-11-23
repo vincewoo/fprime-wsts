@@ -46,7 +46,7 @@ def quiet_sensor(payload):
 
 def test_surrogates_are_bound(payload):
     status = payload.status()
-    assert set(status["endpoints"]) == {"i2cBus", "spiBus", "sensorUart", "heaterPin", "switchPin", "hubDriver", "fpgaRegs"}
+    assert set(status["endpoints"]) == {"i2cBus", "spiBus", "sensorUart", "heaterPin", "switchPin", "hubDriver", "fpgaRegs", "spw"}
 
 
 def test_two_devices_answer_on_one_i2c_bus(payload):
@@ -73,7 +73,7 @@ def test_bus_traffic_is_counted_per_endpoint(payload):
     before = payload.bus_stats()
     payload.advance(20)  # one second at 20 Hz
     after = payload.bus_stats()
-    assert set(after) == {"i2cBus", "spiBus", "sensorUart", "heaterPin", "switchPin", "hubDriver", "fpgaRegs"}
+    assert set(after) == {"i2cBus", "spiBus", "sensorUart", "heaterPin", "switchPin", "hubDriver", "fpgaRegs", "spw"}
 
     def grew(endpoint, counter, address=None):
         if address is None:
