@@ -141,6 +141,7 @@ nav:
       - Stepped Time (draft): stepped-time.md
       - Snapshots (design): snapshots.md
       - Dynamics Simulators (design): dynamics.md
+      - DARTS Coupling (draft): darts.md
       - Systems: systems.md
       - Surrogates and Device Models: surrogate-guide.md
       - Converting Other Targets: vxworks-conversion.md
