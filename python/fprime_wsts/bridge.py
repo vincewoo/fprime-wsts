@@ -683,7 +683,7 @@ class WstsSystem:
     stepped as a whole, in simulated time: `step(seconds=0.5)`, `time()`, `run_scenario()`.
     """
 
-    def __init__(self, system, connect_timeout: float = 10.0, request_timeout: float = 5.0):
+    def __init__(self, system, connect_timeout: float = 10.0, request_timeout: float = 5.0, dynamics=True):
         if not isinstance(system, dict):
             path = os.fspath(system)
             running = None
@@ -692,10 +692,14 @@ class WstsSystem:
                 path = os.path.join(path, "wsts-system.json")
             with open(path) as file:
                 system = json.load(file)
+            system.setdefault("directory", os.path.dirname(os.path.abspath(path)))
+            if running and running.get("log_dir"):
+                system.setdefault("log_dir", running["log_dir"])
             # A run started with free ports (`fprime-wsts run --auto-ports`) says where it is
             for element in system["elements"]:
                 element["bridge"] = (running or {}).get("elements", {}).get(element["name"], element["bridge"])
         self.description = system
+        self._dynamics = dynamics
         self.name: str = system["system"]
         self.ground: str = system["ground"]
         self.links: Dict[str, dict] = {link["name"]: link for link in system.get("links", [])}
@@ -781,8 +785,14 @@ class WstsSystem:
         from .lockstep import Conductor
 
         if self._conductor is None:
-            self._conductor = Conductor(self.description, self._connect_timeout, self._request_timeout)
+            self._conductor = Conductor(self.description, self._connect_timeout, self._request_timeout,
+                                        dynamics=self._dynamics)
         return self._conductor
+
+    def dynamics(self, name: Optional[str] = None) -> dict:
+        """Lockstep: what the system's plants (docs/dynamics.md) were last given and gave, at
+        the last instant: {"time", "inputs", "outputs"}, by plant; or one plant's"""
+        return self.conductor().dynamics(name)
 
     def time(self) -> float:
         """The system's simulated time in seconds: that of the last instant taken"""

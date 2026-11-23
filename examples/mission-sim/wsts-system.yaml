@@ -27,3 +27,22 @@ links:
   - name: hub
     a: cdh.hubDriver
     b: payload.hubDriver
+
+# A plant stepped with the system in lockstep (docs/dynamics.md): the thermal model of
+# Payload's heated panel (plants/thermal.py). Between two instants the conductor reads the
+# heater pin flight software drives, steps the model, and gives flight software the panel's
+# temperature three ways: the serial sensor's message, the FPGA's temperature register (in
+# tenths of a degree), and the over-temperature switch, which closes above 45 C and opens
+# again below 40 C. The panel sits at its surroundings' 21.5 C until the heater is turned on
+# (Payload.heater.HEATER_SET); then the switch trips, and HeaterControl turns it off again.
+dynamics:
+  - name: thermal
+    python: plants/thermal.py
+    params: {C: 5.0, P: 10.0, G: 0.1, T_env: 21.5, T0: 21.5}
+    inputs:
+      heater: {element: payload, gpio: heaterPin}
+    outputs:
+      T:
+        - {element: payload, model: tempSensor, key: text, format: "$TEMP,{:.1f}\n"}
+        - {element: payload, model: fpga, key: reg.0x0C, scale: 10, round: true}
+        - {element: payload, gpio: switchPin, above: 45, hysteresis: 5}

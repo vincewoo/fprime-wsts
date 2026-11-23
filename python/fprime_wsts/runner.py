@@ -19,7 +19,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from .fpp import WstsError
 
@@ -901,6 +901,7 @@ class SystemSimulation:
         self.gds_gui = gds_gui  # browser GUI port; None keeps the GDS headless
         self.gds_gui_addr = gds_gui_addr
         self.log_dir = Path(log_dir).resolve() if log_dir else self.directory / "wsts-logs"
+        self.description["log_dir"] = str(self.log_dir)  # where a conductor writes its plants' traces
         self.dictionary: Optional[Path] = None
         self.elements: Dict[str, Simulation] = {}
         self.started = 0.0
@@ -1066,7 +1067,7 @@ class SystemSimulation:
     def addresses(self) -> dict:
         """Where this run can be reached: each element's bridge, and the GDS on the ground element"""
         found: dict = {"elements": {name: simulation.bridge for name, simulation in self.elements.items()},
-                       "directory": str(self.directory)}
+                       "directory": str(self.directory), "log_dir": str(self.log_dir)}
         ground = self.elements.get(self.ground)
         if self.gds and ground:
             found.update(gds_port=ground.gds_port, gds_gui=ground.gds_gui_url, zmq_transport=ground.zmq_transport,
@@ -1470,6 +1471,14 @@ def _run_cli(args) -> int:
     # A stepped run of a set duration is one step from a paused start: it ends at exactly
     # that simulated time, whatever the host's speed
     simulation.hold = bool(is_stepped and args.duration)
+    # Plants (docs/dynamics.md) are stepped between instants by a conductor: the deployment
+    # runs in lockstep, as a system of one. A restore replays what they gave (it is in the
+    # journal) without them.
+    plants = simulation.report.get("dynamics") or []
+    conducted = bool(plants and is_stepped and simulation.restore is None and simulation.bridge != "none")
+    if conducted:
+        simulation.extra_env["WSTS_LOCKSTEP"] = "1"
+        simulation.hold = False
     try:
         simulation.start()
     except (KeyboardInterrupt, SystemExit):
@@ -1506,9 +1515,16 @@ def _run_cli(args) -> int:
     crashed = False
     interrupted = False
     stuck = None
+    lockstep_error = None
     try:
+        if conducted:
+            if not args.json:
+                print("plants " + ", ".join(spec["name"] for spec in plants) + " stepped with the deployment, in "
+                      "lockstep")
+            stuck, lockstep_error = conduct_deployment(simulation, plants, args.duration,
+                                                       keep_going=lambda: simulation.sim.poll() is None)
         deadline = time.monotonic() + args.duration if args.duration else None
-        watch = simulation.connect() if is_stepped and simulation.bridge != "none" else None
+        watch = simulation.connect() if is_stepped and simulation.bridge != "none" and not conducted else None
         if watch is not None and simulation.hold:
             # The tick source declares its period when the deployment's start-up code
             # starts it, after the bridge is up: on a loaded host that can take a while.
@@ -1529,7 +1545,7 @@ def _run_cli(args) -> int:
             ticks = max(1, -(-int(args.duration * 1e9) // period) - (0 if simulation.restore is not None else now["tick"]))
             watch.request("step", ticks=ticks)
         paused_at = None  # (tick, scenario step) a held run was first seen paused at, and when
-        while simulation.sim.poll() is None:
+        while simulation.sim.poll() is None and not conducted:
             if watch is not None:
                 # Stepped time: the duration is simulated seconds, and a tick that cannot
                 # finish ends the run
@@ -1582,7 +1598,9 @@ def _run_cli(args) -> int:
     if is_stepped:
         simulated = round(float(status.get("sim_seconds", 0.0)), 3)
         timing = {"stepped": True, "sim_seconds": simulated, "speed": round(simulated / wall, 1) if wall > 0 else None,
+                  **({"lockstep": True, "dynamics": [spec["name"] for spec in plants]} if conducted else {}),
                   **({"stuck": stuck} if stuck else {}),
+                  **({"error": lockstep_error} if lockstep_error else {}),
                   **({"tick_times": status["tick_times"]} if status.get("tick_times") else {})}
     summary = {
         "deployment": simulation.binary.name,
@@ -1614,8 +1632,38 @@ def _run_cli(args) -> int:
               "that waits on the host (sleeps, polls, blocks in a handler) cannot be stepped: give it a surrogate, or "
               f"run in real time; see {simulation.log_dir / 'sim.log'}", file=sys.stderr)
         return 1
+    if lockstep_error:
+        print(f"lockstep: {lockstep_error}", file=sys.stderr)
+        return 1
     if crashed:
         print("the simulation exited on its own" + (f": {assertion['message']}" if assertion else "")
               + f"; see {simulation.log_dir / 'sim.log'}", file=sys.stderr)
         return 1
     return 0 if code in (0, None) else 1
+
+
+def deployment_description(simulation: "Simulation", plants: List[dict]) -> dict:
+    """A running deployment as a system of one element, for a conductor that steps its plants"""
+    return {"system": simulation.binary.name, "ground": "deployment",
+            "elements": [{"name": "deployment", "directory": ".", "bridge": simulation.bridge}], "links": [],
+            "dynamics": plants, "directory": str(simulation.directory), "log_dir": str(simulation.log_dir)}
+
+
+def conduct_deployment(simulation: "Simulation", plants: List[dict], duration: Optional[float],
+                       keep_going: Callable[[], bool]) -> Tuple[Optional[str], Optional[str]]:
+    """Step a deployment started in lockstep, with its plants, for `duration` simulated seconds,
+    or until it is interrupted (a pause holds it). Returns (stuck, error)."""
+    from .lockstep import Conductor, LockstepError, Stuck
+
+    conductor = Conductor(deployment_description(simulation, plants))
+    try:
+        conductor.wait_ready(TICK_SOURCE_WAIT, alive=keep_going)
+        conductor.run(until_ns=int(round(duration * 1e9)) if duration else None, hold_while_paused=True,
+                      keep_going=keep_going)
+    except Stuck as error:
+        return error.stuck.get("deployment", str(error)), None
+    except LockstepError as error:
+        return None, (str(error) if keep_going() else None)
+    finally:
+        conductor.close()
+    return None, None

@@ -347,6 +347,8 @@ class Manifest:
     run_models: List[str] = field(default_factory=list)
     # Arguments added to the command line of fprime-gds when `fprime-wsts run` starts one
     run_gds_args: List[str] = field(default_factory=list)
+    # Plants a conductor steps between instants (docs/dynamics.md), checked; paths as written
+    dynamics: List[dict] = field(default_factory=list)
     keep_libraries: List[str] = field(default_factory=list)
     drop_libraries: List[str] = field(default_factory=list)
     fpp_exclude: List[str] = field(default_factory=list)
@@ -395,7 +397,7 @@ class Manifest:
 KNOWN_KEYS = {
     "project", "deployment", "topology", "topology_dir", "output", "substitute", "keep", "models", "control", "bridge", "tick_hz",
     "catalogs", "sources", "main", "cmake", "libraries", "fpp_exclude", "defines", "simulators", "devices",
-    "clocks", "run", "host", "setup", "time", "shims", "files", "ids", "gpio_endpoints", "telemetry",
+    "clocks", "run", "host", "setup", "time", "shims", "files", "ids", "gpio_endpoints", "telemetry", "dynamics",
 }
 #: Operating system APIs the toolkit implements for project code that calls them (`shims`)
 SHIMS = {"vxworks": "Wsts/VxWorks"}
@@ -757,6 +759,9 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
         raise WstsError(f"{where}: run.models must be a list of Python files (each defines serve(sim)), relative to "
                         "the manifest")
     manifest.run_models = [str(entry) for entry in models]
+    from .dynamics import parse_specs
+
+    manifest.dynamics = parse_specs(data.get("dynamics"), where, elements=None)
     gds_args = run.get("gds_args") or []
     if not isinstance(gds_args, list) or not all(isinstance(entry, (str, int)) for entry in gds_args):
         raise WstsError(f"{where}: run.gds_args must be a list of command line arguments for fprime-gds "

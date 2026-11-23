@@ -2396,7 +2396,7 @@ def render_report(report: dict) -> str:
         for override in report["simulation_config_overrides"]:
             lines.append(f"- `{override['file']}`: `{override['uses']}` replaces "
                          + ", ".join(f"`{r}`" for r in override["replaces"]))
-    if report.get("simulation_libraries") or report.get("cmake_includes") or report.get("run"):
+    if report.get("simulation_libraries") or report.get("cmake_includes") or report.get("run") or report.get("dynamics"):
         lines += ["", "## Simulation build and run inputs", ""]
         for library in report.get("simulation_libraries", []):
             lines.append(f"- Library of the simulation: `{library}`")
@@ -2408,6 +2408,11 @@ def render_report(report: dict) -> str:
                          + (" (a path relative to this directory)" if name in report["run"]["env_paths"] else ""))
         for file in report.get("run", {}).get("models", []):
             lines.append(f"- Python device models started with the run: `{file}`")
+        if report.get("dynamics"):
+            from .dynamics import describe
+
+            for spec in report["dynamics"]:
+                lines.append(f"- Plant stepped between instants in stepped time: {describe(spec)}")
         if report.get("files"):
             sandbox = report["files"]["sandbox"]
             relative = "" if sandbox.startswith(("/", "~")) else " (a path relative to this directory)"
@@ -3770,6 +3775,15 @@ def _generate(project_root: Path, settings: fpp.ProjectSettings, manifest: Manif
         report.setdefault("run", {"env": {}, "env_paths": []})["models"] = files
     if manifest.run_gds_args:
         report.setdefault("run", {"env": {}, "env_paths": []})["gds_args"] = list(manifest.run_gds_args)
+    if manifest.dynamics:
+        from . import dynamics
+
+        if manifest.bridge == "none":
+            raise WstsError("dynamics needs the bridge, which is how a plant reads and writes the simulation: "
+                            "set bridge: (for example tcp:50100)")
+        dynamics.check_targets(manifest.dynamics, "dynamics", {None: report})
+        report["dynamics"] = dynamics.relocate(manifest.dynamics, lambda path: manifest.resolve_sim(path, project_root),
+                                               rel)
     report["reused_sources"] = {
         k: [rel(Path(p)) if os.path.isabs(p) else p for p in v] for k, v in reused.items()
     }

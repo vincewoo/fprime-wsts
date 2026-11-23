@@ -42,6 +42,22 @@ def test_the_deployment_schema_has_the_keys_the_parser_accepts():
     assert set(properties["shims"]["items"]["enum"]) == set(manifest.SHIMS)
     assert keys(properties["setup"]["oneOf"][1]) == manifest.SETUP_KEYS
     assert set(properties["models"]["items"]["properties"]["kind"]["enum"]) == set(manifest.MODEL_KINDS)
+    check_dynamics(properties["dynamics"], system=False)
+
+
+def check_dynamics(node, system):
+    """The plants of `dynamics` (docs/dynamics.md), with what each mapping may hold"""
+    from fprime_wsts import dynamics
+
+    item = node["items"]
+    assert keys(item) == dynamics.SPEC_KEYS
+    element = {"element"} if system else set()
+    target_keys = lambda targets: set(targets) | {key for extra in targets.values() for key in extra}
+    inputs = item["properties"]["inputs"]["additionalProperties"]
+    assert keys(inputs) == element | target_keys(dynamics.INPUT_TARGETS) | dynamics.INPUT_TRANSFORMS
+    outputs = item["properties"]["outputs"]["additionalProperties"]["oneOf"]
+    assert keys(outputs[0]) == element | target_keys(dynamics.OUTPUT_TARGETS) | dynamics.OUTPUT_TRANSFORMS
+    assert outputs[1]["items"] == outputs[0]
 
 
 def test_the_ids_window_is_a_pair_in_a_deployment_and_a_system():
@@ -62,6 +78,7 @@ def test_the_system_schema_has_the_keys_the_parser_accepts():
     assert keys(top["properties"]["elements"]["additionalProperties"]["oneOf"][1]) == system.ELEMENT_KEYS
     assert keys(top["properties"]["links"]["items"]) == system.LINK_KEYS
     assert set(top["properties"]["links"]["items"]["properties"]["kind"]["enum"]) == system.LINK_KINDS
+    check_dynamics(top["properties"]["dynamics"], system=True)
 
 
 @pytest.mark.parametrize("file, name", [("cdh.yaml", "wsts"), ("payload.yaml", "wsts"), ("wsts-system.yaml", "wsts-system")])

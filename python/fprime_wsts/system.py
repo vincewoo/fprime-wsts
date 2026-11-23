@@ -39,7 +39,7 @@ from .generate import ID_BLOCK, Result, generate, symlink_notice
 from .manifest import LinkEnd, Manifest, id_window, load_manifest, read_yaml, unknown_keys
 
 SYSTEM_FILE = "wsts-system.json"
-SYSTEM_KEYS = {"system", "ground", "elements", "links", "output"}
+SYSTEM_KEYS = {"system", "ground", "elements", "links", "output", "dynamics"}
 ELEMENT_KEYS = {"manifest", "bridge", "ids", "gds"}
 LINK_KEYS = {"name", "kind", "a", "b"}
 LINK_KINDS = {"bytestream", "gpio", "datagram"}
@@ -77,6 +77,8 @@ class SystemManifest:
     elements: List[ElementSpec] = field(default_factory=list)
     links: List[LinkSpec] = field(default_factory=list)
     output: Optional[str] = None
+    # Plants stepped between instants (docs/dynamics.md), checked; paths relative to the manifest
+    dynamics: List[dict] = field(default_factory=list)
 
     @property
     def root(self) -> Path:
@@ -159,6 +161,9 @@ def parse_system(data: dict, path: Optional[Path] = None) -> SystemManifest:
     if not system.element(system.ground).gds:
         raise WstsError(f"{where}: element '{system.ground}' is the ground element: the GDS uses its dictionary, "
                         "so it cannot have 'gds: false'")
+    from .dynamics import parse_specs
+
+    system.dynamics = parse_specs(data.get("dynamics"), where, elements=names)
     windows = sorted((e.ids, e.name) for e in system.elements if e.ids)
     for (first, first_name), (second, second_name) in zip(windows, windows[1:]):
         if second[0] <= first[1]:
@@ -274,6 +279,14 @@ def generate_system(system: SystemManifest, output: Optional[Path] = None, check
         name: {link["link"]: link for link in generated.report.get("links", [])}
         for name, generated in result.elements.items()
     }
+    plants = []
+    if system.dynamics:
+        from . import dynamics
+
+        where = str(system.path) if system.path else "system manifest"
+        dynamics.check_targets(system.dynamics, where, {name: g.report for name, g in result.elements.items()})
+        plants = dynamics.relocate(system.dynamics, lambda path: (system.root / path).resolve(),
+                                   lambda path: os.path.relpath(path, output))
     result.description = {
         "generator": "fprime-wsts",
         "system": system.name,
@@ -305,6 +318,8 @@ def generate_system(system: SystemManifest, output: Optional[Path] = None, check
             }
             for link in system.links
         ],
+        # Written only when there are plants, so descriptions of systems without them stay as they were
+        **({"dynamics": plants} if plants else {}),
     }
     text = json.dumps(result.description, indent=2) + "\n"
     target = output / SYSTEM_FILE
@@ -323,4 +338,7 @@ def load_description(directory: Path) -> dict:
     path = Path(directory) / SYSTEM_FILE
     if not path.is_file():
         raise WstsError(f"{path} not found: is this a generated system? (fprime-wsts generate <system manifest>)")
-    return json.loads(path.read_text())
+    description = json.loads(path.read_text())
+    # Where it was read from, for what it names relative to it (the plants of `dynamics`)
+    description["directory"] = str(Path(directory).resolve())
+    return description

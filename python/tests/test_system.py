@@ -106,6 +106,10 @@ def mission_system(tmp_path, **changes):
     data = yaml.safe_load(SYSTEM.read_text())
     for name, element in data["elements"].items():
         element["manifest"] = str(SIM / element["manifest"])
+    for plant in data.get("dynamics", []):
+        for kind in ("python", "fmu"):
+            if kind in plant:
+                plant[kind] = str(SIM / plant[kind])
     for key, value in changes.items():
         if key in data["elements"]:
             data["elements"][key].update(value)
@@ -128,6 +132,10 @@ def test_mission_system(tmp_path):
     assert chosen["Cdh.hubDriver"] == ("Drv.TcpServer", "Wsts.SimByteStream", "link")
     assert chosen["Payload.hubDriver"] == ("Drv.TcpClient", "Wsts.SimByteStream", "link")
     assert "Cdh.comDriver" not in chosen, "the ground link is the same component as Payload's hub driver, and is kept"
+    # The plant (docs/dynamics.md) goes to the description, its file named from there
+    [plant] = result.description["dynamics"]
+    assert plant["name"] == "thermal" and plant["kind"] == "python"
+    assert (tmp_path / "out" / plant["path"]).resolve() == (SIM / "plants" / "thermal.py").resolve()
 
     cdh = (tmp_path / "out" / "cdh" / "Cdh" / "Top" / "WstsSetup.cpp").read_text()
     payload = (tmp_path / "out" / "payload" / "Payload" / "Top" / "WstsSetup.cpp").read_text()
