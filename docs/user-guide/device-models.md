@@ -14,7 +14,9 @@ You have four ways to provide one:
 | An **F´ simulator component** | In the process, in the topology | Simulators you already have, or that operators command from the GDS ([Simulators](simulators.md)) |
 
 All of them sit behind the same endpoint, so faults, recording, replay and the bridge
-work the same way whichever you choose.
+work the same way whichever you choose. What the devices sense, when it has dynamics of its
+own (a heated panel, a spacecraft's attitude), is a plant: see
+[Dynamics Simulators](dynamics.md).
 
 ## Stock models
 

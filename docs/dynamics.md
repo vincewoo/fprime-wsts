@@ -1,11 +1,13 @@
 # Dynamics Simulators (design draft)
 
-**Status: draft; phase 0 done, nothing built yet.** Adapters that couple a simulation to an
-external dynamics simulator, part of item 4 of the [roadmap](design.md#roadmap). The
-simulator is stepped on the simulation's own time. Sensors read the simulator's state, and
-what flight software commands the actuators feeds back into it. The questions under
-[What to decide](#what-to-decide) are open. [Phase 0: what it showed](#phase-0-what-it-showed)
-has the results of the spike.
+**Status: phases 0 to 2 are built.** Adapters that couple a simulation to an external
+dynamics simulator, part of item 4 of the [roadmap](design.md#roadmap). The simulator is
+stepped on the simulation's own time. Sensors read the simulator's state, and what flight
+software commands the actuators feeds back into it. The choices under
+[What to decide](#what-to-decide) were settled as recommended.
+[Phase 0: what it showed](#phase-0-what-it-showed) has the results of the spike;
+[Phases 1 and 2: what is built](#phases-1-and-2-what-is-built) says what the toolkit does
+now. How to use it is in the user guide ([Dynamics Simulators](user-guide/dynamics.md)).
 
 ## The problem
 
@@ -172,7 +174,7 @@ dynamics:
 | `model` + `key` | A model's value (`model_get`, new: `Model::get`) | `model_set` |
 | `register` + `offset` | A register block's value (`reg_get`, new) | `reg_set` |
 | `i2c` + `addr` + `reg` | A register of a register-addressed I2C model | `i2c_reg_set` |
-| `bytes` | What flight software sent on a byte stream since the last exchange, given to a decoding function | `inject_bytes`, from an encoding function |
+| `bytes` | (Not built: what flight software sent on a byte stream, given to a decoding function) | `inject_bytes` of the `format`ted value |
 | Transforms | `scale`, `offset`, `round`, `format`, `above`/`below` (a threshold, with hysteresis) | |
 
 An output is written only when its value changes. Every write is a journal line, and most
@@ -184,7 +186,7 @@ fprime-wsts run wsts/Mission --stepped --duration 600     # the plant is stepped
 
 ```python
 system.step(seconds=20)                        # WstsSystem: the plant steps with it
-assert system.dynamics("thermal")["T"] > 44    # the plant's state, read between instants
+assert system.dynamics("thermal")["outputs"]["T"] > 44    # what the plant last gave
 ```
 
 The plant's inputs and outputs at every exchange go to `wsts-logs/dynamics-<name>.jsonl`, for
@@ -229,13 +231,42 @@ What it did not test:
 - a plant shared by two elements;
 - a restore of a coupled run.
 
+## Phases 1 and 2: what is built
+
+| | |
+|---|---|
+| Plants | `dynamics` in `wsts-system.yaml` and in a deployment's `wsts.yaml` ([reference](reference.md#dynamics)), checked when parsed and against the generated reports (the models and endpoints named must exist), and written to `wsts-system.json` or `wsts-report.json` with each plant's path relative to the generated directory. The schemas have it |
+| Kinds | `python`: a file's `create(params)` returns the plant (`step(t, dt, inputs) -> outputs`, optionally `start(t0)` and `stop()`). `fmu`: FMI 2.0 and 3.0 co-simulation through `ctypes` (`fprime_wsts.fmi`), with parameters of every scalar type set by name, the FMU's log in what an error says, a request to end the simulation or an early return refused as errors, and its state saved and loaded when it can serialise it. `build_fmu()` compiles a small FMU from C |
+| The coupling | `fprime_wsts.dynamics.Coupling`, held by the `Conductor` (`lockstep.py`). Before granting an instant it reads each due plant's inputs (`gpio_get`, `model_get`, `reg_get`, requests sent together), steps the plant from its time to the instant's, converts the outputs (`scale`, `add`, thresholds with hysteresis, `round`, `format`), and writes those that changed as one `batch` per element, each action with `"via"`. Then it reads the status of the elements written to again: an edge on a pin runs flight software's handler, which may send on a link, and the next grant's `expect.<link>` must count it |
+| The core | `Model::get` (the stock models answer it), `RegisterDevice::peek`, and three bridge requests: `model_get`, `reg_get` (queries, not recorded) and `batch` (several actions between the same two ticks in one round trip, each recorded as if it had come alone) |
+| Runs | `fprime-wsts run <system> --stepped` steps the system's plants. A single deployment with plants, run with `--stepped`, is started in lockstep and conducted as a system of one. `WstsSystem.step()` and the pytest fixtures step them through the system's conductor, and a stepped run the MCP server starts (`run_start` with `stepped`) is conducted by `fprime-wsts run`; `WstsSystem.dynamics()` reads their last inputs and outputs; `WstsSystem(..., dynamics=False)` leaves them out. Each writes `wsts-logs/dynamics-<name>.jsonl` |
+| The example | `plants/thermal.py` on Payload's heater pin, serial sensor, FPGA temperature register and over-temperature switch, in `wsts-system.yaml`. It sits at its surroundings' temperature until the heater is turned on, so the rest of the example behaves as before. The same plant as an FMI 2.0 FMU in `plants/thermal_fmu`, which computes the same bits |
+| Tests | `Wsts/Core` unit tests for the queries and `batch`; `python/tests/test_dynamics.py` (manifests, conversions, a plant stepped by the conductor against stand-in elements), `test_fmi.py` (the example's FMU and an FMI 3.0 one built from C, state, errors); `tests/e2e/test_dynamics.py`: the heater loop closed on the example through a ground command, and two runs of the Python plant and one of the FMU, started hot so that flight software reacts uncommanded, recording the same bytes on both elements |
+
+Measured on the example: a simulated minute of the system with the plant in about 5 s of
+wall time, against about 3 s without it.
+
+Where it parts from the design above:
+
+- **A plant with a `step` of its own** exchanges on a grid from where it starts (its start
+  plus whole steps), not first at the next instant and then every step from there. Without
+  `step` it exchanges before every instant.
+- **What a plant reads is not recorded.** `model_get`, `reg_get` and `gpio_get` are queries.
+  A restore gives flight software the same inputs, so the plant reads the same values again
+  when it is re-driven (phase 3).
+- **A restored run starts its plants afresh.** A restore replays what the plants wrote (it is
+  in the journal), with no plant running, and then a conductor goes on with the plants from
+  their initial state, not from the snapshot's. Re-driving them during the restore is phase 3.
+- **An FMU's library runs in the conductor's process**, as decided. The `socket` kind, which
+  would isolate it, is phase 4.
+
 ## Phases
 
 | Phase | Delivers | Size | Proves |
 |---|---|---|---|
 | 0. Spike | A Python plant coupled to the example in lockstep; an FMU through `ctypes` with its state saved and restored | Small | Done ([above](#phase-0-what-it-showed)) |
-| 1. Coupling | `fprime_wsts.dynamics`: the `Plant` interface, `python` plants, the input and output mappings, coupling in the `Conductor` before each instant (`run --stepped`, `WstsSystem.step`, pytest, MCP all step it), `dynamics` in both manifests and their schemas, the trace file. A single deployment conducted as a system of one. The bridge's `model_get`, `reg_get` and `batch`. The example's thermal plant on Payload's heater, switch, sensor and FPGA register | Medium | The heater loop closed through flight code in an end-to-end test, and two runs the same byte for byte |
-| 2. FMI | The `fmu` kind: FMI 2.0 and 3.0 co-simulation through `ctypes`, parameters, a check of the model description against the manifest. The example's plant as an FMU built from C source with the example | Small to medium | A modelling tool's export runs in the loop |
+| 1. Coupling (built) | `fprime_wsts.dynamics`: the `Plant` interface, `python` plants, the input and output mappings, coupling in the `Conductor` before each instant (`run --stepped`, `WstsSystem.step`, pytest, MCP all step it), `dynamics` in both manifests and their schemas, the trace file. A single deployment conducted as a system of one. The bridge's `model_get`, `reg_get` and `batch`. The example's thermal plant on Payload's heater, switch, sensor and FPGA register | Medium | The heater loop closed through flight code in an end-to-end test, and two runs the same byte for byte |
+| 2. FMI (built) | The `fmu` kind: FMI 2.0 and 3.0 co-simulation through `ctypes`, parameters, a check of the model description against the manifest. The example's plant as an FMU built from C source with the example | Small to medium | A modelling tool's export runs in the loop |
 | 3. Replay and snapshots | The plant's actions marked (`via`). In a restore, plants re-driven in shadow mode and compared with the journal. Saved state for plants that have it. The plant's trace in the snapshot | Medium | A coupled run snapshotted and restored, and coupling resumed where it was |
 | 4. Other simulators | The `socket` kind and its protocol. A `42` kind after a spike against 42's IPC. A Basilisk plant as a documented example | Medium | An attitude loop against 42 or Basilisk |
 | 5. Tools and docs | The MCP server's view of plants (state, trace), a user guide page, the fidelity page | Small | |
@@ -268,6 +299,10 @@ own state is lost on restore, and the restore says so.
   unchanged by this design, but a closed loop makes ground commands more common in tests.
 
 ## What to decide
+
+*Settled as recommended: `python` and `fmu` first; lockstep only; plants in the conductor's
+process; the toolkit's own FMI loader, co-simulation only; phases 1 and 2 as the first
+version, then phase 3 (re-driving plants in shadow mode).*
 
 1. **Which interface first?** *Recommendation: `python` and `fmu` (phases 1 and 2)*. A Python
    plant is the general case and the easiest to test. FMI is the one standard: every modelling

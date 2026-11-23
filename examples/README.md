@@ -98,6 +98,7 @@ runs the end-to-end tests against it.
 | Faults, injection, GPIO, I2C registers, model parameters | from the bridge and as `wstsControl` commands through the GDS | `test_payload.py`, `test_cdh.py` |
 | Scenarios, recording, replay of stimulus and of device responses | Payload | `test_payload.py::test_scenario_file`, `test_record_then_replay_reproduces_the_run` |
 | A device model in another process | an IMU served from Python over Payload's bridge | `test_payload.py::test_python_device_model` |
+| A dynamics simulator in the loop (`dynamics`) | the thermal plant of Payload's heated panel (`mission-sim/plants/thermal.py`) on the heater pin, the serial sensor, the FPGA's temperature register and the over-temperature switch, stepped with the system in lockstep; the same plant as an FMI 2.0 FMU built from C (`plants/thermal_fmu`) | `test_dynamics.py` |
 | The fidelity report | `mission-sim/wsts/Mission/<element>/wsts-report.md` | Python tests |
 
 What the example does not show is covered by the Python tests instead: a manifest kept

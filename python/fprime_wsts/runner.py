@@ -1339,6 +1339,8 @@ def _run_system_cli(args) -> int:
         simulated = round(sim_ns / 1e9, 3)
         timing = {"stepped": True, "lockstep": True, "sim_seconds": simulated,
                   "speed": round(simulated / conducted, 1) if conducted > 0 else None,
+                  **({"dynamics": [spec["name"] for spec in system.description["dynamics"]]}
+                     if system.description.get("dynamics") else {}),
                   **({"stuck": stuck} if stuck else {}), **({"error": lockstep_error} if lockstep_error else {})}
     summary = {
         "system": system.name,

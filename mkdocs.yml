@@ -118,6 +118,7 @@ nav:
           - 6. Run the Simulation: user-guide/run.md
       - Simulating Hardware:
           - Device Models: user-guide/device-models.md
+          - Dynamics Simulators: user-guide/dynamics.md
           - Register Blocks and Interrupts: user-guide/registers.md
           - SpaceWire: user-guide/spacewire.md
           - Simulators as F´ Components: user-guide/simulators.md
@@ -139,7 +140,7 @@ nav:
       - Fidelity: fidelity.md
       - Stepped Time (draft): stepped-time.md
       - Snapshots (design): snapshots.md
-      - Dynamics Simulators (draft): dynamics.md
+      - Dynamics Simulators (design): dynamics.md
       - Systems: systems.md
       - Surrogates and Device Models: surrogate-guide.md
       - Converting Other Targets: vxworks-conversion.md

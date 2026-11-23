@@ -612,6 +612,57 @@ It cannot be the generated directory itself, nor under a name that `generate` wr
 (`wsts-logs`). Report: `files`, as written in the manifest, and a line under "Simulation
 build and run inputs".
 
+### Dynamics
+
+`dynamics` lists **plants**: dynamics simulators stepped on the simulation's own time
+([dynamics.md](dynamics.md), user guide: [Dynamics Simulators](user-guide/dynamics.md)). In
+stepped time the run is conducted in lockstep (a single deployment as a system of one), and
+before every instant the conductor reads each plant's inputs from the simulation, steps the
+plant to the instant's time, and writes the outputs that changed, as bridge actions.
+
+```yaml
+dynamics:
+  - name: thermal                  # its trace: wsts-logs/dynamics-thermal.jsonl
+    python: plants/thermal.py      # or fmu: plants/Thermal.fmu; relative to the manifest
+    params: {C: 5.0, P: 10.0}      # create(params), or the FMU's parameters by name
+    step: 0.05                     # seconds per exchange; default: before every instant
+    inputs:                        # read after an instant
+      heater: {gpio: heaterPin}
+    outputs:                       # written before the next instant, when they change
+      T:
+        - {model: tempSensor, key: text, format: "$TEMP,{:.1f}\n"}
+        - {model: fpga, key: reg.0x0C, scale: 10, round: true}
+        - {gpio: switchPin, above: 45, hysteresis: 5}
+```
+
+| Mapping | As an input | As an output |
+|---|---|---|
+| `gpio: <endpoint>` | The level flight software last wrote (`gpio_get`): 1.0 or 0.0 | `gpio_force`: a level, so a threshold or a truth value; an edge reaches flight software as an interrupt |
+| `model: <name>`, `key` | `model_get`: a number where the text is one, else the text | `model_set` of the value as text |
+| `register: <endpoint>`, `offset` | `reg_get`: the register, without a flight read | `reg_set`, a whole number |
+| `i2c: <endpoint>`, `addr`, `reg` | | `i2c_reg_set`, a byte |
+| `bytes: <endpoint>`, `format` | | `inject_bytes` of the formatted text, when it changes |
+
+Transforms, in this order: `scale` and `add` (value × scale + add); for an output then a
+threshold, `above` or `below` (true while the value is past it), with `hysteresis` (how far
+back it must go to change again); `round` (to the nearest whole number; implied for
+registers); `format` (a Python format string of the value). A plant's output that is text
+already is written as it is. One output may go to several places (a list). In a system
+manifest each mapping names its `element` (it may be left out when there is one).
+
+A **Python plant** is a file that defines `create(params)`, which returns an object with
+`step(t, dt, inputs) -> outputs` (`t`: simulated seconds since start-up at the start of the
+step; `dt`: its length; inputs and outputs: dicts by name) and optionally `start(t0)` and
+`stop()`. An **FMU** is an FMI 2.0 or 3.0 co-simulation FMU for this machine, loaded with
+`ctypes`; its inputs and outputs are the variables of those names (`causality` input and
+output), and `params` are set before initialisation. A plant with `step` exchanges at its
+start plus whole steps, holding its inputs over each; one without, before every instant.
+
+Every action a plant writes carries `"via": "<name>"`, which the recording and the journal
+keep. Report: `dynamics`, with each plant's path relative to the generated directory, and a
+line under "Simulation build and run inputs". `generate` checks that the models and
+endpoints a plant names exist.
+
 ### Surrogates of another kind, or with other port names
 
 A `substitute` entry, or a catalog entry, may say how a surrogate differs in shape:
@@ -681,6 +732,10 @@ A `gpio` link carries a pin level, one direction only (`a` drives `b`; the rever
 link with the ends swapped): a `Wsts::LinkGpio` model, its ends replaced by `Wsts.SimGpio`
 unless a surrogate says `gpio_endpoint: true`, and an end may instead be a pin listed under
 `gpio_endpoints` of its element's manifest ([Links](systems.md#links)).
+
+`dynamics` takes the same plants as a deployment's manifest ([Dynamics](#dynamics)), each mapping
+with the `element` it reads or writes: a plant can read one computer's actuator and give another's
+sensor what it sees. They go to `wsts-system.json`, and the system's conductor steps them.
 
 A `datagram` link carries the same traffic over connectionless Unix datagram sockets: a
 `Wsts::LinkDatagram` model instead of `Wsts::LinkByteStream`, one `sendto()` per message
@@ -835,6 +890,9 @@ Newline-delimited JSON. A client sends `{"id": n, "op": …}` and receives
 |---|---|
 | `status` | Tick, run state, fault and scenario state, bus counters, endpoint names, and `links` / `links_up` (link ends of a system element, and how many have a connected peer: a datagram link counts in `links` and never in `links_up`). Also what flight software has been given and not finished: `counting` (the deployment's queue counts it), `activity` (messages waiting for a task or being handled, and work of the simulation's own threads, now), `work` (the total since start-up) and `busy_ticks` (ticks taken while work of an earlier one was outstanding). For stepped time: `lockstep`, `settled` (start-up has settled), and for each link `link.<name>.sent` and `link.<name>.received`, the messages its end sent (or holds for a peer not yet connected, in lockstep) and received (`WstsBridge.status()` gathers them into `link_traffic`) |
 | `advance` (`ticks`=1, `expect.<link>`, `timeout_ms`=30000) | Lockstep only: the conductor of a system grants ticks and waits until they are taken and finished. `expect.<link>`: the messages that link will have received before the tick (what the other end had sent); the tick waits for them, and if they do not come within `WSTS_STEP_LIMIT_MS` it does not finish (`stuck` names the link). Answers the status, with `done` |
+| `model_get` (`model`, `key`) | A model's value as text, `value` (`Model::get`: `text`, `hex`, `period` of `Wsts::ScriptedByteStream`; a register of `Wsts::RegisterMapI2c`, by number; `reg.<offset>` of `Wsts::RegisterFile`; `mem.<address>` of `Wsts::RmapTarget`, a byte). Reading changes nothing and is not recorded |
+| `reg_get` (`endpoint`, `offset`) | A register of the block on a register endpoint, as `"0x…"`, without a flight read: no read hook, a read-clears register not cleared, nothing on the bus. Fails at an offset the block has not defined |
+| `batch` (`actions`) | Several actions, one JSON object per line of `actions`, applied in order between the same two ticks (one `ActionGate`), each executed and recorded as if it had come by itself. Stops at the first that fails; `applied` says how many were. `step`, `batch`, recording and scenario actions are refused. What a plant's coupling writes |
 | `wait_quiescent` (`timeout_ms`=1000) | Wait until `activity` is zero: flight software has finished everything it was given. Answers `quiescent`, `activity` and, when it is not, `holding`: the queues with work outstanding, as `<queue>: <messages>, …`. Meaningful while paused |
 | `subscribe` | Start receiving `{"ev": "rec", …}`, `{"ev": "action", …}` and `{"ev": "sim_event", …}` |
 | `gpio_get` (`endpoint`) | Level flight software last wrote |
@@ -858,12 +916,14 @@ work up.
 
 `fprime_wsts.bridge.WstsBridge` wraps all of this (`step`, `wait_quiescent`, `bus_stats`, `serve_i2c`, `serve_spi`,
 `serve_bytestream`, `serve_gpio`,
-`serve_register`, `raise_irq`, `reg_set`, `register_accesses`, and `submit` to wait on several
-simulations at once). `fprime_wsts.bridge.WstsSystem` holds one `WstsBridge` per element of a
+`serve_register`, `raise_irq`, `reg_set`, `register_accesses`, `model_get`, `reg_get`, `batch`,
+and `submit` to wait on several simulations at once). `fprime_wsts.bridge.WstsSystem` holds one `WstsBridge` per element of a
 system and addresses faults by link name. In lockstep it steps the system as a whole:
 `set_stepped()`, `step(seconds=…)` or `step(instants=…)`, `time()`, `run_scenario(path)`,
 through `fprime_wsts.lockstep.Conductor`, which has bridge connections of its own (`advance`
-blocks its connection until the ticks are finished).
+blocks its connection until the ticks are finished). The conductor steps the system's plants
+([Dynamics](#dynamics)) before each instant; `dynamics()` is what they were last given and
+gave, and `WstsSystem(..., dynamics=False)` leaves them out.
 
 ### System scenarios
 
