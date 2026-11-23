@@ -431,9 +431,19 @@ class Simulation:
                  log_dir: Optional[Path] = None, files_dir: Optional[Path] = None,
                  dictionary: Optional[Path] = None, env: Optional[Dict[str, str]] = None,
                  auto_ports: bool = False, zmq_transport: Optional[List[str]] = None,
-                 stepped: Optional[bool] = None):
+                 stepped: Optional[bool] = None, journal: Optional[bool] = None, restore=None):
         self.directory = Path(directory).resolve()
         self.binary, self.dictionary, self.report = find_artifacts(self.directory)
+        # Snapshots (docs/snapshots.md): a journal of the run's inputs, and a snapshot to start
+        # from (a snapshots.Snapshot), whose run is restored before anything else happens.
+        # A restored run keeps a journal of its own, and is stepped.
+        self.restore = restore
+        if journal is None:
+            journal = bool(self.report.get("time", {}).get("journal"))
+        self.journal = journal or restore is not None
+        if restore is not None:
+            stepped = True
+        self.restored_status: Optional[dict] = None
         if dictionary is not None:
             self.dictionary = Path(dictionary)  # for example the merged dictionary of a system
         self.extra_env = dict(env or {})
@@ -520,6 +530,18 @@ class Simulation:
         # The sandbox of the files of flight software (`files.sandbox` in the manifest): where
         # target paths and relative names of flight software land on the host
         sandbox = sandbox_directory(self.report, self.directory)
+        if self.journal:
+            from . import snapshots
+
+            stepped = self.stepped if self.stepped is not None else self.report.get("time", {}).get("mode") == "stepped"
+            if not stepped:
+                raise WstsError("a journal replays only in stepped time: run with --stepped (or time.mode: stepped "
+                                "in the manifest)")
+            if self.restore is not None:
+                snapshots.prepare_restore(self, self.restore)
+                env["WSTS_START_PAUSED"] = "1"  # held until the journal replays
+            # The run's own sandbox, from the files it starts with: a snapshot's, or the manifest's
+            sandbox = snapshots.prepare_journal(self, sandbox)
         if sandbox is not None:
             env["WSTS_FILES_DIR"] = str(sandbox)
             sandbox.mkdir(parents=True, exist_ok=True)
@@ -528,6 +550,8 @@ class Simulation:
             env["WSTS_SCENARIO_MODE"] = self.scenario_mode
         if self.record:
             env["WSTS_RECORD"] = str(Path(self.record).resolve())
+        if self.journal:
+            snapshots.write_journal_meta(self, env.get("WSTS_START_PAUSED") == "1", self.extra_env)
         sim_log = open(self.log_dir / "sim.log", "w")
         self.sim = subprocess.Popen([str(self.binary), *arguments], stdout=sim_log, stderr=subprocess.STDOUT,
                                     cwd=self.log_dir, env=env)
@@ -569,6 +593,17 @@ class Simulation:
                 # Best effort: the URL only means something once the HTML app answers, and
                 # that app is a child of the GDS, so a failure shows in the GDS log
                 _wait_for_port(self.gds_gui, 15)
+        if self.restore is not None:
+            from . import snapshots
+
+            try:
+                snapshots.start_replay(self, self.restore)
+                # An element of a system in lockstep replays under the system's conductor
+                if self.extra_env.get("WSTS_LOCKSTEP") != "1":
+                    self.restored_status = snapshots.complete_restore(self, self.restore)
+            except BaseException:
+                self.stop()
+                raise
         if self.owns_run_file:
             write_run_file(self.log_dir, self.addresses())
         return self
@@ -1320,8 +1355,28 @@ def run_cli(args) -> int:
 def _run_cli(args) -> int:
     from .system import SYSTEM_FILE
 
+    restore = None
+    if getattr(args, "from_snapshot", None):
+        from . import snapshots
+
+        restore = snapshots.load(args.from_snapshot)
+        if args.directory in (None, "."):
+            args.directory = str(restore.directory)
+        if Path(args.directory).resolve() != restore.directory.resolve():
+            raise WstsError(f"{restore.path} is a snapshot of {restore.directory}, not of {args.directory}")
+        if getattr(args, "stepped", None) is False:
+            raise WstsError("a snapshot is restored in stepped time: --realtime does not go with --from")
+        for option in ("scenario", "record"):
+            if getattr(args, option, None):
+                raise WstsError(f"--{option} does not go with --from: the restored run plays the snapshot's "
+                                "journal, and records one of its own (journal.jsonl in its log directory)")
+    args.restore = restore
     if (Path(args.directory) / SYSTEM_FILE).is_file():
+        if restore is not None and not restore.is_system:
+            raise WstsError(f"{restore.path} is a snapshot of one deployment, and {args.directory} is a system")
         return _run_system_cli(args)
+    if restore is not None and restore.is_system:
+        raise WstsError(f"{restore.path} is a snapshot of a system, and {args.directory} is one deployment")
     for merged, option, single in (("record_merged", "--record-merged", "--record"),
                                    ("scenario_merged", "--scenario-merged", "--scenario")):
         if getattr(args, merged, None):
@@ -1335,8 +1390,10 @@ def _run_cli(args) -> int:
                             record=one_value("record", args.record),
                             log_dir=Path(args.log_dir) if args.log_dir else None,
                             files_dir=Path(args.files_dir) if args.files_dir else None,
-                            env=parse_env(getattr(args, "env", None)).get(None, {}),
-                            auto_ports=getattr(args, "auto_ports", False), stepped=getattr(args, "stepped", None))
+                            env={**(restore.meta.get("env", {}) if restore is not None else {}),
+                                 **parse_env(getattr(args, "env", None)).get(None, {})},
+                            auto_ports=getattr(args, "auto_ports", False), stepped=getattr(args, "stepped", None),
+                            journal=getattr(args, "journal", None), restore=restore)
     is_stepped = simulation.stepped if simulation.stepped is not None else \
         simulation.report.get("time", {}).get("mode") == "stepped"
     if is_stepped and args.duration and simulation.bridge == "none":
@@ -1368,6 +1425,10 @@ def _run_cli(args) -> int:
         raise
     if not args.json:
         print(f"simulation running: {simulation.binary.name} (bridge {simulation.bridge}, logs {simulation.log_dir})")
+        if simulation.restore is not None:
+            print(f"restored from {simulation.restore.path}: tick {simulation.restore.tick}, "
+                  f"{simulation.restore.meta.get('records', 0)} bus records the same as when it was taken; paused there"
+                  + ("" if args.duration else " (resume it through the bridge or the GDS)"))
         if gds:
             print(f"GDS connecting to the deployment on port {simulation.gds_port}" if simulation.gds_is_client
                   else f"GDS listening for the deployment on port {simulation.gds_port}")
@@ -1396,7 +1457,8 @@ def _run_cli(args) -> int:
                 raise WstsError(f"the deployment's tick source did not say how long a tick is within "
                                 f"{TICK_SOURCE_WAIT:g} s of start, so a duration in simulated seconds cannot be turned "
                                 "into ticks: run without --duration and stop it through the bridge, or in real time")
-            ticks = max(1, -(-int(args.duration * 1e9) // period) - now["tick"])
+            # From the start; after a restore, from the snapshot's tick
+            ticks = max(1, -(-int(args.duration * 1e9) // period) - (0 if simulation.restore is not None else now["tick"]))
             watch.request("step", ticks=ticks)
         paused_at = None  # (tick, scenario step) a held run was first seen paused at, and when
         while simulation.sim.poll() is None:
@@ -1465,6 +1527,9 @@ def _run_cli(args) -> int:
         "gds_port": simulation.gds_port if gds else None,
         "gds_gui": simulation.gds_gui_url,
         "final_status": status,
+        **({"restored": {"snapshot": str(simulation.restore.path), "tick": simulation.restore.tick,
+                         "records": simulation.restore.meta.get("records", 0)}} if simulation.restore is not None else {}),
+        **({"journal": str(simulation.log_dir / "journal.json")} if simulation.journal else {}),
         **timing,
         **({"assert": _assert_summary(assertion)} if assertion else {}),
     }
