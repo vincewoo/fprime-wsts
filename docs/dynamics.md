@@ -243,8 +243,11 @@ What it did not test:
 | The example | `plants/thermal.py` on Payload's heater pin, serial sensor, FPGA temperature register and over-temperature switch, in `wsts-system.yaml`. It sits at its surroundings' temperature until the heater is turned on, so the rest of the example behaves as before. The same plant as an FMI 2.0 FMU in `plants/thermal_fmu`, which computes the same bits |
 | Tests | `Wsts/Core` unit tests for the queries and `batch`; `python/tests/test_dynamics.py` (manifests, conversions, a plant stepped by the conductor against stand-in elements), `test_fmi.py` (the example's FMU and an FMI 3.0 one built from C, state, errors); `tests/e2e/test_dynamics.py`: the heater loop closed on the example through a ground command, and two runs of the Python plant and one of the FMU, started hot so that flight software reacts uncommanded, recording the same bytes on both elements |
 
-Measured on the example: a simulated minute of the system with the plant in about 5 s of
-wall time, against about 3 s without it.
+Measured on the example, on the machine it was built on: a simulated minute of the system in
+lockstep in 5.4 to 5.8 s of wall time with the plant (at rest, writing nothing after its
+first exchange), against 5.1 to 5.3 s without it: the reads before each instant. A plant
+whose outputs change every instant adds a `batch` per element and instant, about 0.4 ms each
+(phase 0).
 
 Where it parts from the design above:
 
