@@ -33,6 +33,8 @@ class LoopbackByteStream : public Model, public ByteStreamDevice {
 class ScriptedByteStream : public Model, public ByteStreamDevice {
   public:
     bool set(const std::string& key, const std::string& value) override;
+    //! `text` (the message), `hex`, `period`
+    bool get(const std::string& key, std::string& value) override;
     void onTick(std::uint64_t tick) override;
     void onBytes(const Bytes& tx, ByteSink& reply) override;
     //! Bytes flight software has sent to this device so far
@@ -55,6 +57,8 @@ class ScriptedByteStream : public Model, public ByteStreamDevice {
 class RegisterMapI2c : public Model, public I2cDevice {
   public:
     bool set(const std::string& key, const std::string& value) override;
+    //! "<register>": its byte, in decimal
+    bool get(const std::string& key, std::string& value) override;
     void onTick(std::uint64_t tick) override;
     int transact(std::uint32_t addr, const Bytes& write, Bytes& read) override;
     bool pokeRegister(std::uint8_t reg, std::uint8_t value) override;
@@ -127,10 +131,14 @@ class RegisterFile : public Model, public RegisterDevice {
     void raise(std::uint32_t number);
 
     bool set(const std::string& key, const std::string& value) override;
+    //! `reg.<offset>`: a defined register's value, in decimal
+    bool get(const std::string& key, std::string& value) override;
     void onTick(std::uint64_t tick) override;
     int read(std::uint64_t offset, unsigned width, std::uint64_t& value) override;
     int write(std::uint64_t offset, unsigned width, std::uint64_t value) override;
     bool poke(std::uint64_t offset, std::uint64_t value) override;
+    //! A defined register's value (32 bits); false at an offset not defined
+    bool peek(std::uint64_t offset, std::uint64_t& value) override;
     //! Store every signal's value at `ns` of simulated time (onTick does it at the tick's time)
     void update(std::uint64_t ns);
 
@@ -194,6 +202,8 @@ class RmapTarget : public Model, public PacketDevice {
   public:
     RmapTarget();
     bool set(const std::string& key, const std::string& value) override;
+    //! `mem.<address>`: the byte there, in decimal
+    bool get(const std::string& key, std::string& value) override;
     void onTick(std::uint64_t tick) override;
     void onPacket(const Bytes& packet, PacketSink& reply) override;
 

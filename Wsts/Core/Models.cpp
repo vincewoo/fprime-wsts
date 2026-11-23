@@ -38,6 +38,20 @@ bool ScriptedByteStream::set(const std::string& key, const std::string& value) {
     return false;
 }
 
+bool ScriptedByteStream::get(const std::string& key, std::string& value) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (key == "text") {
+        value.assign(m_message.begin(), m_message.end());
+    } else if (key == "hex") {
+        value = toHex(m_message);
+    } else if (key == "period") {
+        value = std::to_string(m_period);
+    } else {
+        return false;
+    }
+    return true;
+}
+
 void ScriptedByteStream::onTick(std::uint64_t tick) {
     Bytes message;
     std::string endpoint;
@@ -170,6 +184,16 @@ bool RegisterMapI2c::pokeRegister(std::uint8_t reg, std::uint8_t value) {
     return true;
 }
 
+bool RegisterMapI2c::get(const std::string& key, std::string& value) {
+    std::int64_t reg = 0;
+    if (!parseInt(key, reg) || reg < 0 || reg > 255) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    value = std::to_string(m_registers[static_cast<std::size_t>(reg)]);
+    return true;
+}
+
 std::uint8_t RegisterMapI2c::peekRegister(std::uint8_t reg) {
     std::lock_guard<std::mutex> lock(m_mutex);
     return m_registers[reg];
@@ -217,6 +241,26 @@ std::uint32_t RegisterFile::peek(std::uint64_t offset) {
     std::lock_guard<std::mutex> lock(m_mutex);
     const Register* reg = this->find(offset, false);
     return (reg == nullptr) ? 0 : reg->value;
+}
+
+bool RegisterFile::peek(std::uint64_t offset, std::uint64_t& value) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const Register* reg = this->find(offset, false);
+    if (reg == nullptr) {
+        return false;
+    }
+    value = reg->value;
+    return true;
+}
+
+bool RegisterFile::get(const std::string& key, std::string& value) {
+    std::uint64_t offset = 0;
+    std::uint64_t word = 0;
+    if (key.compare(0, 4, "reg.") != 0 || !parseUInt(key.substr(4), offset) || !this->peek(offset, word)) {
+        return false;
+    }
+    value = std::to_string(word);
+    return true;
 }
 
 void RegisterFile::setBits(std::uint64_t offset, std::uint32_t bits) {
@@ -472,6 +516,19 @@ RmapTarget::RmapTarget() : m_memory(4096, 0) {}
 
 bool RmapTarget::inside(std::uint64_t address, std::size_t count) const {
     return address >= m_base && address - m_base <= m_memory.size() && count <= m_memory.size() - (address - m_base);
+}
+
+bool RmapTarget::get(const std::string& key, std::string& value) {
+    std::uint64_t address = 0;
+    if (key.rfind("mem.", 0) != 0 || !parseUInt(key.substr(4), address)) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (!this->inside(address, 1)) {
+        return false;
+    }
+    value = std::to_string(m_memory[static_cast<std::size_t>(address - m_base)]);
+    return true;
 }
 
 bool RmapTarget::set(const std::string& key, const std::string& value) {

@@ -787,6 +787,24 @@ void Control::addModel(const std::string& name, Model* model) {
     m_models[name] = model;
 }
 
+bool Control::modelGet(const std::string& name, const std::string& key, std::string& value, std::string& error) {
+    Model* model = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        const auto it = m_models.find(name);
+        model = (it == m_models.end()) ? nullptr : it->second;
+    }
+    if (model == nullptr) {
+        error = "unknown model '" + name + "'";
+        return false;
+    }
+    if (!model->get(key, value)) {
+        error = "model '" + name + "' has no value '" + key + "' to read";
+        return false;
+    }
+    return true;
+}
+
 void Control::addTickListener(TickListener listener) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_listeners.push_back(std::move(listener));

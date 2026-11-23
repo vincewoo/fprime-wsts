@@ -499,6 +499,26 @@ class WstsBridge:
     def model_set(self, model: str, key: str, value) -> None:
         self.request("model_set", model=model, key=key, value=str(value))
 
+    def model_get(self, model: str, key: str) -> str:
+        """A model's value, as text (Model::get: `text` of a scripted byte stream, a register
+        of a register map, `reg.<offset>` of a register file, `mem.<address>` of an RMAP
+        target). Reading changes nothing and is not recorded."""
+        return str(self.request("model_get", model=model, key=key)["value"])
+
+    def reg_get(self, endpoint: str, offset: int) -> int:
+        """A register of the block on an endpoint, read without a flight read: no read hook,
+        nothing cleared, not on the bus"""
+        return _number(self.request("reg_get", endpoint=endpoint, offset=hex(offset))["value"])
+
+    def batch(self, actions: List[dict]) -> int:
+        """Apply several actions in order between the same two ticks, in one round trip. Each
+        is executed and recorded as if sent by itself. Returns how many were applied; raises
+        BridgeError at the first that fails (the ones before it stay applied)."""
+        if not actions:
+            return 0
+        lines = "\n".join(json.dumps(action, separators=(",", ":")) for action in actions)
+        return int(self.request("batch", actions=lines)["applied"])
+
     # ---- Scenarios and recording ----
 
     def record_start(self, path: str) -> None:

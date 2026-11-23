@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <sstream>
 
 #include <Wsts/Core/Bus.hpp>
 #include <Wsts/Core/Control.hpp>
@@ -319,6 +320,27 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
                 ok = false;
                 error = "unknown endpoint '" + endpoint + "'";
             }
+        } else if (op == "model_get") {
+            // What a dynamics coupling reads between two instants (docs/dynamics.md)
+            std::string value;
+            ok = Control::get().modelGet(request.str("model"), request.str("key"), value, error);
+            if (ok) {
+                response.set("value", value);
+            }
+        } else if (op == "reg_get") {
+            const std::string endpoint = request.str("endpoint");
+            std::uint64_t value = 0;
+            if (!request.has("offset")) {
+                ok = false;
+                error = "reg_get needs 'offset'";
+            } else if (Bus::get().registerPeek(endpoint, request.unum("offset"), value)) {
+                response.setHex("value", value);
+            } else {
+                ok = false;
+                error = "no register block at '" + endpoint + "' with a register at offset " + request.str("offset");
+            }
+        } else if (op == "batch") {
+            ok = this->batch(request, response, error);
         } else if (op == "wait_quiescent") {
             // Block until flight software has finished what it was given, or the time is up
             const std::int64_t timeout = std::max<std::int64_t>(0, std::min<std::int64_t>(request.num("timeout_ms", 1000), 60000));
@@ -342,6 +364,46 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
             response.set("error", error);
         }
         this->send(response);
+    }
+
+    //! Several actions, one per line of `actions`, applied in order between the same two
+    //! ticks (one ActionGate) in one round trip. Each is executed and recorded as if it had
+    //! come by itself. Stops at the first that fails: `applied` says how many were.
+    bool batch(const JsonObj& request, JsonObj& response, std::string& error) {
+        std::vector<JsonObj> actions;
+        std::istringstream lines(request.str("actions"));
+        std::string line;
+        while (std::getline(lines, line)) {
+            if (line.find_first_not_of(" \t\r") == std::string::npos) {
+                continue;
+            }
+            JsonObj action;
+            if (!action.parse(line, error)) {
+                error = "action " + std::to_string(actions.size() + 1) + " of the batch: " + error;
+                return false;
+            }
+            const std::string op = action.str("op");
+            if (op.empty() || op == "batch" || op == "step" || op.rfind("record_", 0) == 0 ||
+                op.rfind("scenario_", 0) == 0) {
+                error = "action " + std::to_string(actions.size() + 1) + " of the batch: '" + op +
+                        "' cannot be batched (batch takes actions that act on the simulation's devices and models)";
+                return false;
+            }
+            actions.push_back(action);
+        }
+        Control::ActionGate gate;
+        Activity::Scope actionWork;
+        std::int64_t applied = 0;
+        for (const JsonObj& action : actions) {
+            if (!Control::get().exec(action, error)) {
+                response.setNum("applied", applied);
+                error = "action " + std::to_string(applied + 1) + " of the batch (" + action.str("op") + "): " + error;
+                return false;
+            }
+            applied++;
+        }
+        response.setNum("applied", applied);
+        return true;
     }
 
     //! Lockstep: the conductor of a system grants this element ticks and waits until they

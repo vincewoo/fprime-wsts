@@ -961,6 +961,16 @@ bool Bus::registerPoke(const std::string& endpoint, std::uint64_t offset, std::u
     return (device != nullptr) && device->poke(offset, value);
 }
 
+bool Bus::registerPeek(const std::string& endpoint, std::uint64_t offset, std::uint64_t& value) {
+    RegisterDevice* device = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        const auto it = m_endpoints.find(endpoint);
+        device = (it == m_endpoints.end()) ? nullptr : it->second.reg;
+    }
+    return (device != nullptr) && device->peek(offset, value);
+}
+
 void Bus::queueRegisterReplay(const std::string& endpoint, std::uint64_t offset, int status, std::uint64_t value) {
     std::lock_guard<std::mutex> lock(m_mutex);
     this->endpointLocked(endpoint).registerReplay[offset].emplace_back(status, value);
