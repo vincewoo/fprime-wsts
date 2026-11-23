@@ -871,7 +871,7 @@ is an action with `time`, in simulated seconds from the start of the scenario, a
 
 An action is applied between two instants, once the system's time has reached its own: the
 injection above after the instant at 1.0 s, before Payload's tick 21 and Cdh's tick 11. Each
-element records it at its own tick. Lines at one time keep their order; blank lines and
+element records it at the tick it takes effect in, its own: Payload's 21. Lines at one time keep their order; blank lines and
 lines starting with `#` are skipped.
 
 ## Environment variables read by a simulated deployment

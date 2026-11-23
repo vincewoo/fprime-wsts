@@ -108,11 +108,12 @@ def test_a_system_scenario_places_actions_on_one_time_base(request, tmp_path):
     run_system(request, tmp_path, "--scenario", scenario, "--record", tmp_path / "run.jsonl", seconds=4)
     payload = [json.loads(line) for line in (tmp_path / "run.payload.jsonl").read_text().splitlines()]
     cdh = [json.loads(line) for line in (tmp_path / "run.cdh.jsonl").read_text().splitlines()]
-    # One second is Payload's tick 20 and Cdh's tick 10: each action at its element's own tick
+    # One second is Payload's tick 20 and Cdh's tick 10. An action is applied after the
+    # instant, so each element records it at the tick it takes effect in: the next of its own
     injected = [m for m in payload if m.get("op") == "inject_bytes"]
-    assert [m["tick"] for m in injected] == [20]
+    assert [m["tick"] for m in injected] == [21]
     assert [(m["op"], m["tick"]) for m in cdh if m.get("op", "").startswith("fault_")] == \
-        [("fault_set", 20), ("fault_clear", 30)]
+        [("fault_set", 21), ("fault_clear", 31)]
     # While the link was cut towards Cdh, nothing of Payload's reached it
     arrived = sorted({m["tick"] for m in cdh if m.get("rec") == "bs_rx" and m.get("src") == "link"})
     assert not [tick for tick in arrived if 20 < tick <= 30]
