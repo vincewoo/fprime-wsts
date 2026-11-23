@@ -37,6 +37,13 @@ surrogates:
     replaces:
       - Drv.LinuxI2cDriver
 
+  # SpaceWire: a driver written to F Prime's passive buffer driver interface
+  # (Drv.PassiveBufferDriver), one packet per buffer. F Prime has no SpaceWire driver of its
+  # own, so a project names its driver under `substitute`. Its endpoint takes `kind: packet`
+  # models, each at a logical address.
+  - surrogate: Wsts.SimSpaceWire
+    replaces: []
+
   - surrogate: Wsts.SimSpi
     replaces:
       - Drv.LinuxSpiDriver
