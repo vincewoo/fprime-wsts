@@ -921,7 +921,8 @@ Replay is repeatable to tick granularity. It is not cycle-exact: see
 4. 32-bit and big-endian build options; adapters to external dynamics simulators. The
    32-bit half is *built* (`cmake.bits`, [reference.md](reference.md#bridging-the-host)):
    `-m32` on the C, C++ and link flags, with a `check-host` probe for the 32-bit runtime.
-   Big-endian builds and the adapters remain.
+   Big-endian builds and the adapters remain; the adapters are drafted in
+   [dynamics.md](dynamics.md).
 5. Systems: GPIO links, datagram and connection semantics for socket links, and merged
    recordings. *Built* (`kind: gpio` and `kind: datagram` links, `--record-merged` and
    `--scenario-merged`, [systems.md](systems.md)). Lockstep time across elements and system

@@ -139,6 +139,7 @@ nav:
       - Fidelity: fidelity.md
       - Stepped Time (draft): stepped-time.md
       - Snapshots (design): snapshots.md
+      - Dynamics Simulators (draft): dynamics.md
       - Systems: systems.md
       - Surrogates and Device Models: surrogate-guide.md
       - Converting Other Targets: vxworks-conversion.md
