@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<fmiModelDescription fmiVersion="3.0" modelName="Thermal3" instantiationToken="{0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f}">
+  <CoSimulation modelIdentifier="thermal3" canHandleVariableCommunicationStepSize="true"
+                canGetAndSetFMUState="true" canSerializeFMUState="true"/>
+  <ModelVariables>
+    <Float64 name="C" valueReference="0" causality="parameter" variability="fixed" start="5.0"/>
+    <Float64 name="P" valueReference="1" causality="parameter" variability="fixed" start="10.0"/>
+    <Float64 name="G" valueReference="2" causality="parameter" variability="fixed" start="0.1"/>
+    <Float64 name="T_env" valueReference="3" causality="parameter" variability="fixed" start="21.5"/>
+    <Float64 name="T0" valueReference="4" causality="parameter" variability="fixed" start="21.5"/>
+    <Float64 name="substep" valueReference="5" causality="parameter" variability="fixed" start="0.01"/>
+    <Float64 name="heater" valueReference="6" causality="input" variability="continuous" start="0"/>
+    <Float64 name="T" valueReference="7" causality="output" variability="continuous"/>
+    <Boolean name="disabled" valueReference="20" causality="parameter" variability="fixed" start="false"/>
+    <Float32 name="gain" valueReference="21" causality="parameter" variability="fixed" start="1"/>
+    <Int32 name="steps" valueReference="22" causality="output" variability="discrete"/>
+  </ModelVariables>
+  <ModelStructure>
+    <Output valueReference="7"/>
+    <Output valueReference="22"/>
+  </ModelStructure>
+</fmiModelDescription>

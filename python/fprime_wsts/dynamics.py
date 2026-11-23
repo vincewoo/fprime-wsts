@@ -290,7 +290,8 @@ def load_plant(spec: dict, base: Path):
         return load_python(path, spec["params"])
     from .fmi import FmuPlant
 
-    return FmuPlant(path, spec["params"], name=spec["name"])
+    return FmuPlant(path, spec["params"], name=spec["name"], inputs=list(spec["inputs"]),
+                    outputs=list(spec["outputs"]))
 
 
 # ---------------------------------------------------------------------------
