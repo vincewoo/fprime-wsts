@@ -1,0 +1,7 @@
+<<<<<<<<<<<<<<<<<  A case for the tests of fprime_wsts.fortytwo  >>>>>>>>>>>>>>>>>
+************************** Simulation Control **************************
+FAST                            !  Time Mode (FAST, REAL, EXTERNAL, or NOS3)
+600.0       0.05                !  Sim Duration, Step Size [sec]
+1.0                             !  File Output Interval [sec]
+0                               !  RNG Seed
+FALSE                           !  Graphics Front End?

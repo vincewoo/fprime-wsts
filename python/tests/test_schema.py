@@ -58,6 +58,9 @@ def check_dynamics(node, system):
     outputs = item["properties"]["outputs"]["additionalProperties"]["oneOf"]
     assert keys(outputs[0]) == element | target_keys(dynamics.OUTPUT_TARGETS) | dynamics.OUTPUT_TRANSFORMS
     assert outputs[1]["items"] == outputs[0]
+    assert keys(item["properties"]["socket"]["oneOf"][1]) == dynamics.SOCKET_KEYS
+    assert keys(item["properties"]["fortytwo"]["oneOf"][1]) == dynamics.FORTYTWO_KEYS
+    assert [branch["required"] for branch in item["oneOf"]] == [[kind] for kind in dynamics.KINDS]
 
 
 def test_the_ids_window_is_a_pair_in_a_deployment_and_a_system():

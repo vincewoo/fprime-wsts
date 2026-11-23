@@ -24,6 +24,8 @@ A plant is one of:
 |---|---|
 | `python` | A Python file that defines `create(params)`. Basilisk, Orekit, or a model of your own go here |
 | `fmu` | An FMI 2.0 or 3.0 co-simulation FMU: a model exported by OpenModelica, Dymola, Simulink, 20-sim and many others |
+| `socket` | A plant served by a process of its own, in any language, over a small JSON protocol |
+| `fortytwo` | NASA GSFC's 42: spacecraft attitude and orbit dynamics, environment, sensors and actuators |
 
 ## The example
 
@@ -135,6 +137,116 @@ python examples/mission-sim/plants/thermal_fmu/build.py      # Thermal.fmu besid
 
 It computes the same bits as the Python plant, and a run with either records the same
 bytes. `fprime_wsts.fmi.build_fmu()` builds one from your own C sources and model description.
+
+## A plant in a process of its own
+
+A plant written in another language, or one you want out of the conductor's process (native
+code that might crash it), is a server the conductor steps over a socket:
+
+```yaml
+dynamics:
+  - name: thermal
+    socket:
+      address: tcp:127.0.0.1:0       # 0: a free port, chosen when the run starts
+      command: [python, -m, fprime_wsts.plant_socket, plants/thermal.py, --address, "{address}"]
+    inputs:  {heater: {element: payload, gpio: heaterPin}}
+    outputs: {T: {element: payload, model: fpga, key: reg.0x0C, scale: 10, round: true}}
+```
+
+The command runs in the manifest's directory and logs to `wsts-logs/dynamics-thermal.log`. The
+protocol is three requests, each a line of JSON with a line in answer: `start`, `step` and
+`stop` ([reference](../reference.md#dynamics)). `fprime_wsts.plant_socket` serves any Python
+plant this way, and is the model for a server in another language. A plant already running
+somewhere is named by its address alone (`socket: tcp:sim-host:6000`).
+
+## 42
+
+[42](https://github.com/ericstoneking/42) simulates a spacecraft's attitude and orbit, its
+environment, sensors and actuators. Its socket interface sends its state as text after every
+step of its own, and, in `TXRX` mode with blocking, waits for a message back before the next:
+the coupling takes that seat.
+
+1. Build 42 (without graphics, if the machine has no display: its `Makefile`'s `GUIFLAG`).
+2. Make a case the coupling can drive from one of 42's own:
+
+    ```bash
+    python -m fprime_wsts.fortytwo ~/42/Tx sim42/attitude --prefix "SC[0].qn" --prefix "SC[0].svb" --step 0.05
+    ```
+
+    It sets FAST time and no graphics, and one `TXRX` server socket that sends the variables
+    whose names start with the prefixes. In the case's spacecraft file, `PASSIVE_FSW` leaves
+    control to your flight software instead of 42's own.
+3. Name it in the manifest:
+
+    ```yaml
+    dynamics:
+      - name: attitude
+        fortytwo: {case: sim42/attitude, executable: ~/42/42}
+        inputs:
+          "SC[0].B[0].wn[2]": {element: payload, model: imu, key: gz, scale: 0.0174533}
+        outputs:
+          "SC[0].svb[0]": {element: payload, model: sunModel, key: x}
+          "SC[0].qn[3]": {element: payload, model: starTracker, key: q4}
+    ```
+
+(`sunModel` and `starTracker` stand for models of your own that take those values.) Inputs
+and outputs are 42's variables as it writes them, a vector's component by its index.
+42 applies only the lines its `TxRxIPC.c` reads. In a stock 42 that is its state (rates,
+attitude, wheel momentum): enough to set a spacecraft's state from flight software's point of
+view, not to command an actuator. To feed wheel torques or thruster commands to 42, generate
+its IPC with them (42's `Database` folder), and name them as inputs.
+
+The plant's step must be a whole number of 42's steps (by default it exchanges before every
+instant, so make 42's step divide the tick). 42 takes one step of its own before the first
+exchange, with no inputs. A run with 42 is as repeatable as one without: two coupled runs of
+a case record the same bytes.
+
+## Basilisk
+
+[Basilisk](https://hanspeterschaub.info/basilisk/) is a Python package, so a Basilisk
+simulation is a Python plant: build it in `create(params)` and advance it in `step()` with
+`ConfigureStopTime()` (an absolute time, in integer nanoseconds) and `ExecuteSimulation()`.
+A sketch, after Basilisk's `scenarioAttitudeFeedbackRW` (not run in the toolkit's tests, which
+do not install Basilisk):
+
+```python
+# plants/attitude_bsk.py
+from Basilisk.architecture import messaging
+from Basilisk.simulation import reactionWheelStateEffector, spacecraft
+from Basilisk.utilities import SimulationBaseClass, macros, simIncludeRW
+
+
+class Attitude:
+    def __init__(self, inertia=(0.02, 0.02, 0.01), dt=0.05):
+        self.sim = SimulationBaseClass.SimBaseClass()
+        self.sim.CreateNewProcess("dyn").addTask(self.sim.CreateNewTask("task", macros.sec2nano(dt)))
+        self.sc = spacecraft.Spacecraft()
+        self.sc.hub.IHubPntBc_B = [[inertia[0], 0, 0], [0, inertia[1], 0], [0, 0, inertia[2]]]
+        wheels = simIncludeRW.rwFactory()
+        wheels.create("Honeywell_HR16", [0, 0, 1], maxMomentum=0.05)
+        self.rw = reactionWheelStateEffector.ReactionWheelStateEffector()
+        wheels.addToSpacecraft("wheels", self.rw, self.sc)
+        self.torque = messaging.ArrayMotorTorqueMsg()
+        self.rw.rwMotorCmdInMsg.subscribeTo(self.torque)
+        for model in (self.rw, self.sc):
+            self.sim.AddModelToTask("task", model)
+        self.sim.InitializeSimulation()
+
+    def step(self, t, dt, inputs):
+        command = messaging.ArrayMotorTorqueMsgPayload()
+        command.motorTorque = [inputs["wheel_torque"]]
+        self.torque.write(command)
+        self.sim.ConfigureStopTime(int(round((t + dt) * 1e9)))
+        self.sim.ExecuteSimulation()
+        return {"rate_z": self.sc.scStateOutMsg.read().omega_BN_B[2]}
+
+
+def create(params):
+    return Attitude(**params)
+```
+
+Basilisk's own tasks should run at the plant's step or a divisor of it, so that a step of the
+plant ends where Basilisk's tasks do.
 
 ## Running
 

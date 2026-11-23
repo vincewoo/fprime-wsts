@@ -44,7 +44,10 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Set
 from .bridge import BridgeError
 from .fpp import WstsError
 
-KINDS = ("python", "fmu")
+KINDS = ("python", "fmu", "socket", "fortytwo")
+#: What the mapping form of the `socket` and `fortytwo` kinds takes
+SOCKET_KEYS = {"address", "command"}
+FORTYTWO_KEYS = {"case", "executable"}
 SPEC_KEYS = {"name", "params", "step", "inputs", "outputs", *KINDS}
 #: Where an input is read from, and what each needs besides `element`
 INPUT_TARGETS = {"gpio": (), "model": ("key",), "register": ("offset",)}
@@ -149,6 +152,51 @@ def _mapping(where: str, entry, targets: Dict[str, tuple], transforms: set, elem
     return mapping
 
 
+def _kind(at: str, kind: str, value) -> dict:
+    """What a plant's kind key says: `path` (a file, or 42's case directory) and the kind's own
+    keys"""
+    if kind in ("python", "fmu"):
+        if not isinstance(value, str) or not value:
+            raise DynamicsError(f"{at}: {kind} is the path of the plant's file, relative to the manifest")
+        if kind == "python" and not value.endswith(".py"):
+            raise DynamicsError(f"{at}: python names a Python file (it defines create(params))")
+        if kind == "fmu" and not value.endswith(".fmu"):
+            raise DynamicsError(f"{at}: fmu names an FMU (a .fmu file)")
+        return {"path": value}
+    known = SOCKET_KEYS if kind == "socket" else FORTYTWO_KEYS
+    first = "address" if kind == "socket" else "case"
+    if isinstance(value, str):
+        value = {first: value}
+    if not isinstance(value, dict):
+        raise DynamicsError(f"{at}: {kind} is {'an address' if kind == 'socket' else 'a case directory'}, or a "
+                            f"mapping with {', '.join(sorted(known))}")
+    unknown = set(value) - known
+    if unknown:
+        raise _keys_error(f"{at}: {kind}", unknown, known)
+    if not isinstance(value.get(first), str) or not value[first]:
+        raise DynamicsError(f"{at}: {kind} needs '{first}'")
+    if kind == "socket":
+        from .plant_socket import parse_address
+
+        try:
+            parse_address(value["address"])
+        except ValueError as error:
+            raise DynamicsError(f"{at}: socket: {error}") from None
+        command = value.get("command")
+        if command is not None and (not isinstance(command, list) or not command
+                                    or not all(isinstance(arg, (str, int, float)) for arg in command)):
+            raise DynamicsError(f"{at}: socket.command is the plant server's command line, a list "
+                                "(run in the manifest's directory; {port} and {address} are replaced)")
+        if value["address"].endswith(":0") and command is None:
+            raise DynamicsError(f"{at}: socket: port 0 (a free port, chosen at run time) needs a 'command' that "
+                                "starts the server on it ({port})")
+        return {"address": value["address"], "command": [str(arg) for arg in command] if command else None}
+    executable = value.get("executable")
+    if executable is not None and (not isinstance(executable, str) or not executable):
+        raise DynamicsError(f"{at}: fortytwo.executable is the path of 42's executable")
+    return {"path": value["case"], "executable": executable}
+
+
 def parse_specs(data, where: str, elements: Optional[List[str]] = None) -> List[dict]:
     """The `dynamics` section of a manifest, checked. `elements` lists a system's elements;
     None for a deployment's manifest. Paths stay as written (relative to the manifest)."""
@@ -172,15 +220,10 @@ def parse_specs(data, where: str, elements: Optional[List[str]] = None) -> List[
             raise _keys_error(at, unknown, SPEC_KEYS)
         kinds = [kind for kind in KINDS if kind in entry]
         if len(kinds) != 1:
-            raise DynamicsError(f"{at}: name the plant's file with one of {', '.join(KINDS)}")
+            raise DynamicsError(f"{at}: say what the plant is with one of {', '.join(KINDS)}")
         kind = kinds[0]
-        path = entry[kind]
-        if not isinstance(path, str) or not path:
-            raise DynamicsError(f"{at}: {kind} is the path of the plant's file, relative to the manifest")
-        if kind == "python" and not path.endswith(".py"):
-            raise DynamicsError(f"{at}: python names a Python file (it defines create(params))")
-        if kind == "fmu" and not path.endswith(".fmu"):
-            raise DynamicsError(f"{at}: fmu names an FMU (a .fmu file)")
+        how = _kind(at, kind, entry[kind])
+        path = how.pop("path", None)
         params = entry.get("params") or {}
         if not isinstance(params, dict) or not all(isinstance(value, (int, float, str, bool))
                                                    for value in params.values()):
@@ -197,7 +240,7 @@ def parse_specs(data, where: str, elements: Optional[List[str]] = None) -> List[
         if not outputs:
             raise DynamicsError(f"{at}: no outputs: a plant gives flight software what its sensors see")
         spec = {
-            "name": name, "kind": kind, "path": path, "params": {str(k): v for k, v in params.items()},
+            "name": name, "kind": kind, "path": path, **how, "params": {str(k): v for k, v in params.items()},
             "step": step,
             "inputs": {str(key): _mapping(f"{at}: input '{key}'", value, INPUT_TARGETS, INPUT_TRANSFORMS, elements)
                        for key, value in inputs.items()},
@@ -256,7 +299,23 @@ def relocate(specs: List[dict], resolve: Callable[[str], Path], rel: Callable[[P
     turns a path of the manifest into a file, `rel` a file into a path of the output."""
     found = []
     for spec in specs:
+        if spec["kind"] == "socket":
+            # The server's command runs in the manifest's directory
+            found.append({**spec, "cwd": rel(resolve("."))} if spec.get("command") else dict(spec))
+            continue
         path = resolve(spec["path"])
+        if spec["kind"] == "fortytwo":
+            missing = [name for name in ("Inp_Sim.txt", "Inp_IPC.txt") if not (path / name).is_file()]
+            if missing:
+                raise DynamicsError(f"plant '{spec['name']}': {spec['path']} is not a case of 42 ({path} has no "
+                                    f"{' or '.join(missing)})")
+            executable = spec.get("executable")
+            if executable and executable.startswith(("./", "../")):
+                executable = rel(resolve(executable))
+                if not executable.startswith("../"):
+                    executable = "./" + executable  # a path of the generated directory, not a name on the PATH
+            found.append({**spec, "path": rel(path), "executable": executable})
+            continue
         if not path.is_file():
             raise DynamicsError(f"plant '{spec['name']}': {spec['path']} not found ({path})")
         found.append({**spec, "path": rel(path)})
@@ -268,7 +327,8 @@ def describe(spec: dict) -> str:
     outputs = ", ".join(sorted(spec["outputs"]))
     inputs = ", ".join(sorted(spec["inputs"])) or "none"
     every = f"every {spec['step']:g} s" if spec.get("step") else "every instant"
-    return f"`{spec['name']}` ({spec['kind']}: `{spec['path']}`), {every}; inputs {inputs}; outputs {outputs}"
+    what = spec["address"] if spec["kind"] == "socket" else spec["path"]
+    return f"`{spec['name']}` ({spec['kind']}: `{what}`), {every}; inputs {inputs}; outputs {outputs}"
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +357,25 @@ def load_python(path: Path, params: dict):
     return plant
 
 
-def load_plant(spec: dict, base: Path):
+def load_plant(spec: dict, base: Path, log_dir: Optional[Path] = None):
+    """The plant a spec names. `base` is what its paths are relative to (the generated
+    directory); `log_dir` where a plant process logs"""
+    log = Path(log_dir) / f"dynamics-{spec['name']}.log" if log_dir else None
+    if spec["kind"] == "socket":
+        from .plant_socket import SocketPlant
+
+        cwd = base / spec["cwd"] if spec.get("cwd") else base
+        return SocketPlant(spec["address"], spec["params"], name=spec["name"], inputs=list(spec["inputs"]),
+                           outputs=list(spec["outputs"]), command=spec.get("command"), cwd=cwd, log=log)
+    if spec["kind"] == "fortytwo":
+        from .fortytwo import FortyTwoPlant
+
+        case = Path(spec["path"]) if Path(spec["path"]).is_absolute() else base / spec["path"]
+        executable = spec.get("executable")
+        if executable and executable.startswith(("./", "../")):
+            executable = str((base / executable).resolve())
+        return FortyTwoPlant(case, executable, name=spec["name"], inputs=list(spec["inputs"]),
+                             outputs=list(spec["outputs"]), params=spec["params"], log=log)
     path = Path(spec["path"])
     if not path.is_absolute():
         path = base / path
@@ -443,13 +521,14 @@ class Coupling:
     # ---- Life ----
 
     def start(self, now_ns: int) -> None:
-        self.plant = load_plant(self.spec, self.base)
+        if self.trace_path is not None:
+            self.trace_path.parent.mkdir(parents=True, exist_ok=True)  # where a plant's process logs, too
+        self.plant = load_plant(self.spec, self.base, self.trace_path.parent if self.trace_path else None)
         self.time_ns = now_ns
         start = getattr(self.plant, "start", None)
         if callable(start):
             start(now_ns / 1e9)
         if self.trace_path is not None:
-            self.trace_path.parent.mkdir(parents=True, exist_ok=True)
             self._trace = self.trace_path.open("w")
 
     def stop(self) -> None:

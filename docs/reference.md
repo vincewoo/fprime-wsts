@@ -658,6 +658,33 @@ step; `dt`: its length; inputs and outputs: dicts by name) and optionally `start
 output), and `params` are set before initialisation. A plant with `step` exchanges at its
 start plus whole steps, holding its inputs over each; one without, before every instant.
 
+A **socket** plant runs in a process of its own (`fprime_wsts.plant_socket`): `socket:` is its
+address (`tcp:<host>:<port>`, `tcp:<port>`, `unix:<path>`), or a mapping with `address` and
+`command`, the server's command line, which is started with the plant in the manifest's
+directory (`python` is the conductor's Python; `{address}` and `{port}` are replaced; port 0 is
+a free one) and logs to `wsts-logs/dynamics-<name>.log`. The protocol is line-delimited JSON:
+
+| Request | Answer |
+|---|---|
+| `{"op": "start", "plant", "t0", "params", "inputs": [names], "outputs": [names]}` | `{"ok": true}` |
+| `{"op": "step", "t", "dt", "inputs": {name: value}}` | `{"ok": true, "outputs": {name: value}}` |
+| `{"op": "stop"}` | `{"ok": true}`; the server may then close |
+
+A failure is `{"ok": false, "error": "..."}`, which stops the conductor with the error. Numbers
+are JSON numbers; a double written in its shortest form reads back as the same double.
+`python -m fprime_wsts.plant_socket <plant.py> --address <address>` serves a Python plant.
+
+A **fortytwo** plant is NASA's 42 (`fprime_wsts.fortytwo`): `fortytwo:` is a case directory of
+42, or a mapping with `case` and `executable` (default: `$FORTYTWO`, else `42` on the `PATH`;
+a path that starts with `./` or `../` is relative to the manifest). The case must run in FAST
+time without graphics and have one `TXRX` socket, a server that blocks, and the others `OFF`
+(`python -m fprime_wsts.fortytwo <case> <new case> --prefix SC[0].qn --step 0.05` makes one so).
+42 runs in its own directory on a copy of the case in the log directory, with a free port.
+Inputs and outputs are 42's variables as it writes them, with an index for a component of a
+vector (`SC[0].svb[1]`, `SC[0].Whl[0].H`); an input vector's other components are those 42
+last sent. An exchange is a whole number of 42's steps (`DTSIM`), and 42's `TIME` must move by
+`DTSIM` at every step. 42 takes no `params`.
+
 Every action a plant writes carries `"via": "<name>"`, which the recording and the journal
 keep. Report: `dynamics`, with each plant's path relative to the generated directory, and a
 line under "Simulation build and run inputs". `generate` checks that the models and

@@ -921,6 +921,65 @@
               ]
             },
             "description": "The plant's outputs by name: where each is written (one place, or a list), before the next instant, when it changes"
+          },
+          "socket": {
+            "description": "A plant served in a process of its own, over the plant socket protocol (fprime_wsts.plant_socket): its address, or the address and the command that starts the server",
+            "oneOf": [
+              {
+                "type": "string",
+                "pattern": "^(tcp:|unix:)"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "address"
+                ],
+                "properties": {
+                  "address": {
+                    "type": "string",
+                    "pattern": "^(tcp:|unix:)",
+                    "description": "tcp:<host>:<port>, tcp:<port> or unix:<path>; port 0: a free port, chosen at run time"
+                  },
+                  "command": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": [
+                        "string",
+                        "number"
+                      ]
+                    },
+                    "description": "The server's command line, run in the manifest's directory; {address} and {port} are replaced"
+                  }
+                }
+              }
+            ]
+          },
+          "fortytwo": {
+            "description": "NASA's 42, stepped over its TXRX socket (fprime_wsts.fortytwo): its case directory, or the case and 42's executable",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "case"
+                ],
+                "properties": {
+                  "case": {
+                    "type": "string",
+                    "description": "The case directory (Inp_Sim.txt, Inp_IPC.txt), relative to the manifest"
+                  },
+                  "executable": {
+                    "type": "string",
+                    "description": "42's executable; default: $FORTYTWO, else 42 on the PATH. A path starting with ./ or ../ is relative to the manifest"
+                  }
+                }
+              }
+            ]
           }
         },
         "oneOf": [
@@ -932,6 +991,16 @@
           {
             "required": [
               "fmu"
+            ]
+          },
+          {
+            "required": [
+              "socket"
+            ]
+          },
+          {
+            "required": [
+              "fortytwo"
             ]
           }
         ]

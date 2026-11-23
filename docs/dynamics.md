@@ -1,13 +1,14 @@
 # Dynamics Simulators (design draft)
 
-**Status: phases 0 to 3 are built.** Adapters that couple a simulation to an external
+**Status: phases 0 to 4 are built.** Adapters that couple a simulation to an external
 dynamics simulator, part of item 4 of the [roadmap](design.md#roadmap). The simulator is
 stepped on the simulation's own time. Sensors read the simulator's state, and what flight
 software commands the actuators feeds back into it. The choices under
 [What to decide](#what-to-decide) were settled as recommended.
 [Phase 0: what it showed](#phase-0-what-it-showed) has the results of the spike;
 [Phases 1 and 2: what is built](#phases-1-and-2-what-is-built) and
-[Phase 3: what is built](#phase-3-what-is-built) say what the toolkit does now. How to use it is in the user guide ([Dynamics Simulators](user-guide/dynamics.md)).
+[Phase 3](#phase-3-what-is-built) and [Phase 4: what is built](#phase-4-what-is-built) say what
+the toolkit does now. How to use it is in the user guide ([Dynamics Simulators](user-guide/dynamics.md)).
 
 ## The problem
 
@@ -291,6 +292,41 @@ What it does **not** do:
 - **Ground commands** are still not journaled. A coupled run commanded from the ground cannot
   be restored past the command; the restore's check says where.
 
+## Phase 4: what is built
+
+Plants outside the conductor's process, and 42.
+
+### The spike against 42
+
+42 (built from `github.com/ericstoneking/42` at `df4fbdf`, October 2026) was driven over its
+socket interface by a client of a few dozen lines before the adapter was written.
+
+| Question | Answer |
+|---|---|
+| Which interface? | Two exist. The standalone-ACS one (`AcApp`) is raw `memcpy` of doubles in a layout 42 generates per build from its `AcTypes.h`, with unframed reads: a client would have to follow the generated layout. The `TX`/`RX`/`TXRX` one is text: a `TIME` line, a line per variable (`SC[0].qn = [...]`), `[ENDMSG]`, and 4 bytes `Ack\0` back. The adapter uses the text one |
+| Can it be stepped? | Yes. With `TXRX`, blocking on and FAST time, 42 sends its state after each step (`DTSIM`) and waits for a message back before the next. 1200 exchanges each moved 42's `TIME` by exactly 0.05 s |
+| What does it cost? | About 1.4 ms an exchange, 42's own computation included |
+| Is it the same twice? | Yes: two runs gave the same bytes |
+| What can be written? | What 42's `TxRxIPC.c` reads, which 42 generates from its `Database`. In a stock 42, state: `SC[0].B[0].wn` (not `SC[0].wn`, which is derived) took effect from the next step and stayed. No actuator commands: they need 42's IPC generated with them |
+| Anything else? | Without its GUI (`GUIFLAG` empty), 42 lacks `CameraModel`, which lives in a GUI file: the spike linked a stub. 42 needs its `Model/` and `World/` directories: it is run in its own directory, the case given by its path |
+
+### What is built
+
+| | |
+|---|---|
+| `socket` | `fprime_wsts.plant_socket`: a plant served by a process of its own over line-delimited JSON (`start`, `step`, `stop`; [reference](reference.md#dynamics)). The server can be started with the plant (`command`, in the manifest's directory, `{address}` and `{port}` replaced, port 0 a free one, its output in the log directory), or be running already. `python -m fprime_wsts.plant_socket` serves any Python plant: a plant out of the conductor's process, and the model for a server in another language. Numbers travel as JSON numbers, so a served plant computes the same bits as in the process |
+| `fortytwo` | `fprime_wsts.fortytwo`: the case checked (FAST, no graphics, one `TXRX` server that blocks, the others `OFF`) and copied into the log directory with a free port and echo off; 42 started in its own directory; its first message (its state after its first step) read when the plant starts; each exchange a whole number of 42's steps, the inputs written as 42's lines (a vector's other components those 42 last sent; a vector 42 does not send has three components, a quaternion four), 42's `TIME` checked at every step; outputs by name and component. `prepare_case` (`python -m fprime_wsts.fortytwo`) makes a coupled case from one of 42's own |
+| Basilisk | A sketch of a Basilisk plant in the user guide ([Dynamics Simulators](user-guide/dynamics.md#basilisk)). Not run: Basilisk could not be installed where this was built |
+| Tests | `test_plant_socket.py`: a served plant gives the same bits as in the process, and the conductor writes the same actions with either; a Unix socket; a server that refuses, does not listen, exits, or answers nonsense; the manifest. `test_fortytwo.py`: against `fortytwo/fake42`, a stand-in that reads a case and speaks 42's protocol (cases, messages, stepping, several of 42's steps an exchange, a time that skips, 42 exiting, the conductor stepping it); and, when `WSTS_42` names the directory 42 was built in, against 42 itself: a case prepared from its `Tx`, a rate given and taken away, two runs the same |
+
+Where it parts from the design:
+
+- **A `fortytwo` plant cannot command actuators of a stock 42**; see above. The adapter writes
+  whatever lines it is given, so a 42 whose IPC reads `SC[0].AC.Whl[0].Tcmd` takes it.
+- **42's first step comes before the coupling's first exchange**, with no inputs: 42 sends
+  before it reads. The plant's time 0 is 42's state after its first `DTSIM`.
+- **Restores re-drive 42 like any plant**: a new 42 on the same case, re-run along the trace.
+
 ## Phases
 
 | Phase | Delivers | Size | Proves |
@@ -299,7 +335,7 @@ What it does **not** do:
 | 1. Coupling (built) | `fprime_wsts.dynamics`: the `Plant` interface, `python` plants, the input and output mappings, coupling in the `Conductor` before each instant (`run --stepped`, `WstsSystem.step`, pytest, MCP all step it), `dynamics` in both manifests and their schemas, the trace file. A single deployment conducted as a system of one. The bridge's `model_get`, `reg_get` and `batch`. The example's thermal plant on Payload's heater, switch, sensor and FPGA register | Medium | The heater loop closed through flight code in an end-to-end test, and two runs the same byte for byte |
 | 2. FMI (built) | The `fmu` kind: FMI 2.0 and 3.0 co-simulation through `ctypes`, parameters, a check of the model description against the manifest. The example's plant as an FMU built from C source with the example | Small to medium | A modelling tool's export runs in the loop |
 | 3. Replay and snapshots (built) | The plant's actions marked (`via`). In a restore, plants re-driven in shadow mode and compared with the journal. Saved state for plants that have it. The plant's trace in the snapshot | Medium | A coupled run snapshotted and restored, and coupling resumed where it was |
-| 4. Other simulators | The `socket` kind and its protocol. A `42` kind after a spike against 42's IPC. A Basilisk plant as a documented example | Medium | An attitude loop against 42 or Basilisk |
+| 4. Other simulators (built) | The `socket` kind and its protocol. A `42` kind after a spike against 42's IPC. A Basilisk plant as a documented example | Medium | An attitude loop against 42 or Basilisk |
 | 5. Tools and docs | The MCP server's view of plants (state, trace), a user guide page, the fidelity page | Small | |
 
 Phases 1 and 2 together made the first version; phase 3 followed by itself, without a change
