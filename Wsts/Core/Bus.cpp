@@ -85,8 +85,14 @@ bool faultDirFromName(const std::string& name, FaultDir& dir) {
 JsonObj Record::toJson() const {
     JsonObj obj;
     obj.setNum("tick", static_cast<std::int64_t>(tick)).set("rec", type).set("endpoint", endpoint).set("src", src);
-    if (type == "bs_tx" || type == "bs_rx") {
+    if (type == "bs_tx" || type == "bs_rx" || type == "pkt_rx") {
         obj.set("data", toHex(data));
+    } else if (type == "pkt_tx") {
+        // The logical address it was routed to; none for a packet without one
+        obj.set("data", toHex(data)).setNum("status", status);
+        if (addr <= 0xFF) {
+            obj.setNum("addr", static_cast<std::int64_t>(addr));
+        }
     } else if (type == "i2c") {
         obj.setNum("addr", static_cast<std::int64_t>(addr)).set("write", toHex(data)).set("read", toHex(rdata));
         obj.setNum("status", status);
@@ -112,6 +118,17 @@ class Bus::ReplySink : public ByteSink {
   public:
     ReplySink(Bus& bus, const std::string& endpoint) : m_bus(bus), m_endpoint(endpoint) {}
     void send(const Bytes& data) override { m_bus.byteStreamInject(m_endpoint, data, "model"); }
+
+  private:
+    Bus& m_bus;
+    const std::string& m_endpoint;
+};
+
+//! Sink handed to packet devices so that their replies flow back through the bus
+class Bus::PacketReplySink : public PacketSink {
+  public:
+    PacketReplySink(Bus& bus, const std::string& endpoint) : m_bus(bus), m_endpoint(endpoint) {}
+    void send(const Bytes& packet) override { m_bus.packetInject(m_endpoint, packet, "model"); }
 
   private:
     Bus& m_bus;
@@ -144,6 +161,11 @@ void Bus::bindRegister(const std::string& endpoint, InterruptHandler handler) {
     this->endpointLocked(endpoint).irq = std::move(handler);
 }
 
+void Bus::bindPacket(const std::string& endpoint, RxHandler handler) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    this->endpointLocked(endpoint).packetRx = std::move(handler);
+}
+
 void Bus::unbind(const std::string& endpoint) {
     std::lock_guard<std::mutex> lock(m_mutex);
     const auto it = m_endpoints.find(endpoint);
@@ -151,6 +173,7 @@ void Bus::unbind(const std::string& endpoint) {
         it->second.rx = nullptr;
         it->second.edge = nullptr;
         it->second.irq = nullptr;
+        it->second.packetRx = nullptr;
     }
 }
 
@@ -199,6 +222,7 @@ void Bus::detach(const std::string& endpoint) {
         it->second.spi = nullptr;
         it->second.gpio = nullptr;
         it->second.reg = nullptr;
+        it->second.packet.clear();
     }
 }
 
@@ -236,6 +260,29 @@ void Bus::detachGpio(const std::string& endpoint, GpioDevice* device) {
     if (it != m_endpoints.end() && it->second.gpio == device) {
         it->second.gpio = nullptr;
     }
+}
+
+void Bus::attachPacket(const std::string& endpoint, std::uint32_t addr, PacketDevice* device) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    this->endpointLocked(endpoint).packet[addr] = device;
+}
+
+void Bus::detachPacket(const std::string& endpoint, std::uint32_t addr, PacketDevice* device) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto it = m_endpoints.find(endpoint);
+    if (it == m_endpoints.end()) {
+        return;
+    }
+    const auto deviceIt = it->second.packet.find(addr);
+    if (deviceIt != it->second.packet.end() && deviceIt->second == device) {
+        it->second.packet.erase(deviceIt);
+    }
+}
+
+bool Bus::packetBound(const std::string& endpoint) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto it = m_endpoints.find(endpoint);
+    return it != m_endpoints.end() && static_cast<bool>(it->second.packetRx);
 }
 
 bool Bus::byteStreamBound(const std::string& endpoint) {
@@ -386,7 +433,8 @@ void Bus::emit(Record& record) {
     {
         // Received bytes, input levels and interrupts come to flight software; the rest is
         // what flight software did
-        const bool toFlight = (record.type == "bs_rx" || record.type == "gpio_in" || record.type == "reg_irq");
+        const bool toFlight = (record.type == "bs_rx" || record.type == "gpio_in" || record.type == "reg_irq" ||
+                               record.type == "pkt_rx");
         std::lock_guard<std::mutex> lock(m_trafficMutex);
         EndpointTraffic& traffic = m_traffic[record.endpoint];
         traffic.transactions++;
@@ -396,7 +444,8 @@ void Bus::emit(Record& record) {
         traffic.errors += (record.status != 0) ? 1 : 0;
         traffic.unanswered += record.unanswered ? 1 : 0;
         traffic.lastTick = record.tick;
-        if (record.type == "i2c" || record.type == "reg_rd" || record.type == "reg_wr") {
+        if (record.type == "i2c" || record.type == "reg_rd" || record.type == "reg_wr" ||
+            (record.type == "pkt_tx" && record.addr <= 0xFF)) {
             AddressTraffic& at = traffic.byAddress[record.addr];
             at.transactions++;
             at.errors += (record.status != 0) ? 1 : 0;
@@ -486,6 +535,112 @@ void Bus::byteStreamInject(const std::string& endpoint, const Bytes& data, const
     this->deliverToFlight(endpoint, copy, src);
     if (effects.duplicate) {
         this->deliverToFlight(endpoint, copy, src);
+    }
+}
+
+// ----------------------------------------------------------------------
+// Packets (SpaceWire)
+// ----------------------------------------------------------------------
+
+bool Bus::packetRoute(const Bytes& packet, std::size_t& start, std::uint32_t& logical) {
+    // Path address bytes are consumed by the routers on the way; the first byte that is not
+    // one is the logical address of the node
+    start = 0;
+    while (start < packet.size() && packet[start] < PACKET_FIRST_LOGICAL) {
+        start++;
+    }
+    if (start >= packet.size()) {
+        return false;
+    }
+    logical = packet[start];
+    return true;
+}
+
+int Bus::packetSend(const std::string& endpoint, const Bytes& packet) {
+    const Effects effects = this->applyFaults(endpoint, FaultDir::TO_DEVICE);
+    delay(effects.delayMs);
+
+    Record record;
+    record.type = "pkt_tx";
+    record.endpoint = endpoint;
+    record.src = "flight";
+    record.data = packet;
+    record.addr = 0x100;  // none, until routed
+    if (effects.error) {
+        record.status = effects.status;
+        this->emit(record);
+        return effects.status;
+    }
+    if (effects.corrupt) {
+        corrupt(record.data, effects.mask);  // addresses too: a corrupted packet may go astray
+    }
+    std::size_t start = 0;
+    std::uint32_t logical = 0;
+    const bool routed = packetRoute(record.data, start, logical);
+    PacketDevice* device = nullptr;
+    if (routed) {
+        record.addr = logical;
+        std::lock_guard<std::mutex> lock(m_mutex);
+        Endpoint& ep = this->endpointLocked(endpoint);
+        auto it = ep.packet.find(logical);
+        if (it == ep.packet.end()) {
+            it = ep.packet.find(PACKET_ANY_ADDRESS);
+        }
+        device = (it != ep.packet.end()) ? it->second : nullptr;
+    }
+    const bool lost = effects.drop || effects.stuck;
+    record.unanswered = !lost && device == nullptr;
+    this->emit(record);
+    if (lost || device == nullptr) {
+        return 0;
+    }
+    // While responses are replayed a model is bypassed; the other end of a link is not
+    if (!m_replay.load() || device->peer()) {
+        const Bytes delivered(record.data.begin() + static_cast<std::ptrdiff_t>(start), record.data.end());
+        PacketReplySink sink(*this, endpoint);
+        device->onPacket(delivered, sink);
+        if (effects.duplicate) {
+            device->onPacket(delivered, sink);
+        }
+    }
+    return 0;
+}
+
+void Bus::deliverPacketToFlight(const std::string& endpoint, Bytes packet, const char* src) {
+    Record record;
+    record.type = "pkt_rx";
+    record.endpoint = endpoint;
+    record.src = src;
+    record.data = std::move(packet);
+    this->emit(record);
+    RxHandler handler;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        handler = this->endpointLocked(endpoint).packetRx;
+    }
+    if (handler) {
+        handler(record.data);
+    }
+}
+
+void Bus::packetInject(const std::string& endpoint, const Bytes& packet, const char* src) {
+    Activity::Scope delivery;  // flight handlers may run on the calling thread
+    // A node's output is replaced by the recording while replaying responses, as a link's is
+    if (m_replay.load() && (std::string(src) == "model" || std::string(src) == "link")) {
+        return;
+    }
+    const Effects effects = this->applyFaults(endpoint, FaultDir::TO_FLIGHT);
+    delay(effects.delayMs);
+    if (effects.drop || effects.error || effects.stuck) {
+        return;
+    }
+    Bytes copy = packet;
+    if (effects.corrupt) {
+        corrupt(copy, effects.mask);
+    }
+    this->deliverPacketToFlight(endpoint, copy, src);
+    if (effects.duplicate) {
+        this->deliverPacketToFlight(endpoint, copy, src);
     }
 }
 

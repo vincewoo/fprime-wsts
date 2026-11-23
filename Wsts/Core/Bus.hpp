@@ -4,7 +4,8 @@
 //
 // The bus sits between surrogate components (the flight-software side) and device models
 // (the simulated-hardware side). Endpoints are named: "uart0", "i2c1", "heaterPin". There
-// are five kinds of traffic: byte streams, I2C, SPI, GPIO and memory-mapped registers. Every
+// are six kinds of traffic: byte streams, I2C, SPI, GPIO, memory-mapped registers and packets
+// (a SpaceWire network). Every
 // transaction passes through the fault table and is reported to the observer (recorder,
 // bridge), which is what makes fault injection and record/replay independent of where a
 // model lives.
@@ -113,6 +114,37 @@ class GpioDevice {
     virtual void onWrite(bool level) = 0;
 };
 
+//! Where a packet device sends packets towards flight software
+class PacketSink {
+  public:
+    virtual ~PacketSink() = default;
+    virtual void send(const Bytes& packet) = 0;
+};
+
+//! A node of a packet network (SpaceWire): an instrument, an RMAP target, a router's far
+//! side. The bus routes each packet flight software sends as SpaceWire routers do: the
+//! leading path address bytes (0 to 31) are consumed on the way, and the first byte left,
+//! the logical address (32 to 255), names the node. The node receives the packet from its
+//! logical address on, which it keeps, as a SpaceWire node's receive buffer does.
+//!
+//! onPacket() is called on the flight thread that sent the packet. A node answers through
+//! `reply`, during the call (an RMAP reply), and may also send unasked, at any time, with
+//! Bus::packetInject (an instrument's science packets, from its onTick()).
+class PacketDevice {
+  public:
+    virtual ~PacketDevice() = default;
+    virtual void onPacket(const Bytes& packet, PacketSink& reply) = 0;
+    //! As for byte streams: the end of a link to another element, which keeps answering
+    //! while recorded responses are replayed
+    virtual bool peer() const { return false; }
+};
+
+//! The logical address of a packet device that receives every logical address no other
+//! device on the endpoint has
+constexpr std::uint32_t PACKET_ANY_ADDRESS = 0xFFFFFFFFu;
+//! The first logical address: lower bytes are path addresses (SpaceWire, ECSS-E-ST-50-12C)
+constexpr std::uint8_t PACKET_FIRST_LOGICAL = 32;
+
 //! Status of a register access: what a RegisterDevice returns, and what faults produce.
 //! Flight register ports carry no status, so the surrogate sees it and flight software
 //! does not: a failed read gives flight all ones (see Bus::registerRead).
@@ -159,10 +191,11 @@ class RegisterDevice {
 //! One bus transaction, as seen by the recorder and bridge subscribers
 struct Record {
     std::uint64_t tick = 0;
-    std::string type;      //!< bs_tx, bs_rx, i2c, spi, gpio_out, gpio_in, reg_rd, reg_wr, reg_irq
+    std::string type;      //!< bs_tx, bs_rx, i2c, spi, gpio_out, gpio_in, reg_rd, reg_wr, reg_irq, pkt_tx, pkt_rx
     std::string endpoint;
     std::string src;       //!< flight, model, link, inject, bridge, replay
-    std::uint64_t addr = 0;  //!< I2C address; register offset (reg_rd, reg_wr); interrupt number (reg_irq)
+    std::uint64_t addr = 0;  //!< I2C address; register offset (reg_rd, reg_wr); interrupt number (reg_irq);
+                             //!< logical address a packet was routed to (pkt_tx)
     Bytes data;            //!< bytes towards the device (or bs_rx payload); a written register
                            //!< value, little-endian, as many bytes as the access is wide
     Bytes rdata;           //!< bytes read back (i2c, spi); a register value read, little-endian
@@ -208,7 +241,7 @@ struct EndpointTraffic {
     std::uint64_t unanswered = 0;     //!< transactions nothing answered
     std::uint64_t faultHits = 0;      //!< transactions a fault was applied to (the endpoint's and its interrupts')
     std::uint64_t lastTick = 0;       //!< tick of the last transaction
-    //! By I2C address (i2c) or register offset (reg_rd, reg_wr)
+    //! By I2C address (i2c), register offset (reg_rd, reg_wr) or logical address (pkt_tx)
     std::map<std::uint64_t, AddressTraffic> byAddress;
 };
 
@@ -240,6 +273,8 @@ class Bus {
     //! thread that reads and writes the registers, as a real interrupt context is not. What
     //! the handler calls must be safe to call from another thread.
     void bindRegister(const std::string& endpoint, InterruptHandler handler);
+    //! Register the handler that delivers packets to flight software, one whole packet a call
+    void bindPacket(const std::string& endpoint, RxHandler handler);
     //! Remove surrogate handlers for an endpoint (surrogate teardown)
     void unbind(const std::string& endpoint);
 
@@ -258,6 +293,13 @@ class Bus {
     //! Flight software writes a register. Writes take the faults armed in direction
     //! TO_DEVICE (or BOTH). A dropped or stuck write returns 0: flight cannot tell.
     int registerWrite(const std::string& endpoint, std::uint64_t offset, unsigned width, std::uint64_t value);
+    //! Flight software sends one packet: routed by its address bytes to the device at its
+    //! logical address (see PacketDevice). Returns 0, or a non-zero driver status from an
+    //! ERROR fault. A packet nothing receives (no logical address, no device there) is
+    //! recorded as unanswered and returns 0: on a network, as on the wire, a sender cannot
+    //! tell. Faults: DROP loses it, CORRUPT XORs every byte (addresses too), DELAY holds it,
+    //! DUPLICATE delivers it twice, ERROR fails the send, STUCK loses it.
+    int packetSend(const std::string& endpoint, const Bytes& packet);
 
     // ---- Device (model) side ----
 
@@ -283,11 +325,23 @@ class Bus {
     void detachSpi(const std::string& endpoint, SpiDevice* device);
     //! Remove `device` from an endpoint if it is still the GPIO device there
     void detachGpio(const std::string& endpoint, GpioDevice* device);
+    //! A node at logical address `addr` (32 to 255), or at PACKET_ANY_ADDRESS
+    void attachPacket(const std::string& endpoint, std::uint32_t addr, PacketDevice* device);
+    //! Remove `device` from an endpoint if it is still the node at `addr` there
+    void detachPacket(const std::string& endpoint, std::uint32_t addr, PacketDevice* device);
+    //! Whether a surrogate is bound to the flight side of a packet endpoint
+    bool packetBound(const std::string& endpoint);
     //! Whether a surrogate is bound to the flight side of a byte stream endpoint
     bool byteStreamBound(const std::string& endpoint);
 
     //! Bytes from the device (or an injection) towards flight software
     void byteStreamInject(const std::string& endpoint, const Bytes& data, const char* src = "model");
+    //! A packet towards flight software, from a node (or an injection). Faults in direction
+    //! TO_FLIGHT apply as for packetSend.
+    void packetInject(const std::string& endpoint, const Bytes& packet, const char* src = "model");
+    //! Where a packet is routed: the index of its logical address after the path address
+    //! bytes, and that address. False when no byte of it is a logical address.
+    static bool packetRoute(const Bytes& packet, std::size_t& start, std::uint32_t& logical);
     //! Drive a GPIO input pin. Fires the surrogate's interrupt handler on a level change.
     void gpioSetInput(const std::string& endpoint, bool level, const char* src = "model");
     //! Last level flight software wrote to a pin
@@ -354,6 +408,8 @@ class Bus {
         std::map<std::uint32_t, I2cDevice*> i2c;
         SpiDevice* spi = nullptr;
         GpioDevice* gpio = nullptr;
+        RxHandler packetRx;
+        std::map<std::uint32_t, PacketDevice*> packet;
         bool outLevel = false;
         bool inLevel = false;
         bool inDriven = false;
@@ -378,12 +434,14 @@ class Bus {
     };
 
     class ReplySink;
+    class PacketReplySink;
 
     Bus() = default;
     Endpoint& endpointLocked(const std::string& name);
     Effects applyFaults(const std::string& endpoint, FaultDir dir);
     void emit(Record& record);
     void deliverToFlight(const std::string& endpoint, Bytes data, const char* src);
+    void deliverPacketToFlight(const std::string& endpoint, Bytes packet, const char* src);
 
     std::mutex m_mutex;
     std::map<std::string, Endpoint> m_endpoints;

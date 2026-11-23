@@ -306,6 +306,7 @@ class Control : public BusObserver {
     bool dispatch(const JsonObj& action, std::string& error);
     bool faultSet(const JsonObj& action, std::string& error);
     bool injectBytes(const JsonObj& action, std::string& error);
+    bool injectPacket(const JsonObj& action, std::string& error);
     bool recordStart(const std::string& path, std::string& error);
     void recordStop();
     void recordLine(JsonObj line);

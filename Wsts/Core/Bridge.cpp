@@ -89,11 +89,56 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
         return pending.status;
     }
 
+    //! As rpc(), for an answer of any length: what the model sent back, whole
+    int rpcData(JsonObj request, Bytes& data) {
+        std::uint32_t rid = 0;
+        {
+            std::lock_guard<std::mutex> lock(m_rpcMutex);
+            rid = m_nextRid++;
+            m_pending[rid] = Pending{};
+        }
+        request.setNum("rid", rid).setNum("rlen", 0);
+        this->send(request);
+        std::unique_lock<std::mutex> lock(m_rpcMutex);
+        const bool answered = m_rpcCv.wait_for(lock, std::chrono::milliseconds(m_rpcTimeoutMs), [this, rid]() {
+            return m_pending[rid].answered || m_done.load();
+        });
+        const Pending pending = m_pending[rid];
+        m_pending.erase(rid);
+        if (!answered || !pending.answered) {
+            data.clear();
+            return 5;
+        }
+        data = pending.data;
+        return pending.status;
+    }
+
   private:
     struct Pending {
         bool answered = false;
         int status = 0;
         Bytes data;
+    };
+
+    //! A node of a packet network whose behaviour is supplied by this client. The client
+    //! answers each packet with the reply packet, or with nothing; what it sends unasked
+    //! goes through inject_packet.
+    class RemotePacket : public PacketDevice {
+      public:
+        RemotePacket(Client& client, std::string endpoint) : m_client(client), m_endpoint(std::move(endpoint)) {}
+        void onPacket(const Bytes& packet, PacketSink& reply) override {
+            JsonObj request;
+            request.set("ev", "pkt_req").set("endpoint", m_endpoint).setNum("addr", packet.empty() ? 0 : packet[0]);
+            request.set("data", toHex(packet));
+            Bytes answer;
+            if (m_client.rpcData(request, answer) == 0 && !answer.empty()) {
+                reply.send(answer);
+            }
+        }
+
+      private:
+        Client& m_client;
+        std::string m_endpoint;
     };
 
     //! I2C device whose behaviour is supplied by this client
@@ -180,6 +225,9 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
         }
         for (const std::unique_ptr<RemoteSpi>& remote : m_spi) {
             Bus::get().detachSpi(remote->endpoint(), remote.get());
+        }
+        for (const AttachedPacket& attached : m_packet) {
+            Bus::get().detachPacket(attached.endpoint, attached.addr, attached.remote.get());
         }
         // A register endpoint has one block: the one this client stood in for answers again
         for (auto it = m_register.rbegin(); it != m_register.rend(); ++it) {
@@ -355,9 +403,21 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
             RegisterDevice* previous = Bus::get().attachRegister(endpoint, remote.get());
             m_register.push_back(AttachedRegister{endpoint, std::move(remote), previous});
             return true;
+        } else if (kind == "packet") {
+            std::uint32_t addr = PACKET_ANY_ADDRESS;
+            if (request.str("addr") != "any") {
+                const std::int64_t given = request.num("addr", -1);
+                if (given < PACKET_FIRST_LOGICAL || given > 0xFF) {
+                    error = "a packet node's addr is a logical address, 32 to 255, or \"any\"";
+                    return false;
+                }
+                addr = static_cast<std::uint32_t>(given);
+            }
+            m_packet.push_back(AttachedPacket{endpoint, addr, std::unique_ptr<RemotePacket>(new RemotePacket(*this, endpoint))});
+            Bus::get().attachPacket(endpoint, addr, m_packet.back().remote.get());
         } else {
-            error = "attach supports kind i2c, spi or register; byte stream and GPIO models use subscribe plus "
-                    "inject_bytes / gpio_force";
+            error = "attach supports kind i2c, spi, register or packet; byte stream and GPIO models use subscribe "
+                    "plus inject_bytes / gpio_force";
             return false;
         }
         return true;
@@ -386,6 +446,12 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
         RegisterDevice* previous;  //!< the block that was on the endpoint before
     };
     std::vector<AttachedRegister> m_register;
+    struct AttachedPacket {
+        std::string endpoint;
+        std::uint32_t addr;
+        std::unique_ptr<RemotePacket> remote;
+    };
+    std::vector<AttachedPacket> m_packet;
 };
 
 // ----------------------------------------------------------------------

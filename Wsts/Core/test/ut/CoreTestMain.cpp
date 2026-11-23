@@ -353,6 +353,160 @@ TEST_F(CoreTest, ByteStreamDropDuplicateAndInject) {
     EXPECT_EQ(received[1], text("AB"));
 }
 
+// ----------------------------------------------------------------------
+// Packets (a SpaceWire network)
+// ----------------------------------------------------------------------
+
+namespace {
+//! A node that keeps what it receives and answers each packet with `reply`, if any
+class TestPacketNode : public Wsts::PacketDevice {
+  public:
+    void onPacket(const Bytes& packet, Wsts::PacketSink& sink) override {
+        packets.push_back(packet);
+        if (!reply.empty()) {
+            sink.send(reply);
+        }
+    }
+    std::vector<Bytes> packets;
+    Bytes reply;
+};
+
+//! Flight software's side of a packet endpoint
+struct PacketFlight {
+    explicit PacketFlight(const std::string& endpoint) {
+        Bus::get().bindPacket(endpoint, [this](const Bytes& packet) { received.push_back(packet); });
+    }
+    std::vector<Bytes> received;
+};
+
+Bytes bytes(std::initializer_list<int> values) {
+    Bytes out;
+    for (int v : values) {
+        out.push_back(static_cast<std::uint8_t>(v));
+    }
+    return out;
+}
+}  // namespace
+
+TEST_F(CoreTest, APacketIsRoutedByItsLogicalAddressAndAnswered) {
+    PacketFlight flight("spw");
+    TestPacketNode instrument;
+    TestPacketNode other;
+    instrument.reply = bytes({0x20, 0x01, 0xAA});
+    Bus::get().attachPacket("spw", 0xFE, &instrument);
+    Bus::get().attachPacket("spw", 0x40, &other);
+    // Two path address bytes, consumed by the routers on the way; the node keeps its logical address
+    EXPECT_EQ(Bus::get().packetSend("spw", bytes({0x03, 0x01, 0xFE, 0x01, 0x42})), 0);
+    ASSERT_EQ(instrument.packets.size(), 1u);
+    EXPECT_EQ(instrument.packets[0], bytes({0xFE, 0x01, 0x42}));
+    EXPECT_TRUE(other.packets.empty());
+    ASSERT_EQ(flight.received.size(), 1u) << "the reply, during the send";
+    EXPECT_EQ(flight.received[0], bytes({0x20, 0x01, 0xAA}));
+    // The route of a packet
+    std::size_t start = 0;
+    std::uint32_t logical = 0;
+    EXPECT_TRUE(Bus::packetRoute(bytes({0x05, 0x41, 0x00}), start, logical));
+    EXPECT_EQ(start, 1u);
+    EXPECT_EQ(logical, 0x41u);
+    EXPECT_FALSE(Bus::packetRoute(bytes({0x01, 0x02}), start, logical)) << "path addresses only";
+}
+
+TEST_F(CoreTest, APacketNothingReceivesIsUnansweredAndAnyAddressTakesTheRest) {
+    PacketFlight flight("spw");
+    EXPECT_EQ(Bus::get().packetSend("spw", bytes({0x50, 0x01})), 0) << "a sender cannot tell";
+    EXPECT_EQ(Bus::get().packetSend("spw", bytes({0x01})), 0) << "no logical address";
+    const auto traffic = Bus::get().traffic().at("spw");
+    EXPECT_EQ(traffic.unanswered, 2u);
+    EXPECT_EQ(traffic.byAddress.at(0x50).unanswered, 1u);
+    EXPECT_EQ(traffic.byAddress.count(0x01), 0u) << "a packet without a logical address has no address";
+    Wsts::SimEvent event;
+    std::vector<std::string> unanswered;
+    while (Control::get().popEvent(event)) {
+        if (event.code == Wsts::SimEvent::UNANSWERED) {
+            unanswered.push_back(event.text + "@" + std::to_string(event.a));
+        }
+    }
+    EXPECT_EQ(unanswered[0], "packet@80");
+
+    TestPacketNode fallback;
+    TestPacketNode named;
+    Bus::get().attachPacket("spw", Wsts::PACKET_ANY_ADDRESS, &fallback);
+    Bus::get().attachPacket("spw", 0x60, &named);
+    (void)Bus::get().packetSend("spw", bytes({0x50, 0x02}));
+    (void)Bus::get().packetSend("spw", bytes({0x60, 0x03}));
+    EXPECT_EQ(fallback.packets, (std::vector<Bytes>{bytes({0x50, 0x02})}));
+    EXPECT_EQ(named.packets, (std::vector<Bytes>{bytes({0x60, 0x03})}));
+    Bus::get().detachPacket("spw", 0x60, &fallback);  // not the node there: nothing happens
+    (void)Bus::get().packetSend("spw", bytes({0x60, 0x04}));
+    EXPECT_EQ(named.packets.size(), 2u);
+    Bus::get().detachPacket("spw", 0x60, &named);
+    (void)Bus::get().packetSend("spw", bytes({0x60, 0x05}));
+    EXPECT_EQ(fallback.packets.size(), 2u) << "the rest of the addresses";
+}
+
+TEST_F(CoreTest, PacketFaultsAndInjection) {
+    PacketFlight flight("spw");
+    TestPacketNode node;
+    Bus::get().attachPacket("spw", 0x40, &node);
+    ASSERT_TRUE(run(R"({"op": "fault_set", "endpoint": "spw", "kind": "error", "arg": 7, "dir": "to_device", "count": 1})"));
+    EXPECT_EQ(Bus::get().packetSend("spw", bytes({0x40, 0x01})), 7);
+    EXPECT_TRUE(node.packets.empty());
+    ASSERT_TRUE(run(R"({"op": "fault_set", "endpoint": "spw", "kind": "drop", "dir": "to_device", "count": 1})"));
+    EXPECT_EQ(Bus::get().packetSend("spw", bytes({0x40, 0x02})), 0);
+    EXPECT_TRUE(node.packets.empty());
+    EXPECT_EQ(Bus::get().traffic().at("spw").unanswered, 0u) << "lost, not unanswered";
+    ASSERT_TRUE(run(R"({"op": "fault_set", "endpoint": "spw", "kind": "duplicate", "dir": "to_device", "count": 1})"));
+    (void)Bus::get().packetSend("spw", bytes({0x40, 0x03}));
+    EXPECT_EQ(node.packets.size(), 2u);
+    // Corrupting the address sends the packet astray
+    ASSERT_TRUE(run(R"({"op": "fault_set", "endpoint": "spw", "kind": "corrupt", "arg": 1, "dir": "to_device", "count": 1})"));
+    (void)Bus::get().packetSend("spw", bytes({0x40, 0x04}));
+    EXPECT_EQ(node.packets.size(), 2u);
+    EXPECT_EQ(Bus::get().traffic().at("spw").byAddress.at(0x41).unanswered, 1u);
+
+    std::string error;
+    EXPECT_FALSE(run(R"({"op": "inject_packet", "endpoint": "spw", "data": ""})", &error));
+    EXPECT_FALSE(run(R"({"op": "inject_packet", "endpoint": "nowhere", "data": "20"})", &error));
+    ASSERT_TRUE(run(R"({"op": "fault_set", "endpoint": "spw", "kind": "drop", "dir": "to_flight", "count": 1})"));
+    ASSERT_TRUE(run(R"({"op": "inject_packet", "endpoint": "spw", "data": "2001"})"));
+    EXPECT_TRUE(flight.received.empty());
+    ASSERT_TRUE(run(R"({"op": "inject_packet", "endpoint": "spw", "data": "200102"})"));
+    EXPECT_EQ(flight.received, (std::vector<Bytes>{bytes({0x20, 0x01, 0x02})}));
+}
+
+TEST_F(CoreTest, PacketsAreRecordedAndTheirAnswersReplayed) {
+    const std::string path = tempFile("packets.jsonl");
+    PacketFlight flight("spw");
+    TestPacketNode node;
+    node.reply = bytes({0x20, 0x99});
+    Bus::get().attachPacket("spw", 0x40, &node);
+    ASSERT_TRUE(run(R"({"op": "record_start", "path": ")" + path + R"("})"));
+    Control::get().onTick();
+    (void)Bus::get().packetSend("spw", bytes({0x02, 0x40, 0x07}));
+    ASSERT_TRUE(run(R"({"op": "record_stop"})"));
+    std::ifstream file(path);
+    std::vector<std::string> lines;
+    std::string line;
+    while (std::getline(file, line)) {
+        lines.push_back(line);
+    }
+    ASSERT_EQ(lines.size(), 2u);
+    EXPECT_EQ(lines[0], R"({"addr":64,"data":"024007","endpoint":"spw","rec":"pkt_tx","src":"flight","status":0,"tick":1})");
+    EXPECT_EQ(lines[1], R"({"data":"2099","endpoint":"spw","rec":"pkt_rx","src":"model","tick":1})");
+
+    // Responses: the recorded answer reaches flight software, and the node is bypassed
+    flight.received.clear();
+    node.packets.clear();
+    ASSERT_TRUE(run(R"({"op": "scenario_load", "path": ")" + path + R"(", "mode": "responses"})"));
+    ASSERT_TRUE(run(R"({"op": "scenario_start"})"));
+    (void)Bus::get().packetSend("spw", bytes({0x02, 0x40, 0x07}));
+    EXPECT_TRUE(node.packets.empty());
+    EXPECT_TRUE(flight.received.empty()) << "the node's live answer is not given";
+    Control::get().onTick();
+    EXPECT_EQ(flight.received, (std::vector<Bytes>{bytes({0x20, 0x99})}));
+    std::remove(path.c_str());
+}
+
 TEST_F(CoreTest, GpioStuckFault) {
     ASSERT_TRUE(run(R"({"op": "fault_set", "endpoint": "pin", "kind": "stuck", "arg": 1})"));
     bool level = false;

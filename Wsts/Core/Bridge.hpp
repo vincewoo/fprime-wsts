@@ -7,8 +7,11 @@
 //   client -> sim   {"id": 7, "op": "<action>", ...}       any Control action, plus:
 //                     status                               -> tick, paused, counters, endpoints, links
 //                     subscribe                            start streaming bus records and events
-//                     attach   endpoint kind(i2c|spi|register) [addr]   become the device model
-//                     reply    rid status data             answer an i2c_req / spi_req / reg_req
+//                     attach   endpoint kind(i2c|spi|register|packet) [addr]   become the device model
+//                                                          (packet: the node at logical address addr,
+//                                                          or "any")
+//                     reply    rid status data             answer an i2c_req / spi_req / reg_req /
+//                                                          pkt_req (data: the reply packet, or empty)
 //                     gpio_get endpoint                    -> level flight software last wrote
 //   sim -> client   {"id": 7, "ok": true, ...} | {"id": 7, "ok": false, "error": "..."}
 //                   {"ev": "rec", ...}        bus transaction (after subscribe)
@@ -17,6 +20,8 @@
 //                   {"ev": "spi_req", "rid": 4, "endpoint": .., "write": hex, "rlen": n}
 //                   {"ev": "reg_req", "rid": 5, "endpoint": .., "access": "read"|"write",
 //                    "offset": "0x..", "width": 4|8, "value": "0x.." (write), "rlen": width|0}
+//                   {"ev": "pkt_req", "rid": 6, "endpoint": .., "addr": n, "data": hex, "rlen": 0}
+//                    (a packet for the node, from its logical address on)
 // ======================================================================
 #ifndef WSTS_CORE_BRIDGE_HPP
 #define WSTS_CORE_BRIDGE_HPP
