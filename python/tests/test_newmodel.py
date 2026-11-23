@@ -104,7 +104,7 @@ def test_a_model_name_is_used_once(project):
 def test_bad_arguments(project):
     with pytest.raises(WstsError, match="not a C\\+\\+ class name"):
         new_model(project, "2fast", "spi")
-    with pytest.raises(WstsError, match="for I2C models only"):
+    with pytest.raises(WstsError, match="for I2C and packet models only"):
         new_model(project, "Pin", "gpio", address="0x10")
     with pytest.raises(WstsError, match="7-bit"):
         new_model(project, "Far", "i2c", address="0x99")
