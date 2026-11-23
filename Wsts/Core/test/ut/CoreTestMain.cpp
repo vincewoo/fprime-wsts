@@ -2572,6 +2572,34 @@ TEST_F(CoreTest, InLockstepATickIsTakenOnlyWhenTheConductorGrantsOne) {
     EXPECT_FALSE(control.grant(1));
 }
 
+TEST_F(CoreTest, InLockstepAScenarioAppliesItsActionsBetweenTicksToo) {
+    // An element's journal replays in lockstep: its actions before the tick they were recorded
+    // at, also while the element waits for the conductor, and a pause it holds is the conductor's
+    Control& control = Control::get();
+    std::vector<std::uint64_t> received_at;
+    Bus::get().bindByteStream("probe", [&received_at](const Bytes&) { received_at.push_back(Control::get().tick()); });
+    const std::string path = tempFile("lockstep-scenario.jsonl");
+    {
+        std::ofstream file(path);
+        file << R"({"tick": 3, "op": "inject_bytes", "endpoint": "probe", "text": "x"})" << "\n";
+        file << R"({"tick": 5, "op": "pause"})" << "\n";
+    }
+    ASSERT_TRUE(run(R"({"op": "set_stepped", "stepped": true, "lockstep": true})"));
+    ASSERT_TRUE(run(R"({"op": "scenario_load", "path": ")" + path + R"("})"));
+    ASSERT_TRUE(run(R"({"op": "scenario_start"})"));
+    Ticker ticker(10);
+    ASSERT_TRUE(control.grant(4));
+    ASSERT_TRUE(control.awaitGranted(std::chrono::milliseconds(2000)));
+    EXPECT_EQ(received_at, (std::vector<std::uint64_t>{2})) << "between the second tick and the third";
+    // The pause is due before tick 5: applied while the element waits for its next grant
+    ASSERT_TRUE(eventually([&control]() { return control.paused(); }));
+    EXPECT_EQ(control.tick(), 4u);
+    // The scenario completes once its last action has been applied: just after the pause shows
+    EXPECT_TRUE(eventually([&control]() { return control.status().scenarioState == Wsts::ScenarioState::COMPLETED; }));
+    ASSERT_TRUE(run(R"({"op": "set_stepped", "stepped": false})"));
+    std::remove(path.c_str());
+}
+
 namespace {
 //! Two ends of a link in this one process, on the endpoints linkA and linkB
 struct LinkedPair {

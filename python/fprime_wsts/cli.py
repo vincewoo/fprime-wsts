@@ -215,6 +215,49 @@ def cmd_run(args: argparse.Namespace) -> int:
     return run_cli(args)
 
 
+def cmd_snapshot(args: argparse.Namespace) -> int:
+    """Snapshot a running simulation (docs/snapshots.md)"""
+    import json
+
+    from . import snapshots
+
+    snapshot = snapshots.take(Path(args.directory), Path(args.path), resume=args.resume, timeout=args.timeout)
+    if args.json:
+        print(json.dumps(snapshot.describe(), indent=2))
+    elif snapshot.is_system:
+        ticks = ", ".join(f"{name} at tick {tick}" for name, tick in snapshot.meta["elements"].items())
+        print(f"snapshot of {snapshot.meta['system']} at {snapshot.meta['sim_seconds']:g} s of simulated time "
+              f"({ticks}): {snapshot.path}")
+    else:
+        print(f"snapshot of {snapshot.meta['deployment']} at tick {snapshot.tick} "
+              f"({snapshot.meta['sim_seconds']:g} s of simulated time, {snapshot.meta['records']} bus records): "
+              f"{snapshot.path}")
+    if not args.json:
+        print(f"restore it with: fprime-wsts run --from {snapshot.path}")
+    return 0
+
+
+def cmd_snapshots(args: argparse.Namespace) -> int:
+    """The snapshots under a directory, or what one snapshot holds"""
+    import json
+
+    from . import snapshots
+
+    path = Path(args.directory)
+    found = [snapshots.load(path)] if (path / snapshots.SNAPSHOT_META).is_file() else snapshots.find(path)
+    if args.json:
+        print(json.dumps([s.describe() for s in found], indent=2))
+        return 0
+    if not found:
+        print(f"no snapshots under {path}")
+    for snapshot in found:
+        what = snapshot.meta.get("system") or snapshot.meta.get("deployment")
+        where = (", ".join(f"{n} {t}" for n, t in snapshot.meta["elements"].items()) if snapshot.is_system
+                 else f"tick {snapshot.tick}")
+        print(f"{snapshot.path}  {what}  {snapshot.meta.get('sim_seconds', 0):g} s ({where})  {snapshot.meta.get('created', '')}")
+    return 0
+
+
 def _bridges(directory: Path, element=None) -> dict:
     """{name: bridge address} of the simulation running from a generated directory: every
     element of a system (or the one asked for), or the one deployment"""
@@ -370,7 +413,7 @@ def cmd_scaffold(args: argparse.Namespace) -> int:
 #: The argument that names what a command works on, for those that work on a simulation project
 TARGETS = {"generate": "manifest", "check-host": "target", "build": "target", "report": "directory",
            "run": "directory", "status": "directory", "ctl": "directory", "scaffold": "output",
-           "new-model": "project"}
+           "new-model": "project", "snapshot": "directory"}
 
 
 def _target_of(args: argparse.Namespace):
@@ -493,8 +536,34 @@ def main(argv=None) -> int:
     run.add_argument("--env", action="append", metavar="NAME=VALUE",
                      help="environment variable for the simulated deployment, in addition to the manifest's run.env "
                           "(repeatable; for a system, <element>.NAME=VALUE sets it for one element)")
+    run.add_argument("--journal", dest="journal", action="store_true", default=None,
+                     help="keep a journal of the run's inputs, so that it can be snapshotted (fprime-wsts snapshot) "
+                          "and restored (--from). Needs stepped time. Default: time.journal of the manifest")
+    run.add_argument("--from", dest="from_snapshot", metavar="SNAPSHOT",
+                     help="start from a snapshot: the same build replays the snapshot's journal in stepped time, "
+                          "checks that it does the same to the byte, and holds paused at its tick (or runs "
+                          "--duration more). The directory defaults to the snapshot's")
     run.add_argument("--json", action="store_true", help="print a JSON summary when the run ends")
     run.set_defaults(handler=cmd_run)
+
+    snapshot = commands.add_parser(
+        "snapshot", help="snapshot a running simulation that keeps a journal (run --stepped --journal)",
+        description="Pause a running simulation between two ticks and save its journal so far: a later run starts "
+                    "from it with fprime-wsts run --from PATH. A system is snapshotted as a whole, at one instant.")
+    snapshot.add_argument("directory", help="generated simulation deployment or system directory (or its log directory)")
+    snapshot.add_argument("path", help="the snapshot's directory, which must not exist")
+    resume = snapshot.add_mutually_exclusive_group()
+    resume.add_argument("--resume", dest="resume", action="store_true", default=None,
+                        help="let the run go on afterwards (default: if it was running)")
+    resume.add_argument("--stay-paused", dest="resume", action="store_false", help="leave the run paused")
+    snapshot.add_argument("--timeout", type=float, default=30.0, help="seconds to wait for the run to come to rest")
+    snapshot.add_argument("--json", action="store_true")
+    snapshot.set_defaults(handler=cmd_snapshot)
+
+    listing = commands.add_parser("snapshots", help="list the snapshots under a directory, or describe one")
+    listing.add_argument("directory", nargs="?", default=".", help="a directory of snapshots, or one snapshot")
+    listing.add_argument("--json", action="store_true")
+    listing.set_defaults(handler=cmd_snapshots)
 
     status = commands.add_parser("status", help="show the state of a running simulation: tick, run state, faults, bus counters")
     status.add_argument("directory", nargs="?", default=".", help="generated simulation deployment or system directory")

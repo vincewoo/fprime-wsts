@@ -1,12 +1,14 @@
-# Snapshots (design draft)
+# Snapshots (design)
 
-**Status: phases 0 and 1 are built; snapshots themselves are not.** This page proposes
-snapshots of a running simulation that a later run can be restored from, so a test can
-start where a long start-up, a commissioning sequence or a fault left off, and a fault
-campaign can branch many runs from one instant. [Phase 0: what it showed](#phase-0-what-it-showed)
-has the results of the spike, which changed the design in two places;
-[Phase 1: what is built](#phase-1-what-is-built) is exact replay in stepped time, which the
-rest stands on. [What to decide](#what-to-decide) lists the choices that are open.
+**Status: built, except for ground commands, which are not journaled.** Snapshots of a running
+simulation that a later run is restored from, so a test can start where a long start-up, a
+commissioning sequence or a fault left off, and a fault campaign can branch many runs from
+one instant. How to use them is in the user guide ([Snapshots](user-guide/snapshots.md)).
+[Phase 0: what it showed](#phase-0-what-it-showed) has the results of the spike, which
+changed the design in two places; [Phase 1: what is built](#phase-1-what-is-built) is exact
+replay in stepped time, which the rest stands on; [Phases 2 to 4: what is built](#phases-2-to-4-what-is-built)
+are the snapshots themselves, for a deployment and for a system, and where they part from
+the design below.
 
 ## The problem
 
@@ -89,8 +91,8 @@ fix:
   the action causes finished before the tick, and also while paused, so that a replay of a
   paused run takes its first step itself. A `pause` there leaves the tick untaken. Recorded
   device answers (`responses` mode) are still applied at the start of their tick, where
-  they were recorded. In real time and in lockstep, scenarios run as before, at the start
-  of each tick.
+  they were recorded. In real time scenarios run as before, at the start of each tick;
+  in lockstep, between ticks too (since phase 3).
 - **How a run is driven stays out of flight software in stepped time.** `Wsts.SimControl`
   posts `SimPaused`, `SimResumed`, `SimRateSet` and the scenario and recording events to
   flight software in real time only, and writes `SimRunState`, `SimTimeScale` and the
@@ -101,6 +103,49 @@ fix:
   original, the hub's events and telemetry included (6784 records, 5281 of them on the hub,
   in the run it was built with). `InSteppedTimeAReplayAppliesRecordedActionsBetweenTheSameTicks`
   holds the order in the core's unit tests.
+
+## Phases 2 to 4: what is built
+
+- **The journal** (`fprime-wsts run --stepped --journal`, `time.journal: true`): the run's
+  recording from its first tick (`<log dir>/journal.jsonl`), a copy of the files flight
+  software starts with (`journal-files/`), and `journal.json`: the SHA-256 of the build's
+  executable, whether the run started paused, its environment. A journaled run's flight
+  software gets a sandbox of its own, `<log dir>/files`, filled from `files.sandbox` when the
+  manifest has one: by default flight software's files land in the log directory, where an
+  earlier run's would change how this one starts. A journal needs stepped time (lockstep, for
+  a system), and `run` refuses one otherwise.
+- **A snapshot** (`fprime-wsts snapshot <dir> <path>`, `snapshots.take`, the MCP `snapshot`
+  tool) pauses the run between two ticks, waits until it is quiescent, and copies the journal
+  so far, which ends with that pause, the files it started with, and `snapshot.json` (the
+  build, the tick, the period, how many bus records). A run that was running goes on. A
+  system is paused as a whole, and copied once the conductor holds and nothing is
+  outstanding: one snapshot of every element, at its own tick of one instant.
+  `fprime-wsts snapshots <dir>` lists them.
+- **A restore** (`fprime-wsts run --from <path>`, the `wsts_restore` fixture, `run_start` with
+  `from_snapshot`) refuses another build, starts the same one held on a copy of the files,
+  loads the journal as a scenario once the run's Python models are on their endpoints (not
+  at start-up, where a journal could let the run go before they are), and lets it replay as
+  fast as the host computes: the run let go as the original was, paused and stepped as a
+  client paused and stepped it, faults and injections where they were. It stops at the
+  snapshot's pause. Then every bus record of the replay is compared with the journal's
+  (`snapshots.compare`); the first that differs ends the run with its index, tick, endpoint
+  and both records. The restored run keeps a journal of its own, from tick 0, so a snapshot
+  of it is a snapshot like any other. `--duration` counts from the snapshot.
+- **A system restore** starts every element on its journal; the conductor grants each the
+  ticks it lacks (`Conductor.advance_to`) rather than holding at the first replayed pause:
+  in the run that was snapshotted, the pause reached the elements one after another, and an
+  element in lockstep takes a granted tick paused or not. It waits until every element has
+  replayed its pause, then checks each. For that, an element's scenario now applies its
+  actions between ticks in lockstep too, as in plain stepped time.
+- **Where it parts from the design:** the GDS of a restored run starts with it, and sees the
+  replay's downlink, rather than starting at the end; and **ground commands are not
+  journaled**. A command from the GDS reaches flight software over the deployment's own
+  ground link, outside the bridge, so the journal does not hold it: a restore of a run that
+  was given one differs from the record the command first changed, and the check says so (its
+  message names ground commands among the causes). Journaling them means holding the run at
+  an instant to send each, and sending it again through a GDS at the same instant of the
+  restore; that is left for later. Commands of `Wsts.SimControl` are actions, and are in the
+  journal.
 
 ## Design
 
@@ -154,9 +199,9 @@ fprime-wsts run wsts/MyDeployment --from after-boot --gds   # paused at that tic
 ```
 
 ```python
-snap = sim.snapshot("after-boot")
+snap = snapshots.take("wsts/MyDeployment", "after-boot")   # from fprime_wsts import snapshots
 for fault in campaign:
-    with wsts_restore(snap) as branch:   # a new run, at the snapshot's tick
+    with wsts_restore(snap) as branch:   # a new run, held at the snapshot's tick
         branch.fault_set(**fault)
         branch.step(200)
 ```
@@ -167,9 +212,9 @@ for fault in campaign:
 |---|---|---|---|
 | 0. Spike | A recorded stepped run replayed to the same tick and compared | Small | Done: the approach holds; two corrections ([above](#phase-0-what-it-showed)) |
 | 1. Exact replay | Actions recorded at the tick they take effect in; scenario steps between ticks; how a run is driven kept out of flight software; a test that a stepped run driven from a bridge client replays to the same bytes, hub included | Small to medium | Built ([above](#phase-1-what-is-built)) |
-| 2. One deployment | The journal, `snapshot`, `run --from` with the check, the Python and pytest API, ground commands through the toolkit | Medium | A test starts from a saved state, and many runs branch from one |
-| 3. Systems | System snapshots and restore through the conductor | Medium | The example system restored end to end |
-| 4. Tools | The MCP tools, `fprime-wsts snapshot` listing and pruning, docs | Small | An agent can branch a campaign |
+| 2. One deployment | The journal, `snapshot`, `run --from` with the check, the Python and pytest API, ground commands through the toolkit | Medium | Built, but for ground commands ([above](#phases-2-to-4-what-is-built)) |
+| 3. Systems | System snapshots and restore through the conductor | Medium | Built: the example system restored end to end (`tests/e2e/test_snapshots.py`) |
+| 4. Tools | The MCP tools, `fprime-wsts snapshot` and `snapshots` (listing), docs | Small | Built; there is no pruning: a snapshot is a directory to delete |
 
 ## Risks
 
@@ -186,6 +231,10 @@ for fault in campaign:
   host paths) are not copied and may differ.
 
 ## What to decide
+
+*Settled: 1 on request, with `time.journal` for a default; 2 through the toolkit, though no
+ground command is journaled yet ([above](#phases-2-to-4-what-is-built)); 3 yes, and built;
+4 systems too.*
 
 1. **Journal always, or on request?** Always (every stepped run can be snapshotted later)
    costs the recording's disk and time on every run. On request (`--journal`) costs

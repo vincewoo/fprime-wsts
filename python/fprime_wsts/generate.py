@@ -2000,6 +2000,7 @@ def build_report(plan: Plan, model: fpp.Model, manifest: Manifest, libraries: Di
         "flight_toolchain": settings.default_toolchain,
         "sim_toolchain": "native (Linux)",
         "time": {"mode": manifest.time_mode, **({"epoch": manifest.time_epoch} if manifest.time_epoch else {}),
+                 **({"journal": True} if manifest.time_journal else {}),
                  "tick_source": next(
             (s.instance.name for s in plan.substitutions if s.surrogate.name == "Wsts.SimTick"), "internal ticker"),
                  **({"time_source": time_source} if time_source else {})},

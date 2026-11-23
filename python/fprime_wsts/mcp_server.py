@@ -59,6 +59,7 @@ Things that surprise:
 EVENT_LIMIT = 20000  # events and telemetry samples each GDS feed keeps
 RECORD_LIMIT = 20000  # bus records kept per bridge connection
 START_TIMEOUT = 180.0  # seconds a run may take to come up
+RESTORE_TIMEOUT = 900.0  # ... when it is restored from a snapshot first: its journal replays
 STOP_TIMEOUT = 60.0
 
 
@@ -568,7 +569,15 @@ class Session:
     def run_start(self, directory: str, gds: bool = True, stepped: Optional[bool] = None,
                   duration: Optional[float] = None, scenario: Optional[List[str]] = None,
                   record: Optional[List[str]] = None, env: Optional[List[str]] = None,
-                  gds_gui: bool = False, timeout: float = START_TIMEOUT) -> dict:
+                  gds_gui: bool = False, timeout: Optional[float] = None, journal: bool = False,
+                  from_snapshot: Optional[str] = None) -> dict:
+        if from_snapshot:
+            from . import snapshots
+
+            snapshot = snapshots.load(self._path(from_snapshot))
+            directory = directory or str(snapshot.directory)
+        if timeout is None:
+            timeout = RESTORE_TIMEOUT if from_snapshot else START_TIMEOUT
         run = self.run(directory)
         with self._lock:
             if run.state() in ("running", "starting"):
@@ -590,6 +599,10 @@ class Session:
                 command += ["--record", value]
             for value in env or []:
                 command += ["--env", value]
+            if journal:
+                command.append("--journal")
+            if from_snapshot:
+                command += ["--from", str(self._path(from_snapshot))]
             stamp = time.strftime("%Y%m%d-%H%M%S")
             run.output = self.workdir / f"{run.directory.name}-{stamp}.json"
             run.errors = self.workdir / f"{run.directory.name}-{stamp}.log"
@@ -650,6 +663,13 @@ class Session:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
+
+    def snapshot(self, path: str, target: Optional[str] = None, resume: Optional[bool] = None) -> dict:
+        """Snapshot a run that keeps a journal (docs/snapshots.md)"""
+        from . import snapshots
+
+        run = self.run(target)
+        return snapshots.take(run.directory, self._path(path), resume=resume).describe()
 
     def run_stop(self, target: Optional[str] = None, force: bool = False, timeout: float = STOP_TIMEOUT) -> dict:
         run = self.run(target)
@@ -1056,17 +1076,26 @@ def _tools(session: Session) -> List[Callable]:
         configure again from nothing. define: CMake options NAME=VALUE. Takes minutes the first time."""
         return s.build(target, element, fresh, define)
 
-    def run_start(directory: str, gds: bool = True, stepped: Optional[bool] = None,
+    def run_start(directory: str = "", gds: bool = True, stepped: Optional[bool] = None,
                   duration: Optional[float] = None, scenario: Optional[List[str]] = None,
                   record: Optional[List[str]] = None, env: Optional[List[str]] = None,
-                  gds_gui: bool = False) -> dict:
+                  gds_gui: bool = False, journal: bool = False, from_snapshot: Optional[str] = None) -> dict:
         """Start a built simulation (a generated deployment or system directory) on free ports, with a
         headless GDS unless gds=false, and return once it is up. It runs until run_stop, until duration
         seconds have passed, or until this server exits. stepped: true for stepped time (lockstep for a
         system), false for real time, omitted for the manifest's choice. scenario/record/env take the
         values of `fprime-wsts run --scenario/--record/--env` ([element=]file, NAME=VALUE). gds_gui: also
-        serve the GDS web UI (its URL is returned)."""
-        return s.run_start(directory, gds, stepped, duration, scenario, record, env, gds_gui)
+        serve the GDS web UI (its URL is returned). journal: keep a journal of the run's inputs (stepped
+        time), so that it can be snapshotted. from_snapshot: start from a snapshot instead (directory may
+        then be omitted): its journal replays and is checked, and the run is held paused at its tick."""
+        return s.run_start(directory, gds, stepped, duration, scenario, record, env, gds_gui,
+                           journal=journal, from_snapshot=from_snapshot)
+
+    def snapshot(path: str, run: Optional[str] = None, resume: Optional[bool] = None) -> dict:
+        """Snapshot a run started with journal=true (and stepped time; a system in lockstep, as a whole): it is
+        paused between two ticks and its journal so far saved at path, a new directory. resume: let it go on
+        afterwards (default: if it was running). Branch runs from it with run_start(from_snapshot=path)."""
+        return s.snapshot(path, run, resume)
 
     def run_stop(run: Optional[str] = None, force: bool = False) -> dict:
         """Stop a run in order (deployment, GDS, models) and return its summary: exit codes, final ticks,
@@ -1212,7 +1241,7 @@ def _tools(session: Session) -> List[Callable]:
         file, and which kept instance to substitute with a surrogate."""
         return s.last_assert(run, element)
 
-    return [build, run_start, run_stop, runs_list, status, pause, resume, set_rate, step, wait_quiescent,
+    return [build, run_start, run_stop, runs_list, snapshot, status, pause, resume, set_rate, step, wait_quiescent,
             fault_set, fault_clear, inject, gpio, register_set, raise_irq, model_set, scenario_run, action,
             bus_records, dictionary, send_command, wait_event, recent_events, read_telemetry, tail_log,
             last_assert]

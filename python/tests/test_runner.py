@@ -114,7 +114,7 @@ def test_free_ports_replace_the_fixed_ones(tmp_path):
         assert free.bridge.startswith("tcp:") and len(set(ports)) == 3 and not {50100, 50000, 5000} & set(ports)
         first, second = free.zmq_transport
         assert first.startswith("ipc://") and first.endswith("/in") and second.endswith("/out")
-        assert free.addresses() == {"bridge": free.bridge, "gds_port": free.gds_port,
+        assert free.addresses() == {"bridge": free.bridge, "directory": str(free.directory), "gds_port": free.gds_port,
                                     "gds_gui": f"http://127.0.0.1:{free.gds_gui}/", "zmq_transport": free.zmq_transport,
                                     "dictionary": str(free.dictionary) if free.dictionary else None}
     finally:
@@ -124,7 +124,7 @@ def test_free_ports_replace_the_fixed_ones(tmp_path):
     assert Simulation(tmp_path, bridge="tcp:6000", auto_ports=True).bridge == "tcp:6000"
     assert auto_bridge("unix:/tmp/b.sock") == "unix:/tmp/b.sock" and auto_bridge("none") == "none"
     assert auto_bridge("tcp:0.0.0.0:50100").startswith("tcp:0.0.0.0:")
-    assert Simulation(tmp_path, auto_ports=True).addresses().keys() == {"bridge"}, "no GDS, no GDS ports"
+    assert Simulation(tmp_path, auto_ports=True).addresses().keys() == {"bridge", "directory"}, "no GDS, no GDS ports"
 
 
 def test_the_gds_gets_sockets_of_its_own_when_asked():

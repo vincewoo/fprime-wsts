@@ -416,10 +416,12 @@ bool Control::awaitTick(std::uint64_t periodUs, Clock::time_point& next, const s
         }
         m_settled = true;
     }
-    if (!m_lockstep.load() && this->scenarioDue()) {
+    if (this->scenarioDue()) {
         // A scenario's actions due before the next tick go in between two ticks, as they did
         // when they came from outside and were recorded: a step after a pause takes the same
-        // ticks, and injected bytes are handled before the tick, not during it
+        // ticks, and injected bytes are handled before the tick, not during it. In lockstep
+        // too, before the conductor's grant is waited for: an element's journal replays there
+        // (docs/snapshots.md)
         ActionGate gate;
         this->scenarioBetween();
     }
@@ -1430,8 +1432,8 @@ void Control::scenarioRun() {
         this->scenarioStop(true);
         return;
     }
-    if (m_stepped.load() && !m_lockstep.load()) {
-        return;  // the rest is applied between ticks (scenarioBetween)
+    if (m_stepped.load()) {
+        return;  // the rest is applied between ticks (scenarioBetween), in lockstep too
     }
     // Collect the steps that are due, then run them without holding the scenario lock so a
     // step is free to stop or reload the scenario.

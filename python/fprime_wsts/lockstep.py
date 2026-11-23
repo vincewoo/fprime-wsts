@@ -227,6 +227,29 @@ class Conductor:
         """Take the next instant: grant a tick to each element due at it, at once, and wait
         until all have finished. Returns its time."""
         at, due = self.next_instant()
+        return self._grant(at, due)
+
+    def advance_to(self, ticks: Dict[str, int], keep_going: Callable[[], bool] = lambda: True) -> None:
+        """Take instants until every element has reached its tick in `ticks`, granting each only
+        the ticks it lacks: how a restored system comes back to the instant it was snapshotted
+        at (snapshots.py). A grant is taken whether the element is paused or not, as in the
+        run that was snapshotted, where a pause reached the elements one after another."""
+        self.refresh()
+        self.check()
+        while keep_going():
+            behind = [name for name in self.bridges if int(self.state[name]["tick"]) < ticks[name]]
+            ahead = [name for name in self.bridges if int(self.state[name]["tick"]) > ticks[name]]
+            if ahead:
+                raise LockstepError(", ".join(f"element {name} is at tick {self.state[name]['tick']}, past "
+                                              f"{ticks[name]}" for name in ahead))
+            if not behind:
+                return
+            upcoming = {name: (int(self.state[name]["tick"]) + 1) * int(self.state[name]["tick_period_ns"])
+                        for name in behind}
+            at = min(upcoming.values())
+            self._grant(at, [name for name in behind if upcoming[name] == at])
+
+    def _grant(self, at: int, due: List[str]) -> int:
         pending = {name: self.bridges[name].submit("advance", ticks=1, timeout_ms=int(INSTANT_LIMIT * 1000),
                                                    **self.expectations(name))
                    for name in due}

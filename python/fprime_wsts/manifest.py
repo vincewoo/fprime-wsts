@@ -308,6 +308,8 @@ class Manifest:
     # How simulated time advances unless a run says otherwise: "real-time" (ticks follow the
     # wall clock) or "stepped" (a tick is taken when the last one is finished)
     time_mode: str = "real-time"
+    #: time.journal: runs keep a journal, so that they can be snapshotted (docs/snapshots.md)
+    time_journal: bool = False
     # Where simulated time starts in stepped time, seconds since 1970; None: the default
     time_epoch: Optional[int] = None
     tick_hz: int = 10
@@ -397,7 +399,7 @@ KNOWN_KEYS = {
 }
 #: Operating system APIs the toolkit implements for project code that calls them (`shims`)
 SHIMS = {"vxworks": "Wsts/VxWorks"}
-TIME_KEYS = {"mode", "epoch"}
+TIME_KEYS = {"mode", "epoch", "journal"}
 #: Groups of telemetry the generator writes for a deployment (model_tlm.py, sim_tlm.py)
 TELEMETRY_KEYS = {"models", "bus", "timing", "links"}
 #: How a manifest may write the two ways simulated time advances, and how the report does
@@ -599,6 +601,9 @@ def parse_manifest(data: dict, path: Optional[Path] = None) -> Manifest:
     manifest.time_mode = TIME_MODES[mode]
     if time.get("epoch") is not None:
         manifest.time_epoch = _epoch(time["epoch"], where)
+    manifest.time_journal = _flag(time.get("journal", False), f"{where}: time.journal")
+    if manifest.time_journal and manifest.time_mode != "stepped":
+        raise WstsError(f"{where}: time.journal needs time.mode: stepped: a journal replays only in stepped time")
     manifest.tick_hz = _int(data.get("tick_hz", 10), f"{where}: tick_hz")
     manifest.catalogs = [str(c) for c in data.get("catalogs", [])]
     manifest.fpp_exclude = [str(g) for g in data.get("fpp_exclude", [])]
