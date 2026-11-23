@@ -37,6 +37,9 @@ std::string resolvePath(const std::string& path) {
     return std::string(base) + "/" + path;
 }
 
+//! The tick thread is applying scenario steps inside a tick (Control::scenarioRun)
+thread_local bool t_insideTick = false;
+
 }  // namespace
 
 JsonObj SimEvent::toJson() const {
@@ -126,6 +129,8 @@ void Control::reset() {
         m_scenarioNext.store(0);
         m_scenarioSize.store(0);
     }
+    m_dueRecords.clear();
+    m_scenarioFinishing = false;
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_models.clear();
@@ -410,6 +415,13 @@ bool Control::awaitTick(std::uint64_t periodUs, Clock::time_point& next, const s
                          m_stepLimitMs.load(), Activity::get().holders().c_str());
         }
         m_settled = true;
+    }
+    if (!m_lockstep.load() && this->scenarioDue()) {
+        // A scenario's actions due before the next tick go in between two ticks, as they did
+        // when they came from outside and were recorded: a step after a pause takes the same
+        // ticks, and injected bytes are handled before the tick, not during it
+        ActionGate gate;
+        this->scenarioBetween();
     }
     if (m_lockstep.load()) {
         // Lockstep: the conductor decides when, not the pause. A granted tick waits for
@@ -904,7 +916,10 @@ bool Control::exec(const JsonObj& action, std::string& error) {
     // scenario management actions are not part of the scenario itself.
     if (op.rfind("record_", 0) != 0 && op.rfind("scenario_", 0) != 0) {
         JsonObj line = action;
-        line.setNum("tick", static_cast<std::int64_t>(m_tick.load()));
+        // At the tick it takes effect in: a scenario step applied inside a tick, at that
+        // tick; an action from outside, between two ticks, at the next one, where a scenario
+        // applies it again (before that tick is taken, in stepped time)
+        line.setNum("tick", static_cast<std::int64_t>(m_tick.load() + (t_insideTick ? 0 : 1)));
         RecordTap tap;
         {
             std::lock_guard<std::mutex> lock(m_mutex);
@@ -1309,9 +1324,84 @@ void Control::scenarioStop(bool completed) {
                m_scenarioNext.load());
 }
 
-void Control::scenarioRun() {
+bool Control::scenarioDue() {
+    if (m_scenarioState.load() != ScenarioState::RUNNING) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(m_scenarioMutex);
+    const std::uint32_t next = m_scenarioNext.load();
+    return next < m_steps.size() && m_steps[next].tick <= m_tick.load() + 1 - m_scenarioStartTick;
+}
+
+void Control::scenarioBetween() {
     if (m_scenarioState.load() != ScenarioState::RUNNING) {
         return;
+    }
+    // Due before the next tick: those whose tick is the next one's (or earlier)
+    std::vector<JsonObj> due;
+    bool finished = false;
+    {
+        std::lock_guard<std::mutex> lock(m_scenarioMutex);
+        const std::uint64_t coming = m_tick.load() + 1 - m_scenarioStartTick;
+        std::uint32_t next = m_scenarioNext.load();
+        while (next < m_steps.size() && m_steps[next].tick <= coming) {
+            due.push_back(m_steps[next].action);
+            next++;
+        }
+        m_scenarioNext.store(next);
+        finished = (next >= m_steps.size());
+    }
+    for (const JsonObj& step : due) {
+        if (!step.has("op")) {
+            m_dueRecords.push_back(step);  // a device's answer: at the start of the tick, as recorded
+            continue;
+        }
+        std::string error;
+        if (!this->exec(step, error)) {
+            this->post(SimEvent::SCENARIO_ERROR, step.str("endpoint"), step.str("op") + ": " + error);
+        }
+    }
+    if (finished) {
+        if (m_dueRecords.empty()) {
+            this->scenarioStop(true);
+        } else {
+            m_scenarioFinishing = true;
+        }
+    }
+}
+
+void Control::scenarioRun() {
+    if (m_scenarioState.load() != ScenarioState::RUNNING) {
+        m_dueRecords.clear();
+        m_scenarioFinishing = false;
+        return;
+    }
+    Bus& bus = Bus::get();
+    const auto replayRecord = [&bus](const JsonObj& step) {
+        const std::string rec = step.str("rec");
+        if (rec == "bs_rx") {
+            Bytes data;
+            (void)fromHex(step.str("data"), data);
+            bus.byteStreamInject(step.str("endpoint"), data, "replay");
+        } else if (rec == "gpio_in") {
+            bus.gpioSetInput(step.str("endpoint"), step.flag("level"), "replay");
+        } else if (rec == "reg_irq") {
+            bus.registerInterrupt(step.str("endpoint"), static_cast<std::uint32_t>(step.unum("number")), "replay");
+        }
+    };
+    // What was collected between ticks for this one
+    std::vector<JsonObj> records;
+    records.swap(m_dueRecords);
+    for (const JsonObj& step : records) {
+        replayRecord(step);
+    }
+    if (m_scenarioFinishing) {
+        m_scenarioFinishing = false;
+        this->scenarioStop(true);
+        return;
+    }
+    if (m_stepped.load() && !m_lockstep.load()) {
+        return;  // the rest is applied between ticks (scenarioBetween)
     }
     // Collect the steps that are due, then run them without holding the scenario lock so a
     // step is free to stop or reload the scenario.
@@ -1328,7 +1418,7 @@ void Control::scenarioRun() {
         m_scenarioNext.store(next);
         finished = (next >= m_steps.size());
     }
-    Bus& bus = Bus::get();
+    t_insideTick = true;
     for (const JsonObj& step : due) {
         if (step.has("op")) {
             std::string error;
@@ -1337,17 +1427,9 @@ void Control::scenarioRun() {
             }
             continue;
         }
-        const std::string rec = step.str("rec");
-        if (rec == "bs_rx") {
-            Bytes data;
-            (void)fromHex(step.str("data"), data);
-            bus.byteStreamInject(step.str("endpoint"), data, "replay");
-        } else if (rec == "gpio_in") {
-            bus.gpioSetInput(step.str("endpoint"), step.flag("level"), "replay");
-        } else if (rec == "reg_irq") {
-            bus.registerInterrupt(step.str("endpoint"), static_cast<std::uint32_t>(step.unum("number")), "replay");
-        }
+        replayRecord(step);
     }
+    t_insideTick = false;
     if (finished) {
         this->scenarioStop(true);
     }

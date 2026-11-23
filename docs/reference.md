@@ -778,7 +778,15 @@ The interrupts of a register endpoint are a fault target of their own, named
 
 One JSON object per line. Blank lines and lines starting with `#` are ignored.
 
-- Action lines have `tick` (relative to scenario start) and the action fields above.
+- Action lines have `tick` (relative to scenario start) and the action fields above. A
+  step at tick T applies at the start of tick T in real time. In stepped time it applies
+  between ticks T-1 and T, after T-1's work is finished and before T is taken, as an
+  action from a bridge client does: a `pause` there leaves T untaken, and a `step` after
+  it takes the same ticks it took when it was recorded. The recorder writes an action
+  with the tick it takes effect in: one applied by a scenario inside a tick, at that tick;
+  one from outside, at the next tick to begin. So a stepped run that a client drove
+  between steps replays from its recording to the same bytes (`tests/e2e/test_stepped.py`).
+  Recordings made before this rule replay their actions from outside one tick earlier.
 - Recording lines have `rec` (`bs_tx`, `bs_rx`, `i2c`, `spi`, `gpio_out`, `gpio_in`,
   `reg_rd`, `reg_wr`, `reg_irq`),
   `tick`, `endpoint`, `src` (`flight`, `model`, `link`, `inject`, `replay`) and the data. They are
@@ -863,7 +871,7 @@ is an action with `time`, in simulated seconds from the start of the scenario, a
 
 An action is applied between two instants, once the system's time has reached its own: the
 injection above after the instant at 1.0 s, before Payload's tick 21 and Cdh's tick 11. Each
-element records it at its own tick. Lines at one time keep their order; blank lines and
+element records it at the tick it takes effect in, its own: Payload's 21. Lines at one time keep their order; blank lines and
 lines starting with `#` are skipped.
 
 ## Environment variables read by a simulated deployment
@@ -976,6 +984,15 @@ address, once each; `unanswered` on the bridge's event stream, with the address 
 32 bits in `b`). Telemetry, once a second: `SimTicks`,
 `SimRunState`, `SimTimeScale`, `ActiveFaults`, `FaultHits`, `ScenarioRunState`,
 `ScenarioStep`, `ScenarioSteps`, `Recording`, `BusTransactions`, `BusBytes`, `BusErrors`.
+
+In stepped time, what only says how the run is driven stays out of flight software:
+the events `SimPaused`, `SimResumed`, `SimRateSet` and those of scenarios and recordings,
+and the channels `SimRunState`, `SimTimeScale`, `ScenarioRunState`, `ScenarioStep`,
+`ScenarioSteps` and `Recording`. Pausing, stepping and a pace change nothing for flight
+software there, and a replay is driven differently from the run it replays; posted as F´
+events they would change its event counters and its downlink, and the replay would differ.
+They are still in the simulation's log and on the bridge's event stream (`sim_event`), and
+in `status`. In real time all of them are posted as before.
 
 Command string arguments are limited by the project's `FW_CMD_STRING_MAX_SIZE` (40
 characters by default). Name scenario files relative to `WSTS_DIR`, and send long payloads

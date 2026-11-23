@@ -6,13 +6,17 @@ pauses and steps it; a whole run of one element in stepped time is started here 
 of its own. The whole system stepped together is test_lockstep.py."""
 
 import json
+import signal
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
 from conftest import T
+from fprime_wsts.bridge import WstsBridge
+from fprime_wsts.runner import read_run_file
 
 
 @pytest.fixture
@@ -100,7 +104,7 @@ def test_two_runs_in_stepped_time_are_the_same_byte_for_byte(request, tmp_path, 
     """What phase 2 of stepped time is for. Everything flight software puts on a bus is in the
     recording: every I2C, SPI and register transaction, and every packet of events and
     telemetry it sends towards the ground through the hub, with its time stamp."""
-    recording = tmp_path / "run.jsonl"  # the same name both times: an event of the simulation names it
+    recording = tmp_path / "run.jsonl"  # the same name each time (in stepped time RecordStarted, which names it, stays out of flight software)
     recordings = []
     for _ in range(3):
         summary, _ = run_alone(request, tmp_path, element, seconds, recording)
@@ -109,6 +113,61 @@ def test_two_runs_in_stepped_time_are_the_same_byte_for_byte(request, tmp_path, 
         recording.unlink()
     assert len(recordings[0].splitlines()) > 100, "there is something to compare"
     assert recordings[1] == recordings[0] and recordings[2] == recordings[0]
+
+
+def test_a_run_driven_by_a_client_replays_to_the_same_bytes(request, tmp_path):
+    """Exact replay (docs/snapshots.md, phase 1). A client pauses a run in stepped time,
+    steps it and acts on it between steps; replayed from its recording, flight software does
+    the same to the byte, events and telemetry through the hub included. The replay is
+    driven differently (by its scenario, and by `run --duration`), and flight software does
+    not see that: in stepped time pausing, stepping, scenarios and recordings stay out of it."""
+    deployment = Path(request.config.getoption("--wsts-system")) / "payload"
+    live = tmp_path / "live.jsonl"
+    process = subprocess.Popen(
+        [sys.executable, "-m", "fprime_wsts", "run", str(deployment), "--stepped", "--auto-ports",
+         "--record", str(live), "--log-dir", str(tmp_path / "live"), "--json"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        deadline = time.monotonic() + T
+        while (found := read_run_file(tmp_path / "live")) is None and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert found, "the run did not start"
+        with WstsBridge(found["bridge"], request_timeout=T) as sim:
+            sim.pause()
+            sim.step(40)
+            sim.request("fault_set", endpoint="i2cBus", kind="error", arg=3, count=4)
+            sim.step(37)
+            sim.request("inject_bytes", endpoint="sensorUart", text="$TEMP,95.5\n")
+            sim.step(101)
+            sim.request("gpio_force", endpoint="switchPin", level=True)
+            sim.step(55)
+            sim.request("gpio_force", endpoint="switchPin", level=False)
+            sim.step(67)
+            ticks = sim.status()["tick"]
+    finally:
+        process.send_signal(signal.SIGINT)
+        process.communicate(timeout=60)
+
+    replay = tmp_path / "replay.jsonl"
+    done = subprocess.run(
+        [sys.executable, "-m", "fprime_wsts", "run", str(deployment), "--stepped", "--auto-ports",
+         "--scenario", str(live), "--record", str(replay), "--duration", str(round(ticks * 0.05, 3)),
+         "--log-dir", str(tmp_path / "replay"), "--json"],
+        capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr
+    summary = json.loads(done.stdout)
+    assert summary["final_status"]["tick"] == ticks and summary["final_status"]["scenario_state"] == "completed"
+
+    def records(path):
+        return [line for line in path.read_text().splitlines() if '"rec"' in line]
+
+    original, again = records(live), records(replay)
+    hub = [line for line in original if '"hubDriver"' in line]
+    assert len(hub) > 1000 and any('"src":"inject"' in line for line in original), "there is something to compare"
+    first = next((i for i, (a, b) in enumerate(zip(original, again)) if a != b), None)
+    assert first is None and len(again) == len(original), (
+        f"the replay differs from record {first}: {original[first]} / {again[first]}" if first is not None
+        else f"{len(original)} records, {len(again)} replayed")
 
 
 def test_flight_software_is_given_simulated_time(request, tmp_path):
