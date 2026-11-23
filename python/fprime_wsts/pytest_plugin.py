@@ -149,7 +149,11 @@ def wsts_restore(tmp_path_factory):
     differs raises snapshots.RestoreMismatch), held paused at the snapshot's tick, on free ports
     and with logs of its own, and stopped when the block ends. `sim` is a WstsBridge, or a
     WstsSystem for a snapshot of a system, with `log_dir`, the run's log directory, from which
-    it can be snapshotted again. Several can run at once: branches of one snapshot."""
+    it can be snapshotted again. Several can run at once: branches of one snapshot.
+
+    Plants (docs/dynamics.md) are re-driven along their traces during the restore, and the
+    client's conductor goes on coupling them from there. A deployment with plants is a
+    WstsSystem of one element, named "deployment", stepped with step(seconds=...)."""
     from contextlib import contextmanager
 
     from . import snapshots
@@ -164,12 +168,13 @@ def wsts_restore(tmp_path_factory):
             system = SystemSimulation(snap.directory, log_dir=log_dir, env=env, auto_ports=True, restore=snap)
             system.start()
             try:
-                with Conductor(system.description) as conductor:
-                    conductor.wait_ready(20.0, alive=lambda: not system.exited())
-                    system.complete_restore(conductor, keep_going=lambda: not system.exited())
+                # Restored by the client's own conductor, which goes on with the re-driven plants
                 client = WstsSystem(system.description)
                 client.log_dir = system.log_dir  # where to snapshot it from again
                 try:
+                    conductor = client.conductor()
+                    conductor.wait_ready(20.0, alive=lambda: not system.exited())
+                    system.complete_restore(conductor, keep_going=lambda: not system.exited())
                     yield client
                 finally:
                     client.close()
@@ -178,6 +183,26 @@ def wsts_restore(tmp_path_factory):
             return
         simulation = Simulation(snap.directory, log_dir=log_dir, env={**snap.meta.get("env", {}), **(env or {})},
                                 auto_ports=True, restore=snap)
+        plants = simulation.report.get("dynamics") or []
+        if snap.meta.get("conducted") and plants:
+            from .runner import deployment_description, restore_deployment
+
+            simulation.extra_env["WSTS_LOCKSTEP"] = "1"
+            simulation.conducted = True
+            simulation.start()
+            try:
+                client = WstsSystem(deployment_description(simulation, plants))
+                client.log_dir = simulation.log_dir
+                try:
+                    conductor = client.conductor()
+                    conductor.wait_ready(20.0, alive=lambda: simulation.sim.poll() is None)
+                    restore_deployment(simulation, conductor, keep_going=lambda: simulation.sim.poll() is None)
+                    yield client
+                finally:
+                    client.close()
+            finally:
+                simulation.stop()
+            return
         simulation.start()
         try:
             with WstsBridge(simulation.bridge) as client:

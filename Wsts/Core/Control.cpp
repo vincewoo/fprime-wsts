@@ -436,6 +436,19 @@ bool Control::awaitTick(std::uint64_t periodUs, Clock::time_point& next, const s
             next = Clock::now();
             return false;
         }
+        // A scenario started while this waited (a restore's journal, started from outside as
+        // the run settled) has actions due before this tick: they go first. The grant stays,
+        // and the next call applies them and then takes it.
+        lock.unlock();
+        if (this->scenarioDue()) {
+            next = Clock::now();
+            return false;
+        }
+        lock.lock();
+        if (quit.load() || !m_lockstep.load() || !(m_granted > 0 && !m_actionOpen && m_actionsWaiting == 0)) {
+            next = Clock::now();
+            return false;
+        }
         m_granted--;
         m_tickOpen = true;
     } else if (m_paused.load()) {
@@ -785,6 +798,24 @@ bool Control::popEvent(SimEvent& event) {
 void Control::addModel(const std::string& name, Model* model) {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_models[name] = model;
+}
+
+bool Control::modelGet(const std::string& name, const std::string& key, std::string& value, std::string& error) {
+    Model* model = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        const auto it = m_models.find(name);
+        model = (it == m_models.end()) ? nullptr : it->second;
+    }
+    if (model == nullptr) {
+        error = "unknown model '" + name + "'";
+        return false;
+    }
+    if (!model->get(key, value)) {
+        error = "model '" + name + "' has no value '" + key + "' to read";
+        return false;
+    }
+    return true;
 }
 
 void Control::addTickListener(TickListener listener) {

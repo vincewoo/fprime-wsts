@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+"""A stand-in for NASA's 42 in the tests of fprime_wsts.fortytwo: run as 42 is (`42 <case dir>`),
+it reads the case's Inp_Sim.txt and Inp_IPC.txt and speaks 42's TXRX socket protocol as 42 does
+(a message after every step, read Ack, read the peer's message, write Ack). Its spacecraft
+turns about z at the rate the peer writes to SC[0].B[0].wn; its wheel keeps the momentum the
+peer writes to SC[0].Whl[0].H.
+
+FAKE42_SKEW=<step>: its time jumps a step there. FAKE42_EXIT=<step>: it stops there."""
+import math
+import os
+import socket
+import sys
+from pathlib import Path
+
+case = Path(sys.argv[1])
+
+
+def value(line):
+    return line.split("!", 1)[0].strip()
+
+
+sim = (case / "Inp_Sim.txt").read_text().splitlines()
+dt = float(value(sim[3]).split()[1])
+ipc = (case / "Inp_IPC.txt").read_text().splitlines()
+port = int(value(ipc[6]).split()[1])
+prefixes = [value(line).strip('"') for line in ipc[10:10 + int(value(ipc[9]).split()[0])]]
+skew = int(os.environ.get("FAKE42_SKEW", "-1"))
+stop = int(os.environ.get("FAKE42_EXIT", "-1"))
+print(f"fake 42: {case}, step {dt}, port {port}, sends {prefixes}", flush=True)
+
+server = socket.socket()
+server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+server.bind(("127.0.0.1", port))
+server.listen(1)
+peer, _ = server.accept()
+wn, angle, wheel, t, step = [0.0, 0.0, 0.0], 0.0, 0.0, 0.0, 0
+buffer = b""
+while True:
+    step += 1
+    if step == stop:
+        sys.exit(3)
+    t += dt * (2 if step == skew else 1)
+    angle += wn[2] * dt
+    minutes, seconds = divmod(t, 60.0)
+    lines = [f"TIME 2014-172-00:{int(minutes):02d}:{seconds:012.9f}",
+             f"SC[0].wn = [{wn[0]:18.12e} {wn[1]:18.12e} {wn[2]:18.12e}]",
+             f"SC[0].qn = [0.0 0.0 {math.sin(angle / 2):18.12e} {math.cos(angle / 2):18.12e}]",
+             f"SC[0].Whl[0].H = {wheel:18.12e}"]
+    text = lines[0] + "\n" + "".join(line + "\n" for line in lines[1:]
+                                     if any(line.startswith(p) for p in prefixes)) + "[ENDMSG]\n"
+    peer.sendall(text.encode())
+    if peer.recv(4) != b"Ack\0":
+        sys.exit(4)
+    while b"[ENDMSG]\n" not in buffer:
+        chunk = peer.recv(65536)
+        if not chunk:
+            sys.exit(0)
+        buffer += chunk
+    message, _, buffer = buffer.partition(b"[ENDMSG]\n")
+    peer.sendall(b"Ack\0")
+    for line in message.decode().splitlines():
+        name, _, rhs = line.partition(" = ")
+        if name == "SC[0].B[0].wn":
+            wn = [float(x) for x in rhs.strip("[]").split()]
+        elif name == "SC[0].Whl[0].H":
+            wheel = float(rhs)

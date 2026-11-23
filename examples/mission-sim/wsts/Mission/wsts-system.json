@@ -41,5 +41,49 @@
         "endpoint": "hubDriver"
       }
     }
+  ],
+  "dynamics": [
+    {
+      "name": "thermal",
+      "kind": "python",
+      "path": "../../plants/thermal.py",
+      "params": {
+        "C": 5.0,
+        "P": 10.0,
+        "G": 0.1,
+        "T_env": 21.5,
+        "T0": 21.5
+      },
+      "step": null,
+      "inputs": {
+        "heater": {
+          "element": "payload",
+          "gpio": "heaterPin"
+        }
+      },
+      "outputs": {
+        "T": [
+          {
+            "element": "payload",
+            "model": "tempSensor",
+            "key": "text",
+            "format": "$TEMP,{:.1f}\n"
+          },
+          {
+            "element": "payload",
+            "model": "fpga",
+            "key": "reg.0x0C",
+            "scale": 10.0,
+            "round": true
+          },
+          {
+            "element": "payload",
+            "gpio": "switchPin",
+            "above": 45.0,
+            "hysteresis": 5.0
+          }
+        ]
+      }
+    }
   ]
 }

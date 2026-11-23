@@ -2600,6 +2600,37 @@ TEST_F(CoreTest, InLockstepAScenarioAppliesItsActionsBetweenTicksToo) {
     std::remove(path.c_str());
 }
 
+TEST_F(CoreTest, InLockstepAScenarioStartedWhileTheTickWaitsIsAppliedBeforeTheGrantedTick) {
+    // A restore starts its journal from outside while the tick thread already waits for the
+    // conductor; a grant that comes at once must not take the tick before the actions due
+    // ahead of it (they were recorded at that tick)
+    Control& control = Control::get();
+    std::vector<std::uint64_t> received_at;
+    Bus::get().bindByteStream("probe", [&received_at](const Bytes&) { received_at.push_back(Control::get().tick()); });
+    const std::string path = tempFile("lockstep-late-scenario.jsonl");
+    {
+        std::ofstream file(path);
+        file << R"({"tick": 1, "op": "inject_bytes", "endpoint": "probe", "text": "x"})" << "\n";
+    }
+    ASSERT_TRUE(run(R"({"op": "set_stepped", "stepped": true, "lockstep": true})"));
+    Ticker ticker(10);
+    ASSERT_TRUE(control.grant(1));
+    ASSERT_TRUE(control.awaitGranted(std::chrono::milliseconds(2000)));
+    for (int i = 0; i < 20; i++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(i % 7));  // anywhere in the tick thread's wait
+        const std::uint64_t before = control.tick();
+        ASSERT_TRUE(run(R"({"op": "scenario_load", "path": ")" + path + R"("})"));
+        ASSERT_TRUE(run(R"({"op": "scenario_start"})"));
+        ASSERT_TRUE(control.grant(1));
+        ASSERT_TRUE(control.awaitGranted(std::chrono::milliseconds(2000)));
+        ASSERT_EQ(received_at.size(), static_cast<std::size_t>(i + 1));
+        EXPECT_EQ(received_at.back(), before) << "applied between tick " << before << " and the next, round " << i;
+        EXPECT_EQ(control.tick(), before + 1);
+    }
+    ASSERT_TRUE(run(R"({"op": "set_stepped", "stepped": false})"));
+    std::remove(path.c_str());
+}
+
 namespace {
 //! Two ends of a link in this one process, on the endpoints linkA and linkB
 struct LinkedPair {
@@ -3216,6 +3247,153 @@ TEST_F(CoreTest, I2cDeviceAtAnyAddressAnswersTheRest) {
     EXPECT_EQ(data[0], 0xAA);
     EXPECT_TRUE(Bus::get().i2cPoke("anyBus", 0x13, 0, 0x77));
     EXPECT_EQ(catchAll.peekRegister(0), 0x77);
+}
+
+// ----------------------------------------------------------------------
+// What a dynamics coupling reads and writes (docs/dynamics.md)
+// ----------------------------------------------------------------------
+
+TEST_F(CoreTest, ModelsAnswerTheValuesACouplingReads) {
+    Wsts::ScriptedByteStream sensor;
+    Wsts::RegisterFile block;
+    Wsts::RmapTarget node;
+    ASSERT_TRUE(sensor.set("text", "$TEMP,21.5\n"));
+    ASSERT_TRUE(sensor.set("period", "20"));
+    ASSERT_TRUE(imu.set("0x3B", "0x12 0x34"));
+    ASSERT_TRUE(block.set("reg.0x0C", "215"));
+    ASSERT_TRUE(node.set("mem.0x10", "0x2A"));
+    Control& control = Control::get();
+    control.addModel("sensor", &sensor);
+    control.addModel("imu", &imu);
+    control.addModel("block", &block);
+    control.addModel("node", &node);
+    std::string value;
+    std::string error;
+    ASSERT_TRUE(control.modelGet("sensor", "text", value, error)) << error;
+    EXPECT_EQ(value, "$TEMP,21.5\n");
+    ASSERT_TRUE(control.modelGet("sensor", "period", value, error));
+    EXPECT_EQ(value, "20");
+    ASSERT_TRUE(control.modelGet("imu", "0x3C", value, error));
+    EXPECT_EQ(value, "52");
+    ASSERT_TRUE(control.modelGet("block", "reg.0x0C", value, error));
+    EXPECT_EQ(value, "215");
+    ASSERT_TRUE(control.modelGet("node", "mem.0x10", value, error));
+    EXPECT_EQ(value, "42");
+    EXPECT_FALSE(control.modelGet("block", "reg.0x10", value, error)) << "not defined";
+    EXPECT_NE(error.find("no value 'reg.0x10'"), std::string::npos);
+    EXPECT_FALSE(control.modelGet("ghost", "x", value, error));
+    EXPECT_NE(error.find("unknown model 'ghost'"), std::string::npos);
+}
+
+TEST_F(CoreTest, AReadClearsRegisterIsPeekedWithoutClearingIt) {
+    Wsts::RegisterFile block;
+    ASSERT_TRUE(block.set("reg.0x04", "0x5"));
+    ASSERT_TRUE(block.set("rc.0x04", "1"));
+    Bus::get().attachRegister("regs", &block);
+    std::uint64_t value = 0;
+    ASSERT_TRUE(Bus::get().registerPeek("regs", 0x04, value));
+    EXPECT_EQ(value, 0x5u);
+    ASSERT_TRUE(Bus::get().registerPeek("regs", 0x04, value)) << "a peek is not a flight read";
+    EXPECT_EQ(value, 0x5u);
+    EXPECT_FALSE(Bus::get().registerPeek("regs", 0x08, value));
+    EXPECT_FALSE(Bus::get().registerPeek("nowhere", 0x04, value));
+    EXPECT_EQ(Bus::get().traffic().count("regs"), 0u) << "nothing went over the bus";
+}
+
+namespace {
+
+//! One request to the bridge on a connected socket, and its answer
+JsonObj ask(int fd, const std::string& request) {
+    const std::string line = request + "\n";
+    EXPECT_EQ(::write(fd, line.data(), line.size()), static_cast<ssize_t>(line.size()));
+    std::string answer;
+    char c = 0;
+    while (::read(fd, &c, 1) == 1 && c != '\n') {
+        answer += c;
+    }
+    JsonObj parsed;
+    std::string error;
+    EXPECT_TRUE(parsed.parse(answer, error)) << answer;
+    return parsed;
+}
+
+int connectBridge(int port) {
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    sockaddr_in where{};
+    where.sin_family = AF_INET;
+    where.sin_port = htons(static_cast<std::uint16_t>(port));
+    where.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    EXPECT_EQ(::connect(fd, reinterpret_cast<sockaddr*>(&where), sizeof(where)), 0);
+    return fd;
+}
+
+}  // namespace
+
+TEST_F(CoreTest, TheBridgeReadsModelsAndRegistersAndAppliesABatch) {
+    Wsts::ScriptedByteStream sensor;
+    Wsts::RegisterFile block;
+    ASSERT_TRUE(block.set("reg.0x0C", "215"));
+    Bus::get().attachRegister("regs", &block);
+    Control::get().addModel("sensor", &sensor);
+    Control::get().addModel("block", &block);
+    Wsts::Bridge& bridge = Wsts::Bridge::get();
+    ASSERT_TRUE(bridge.start("tcp:0"));
+    // After the bridge, which taps the records for its subscribers
+    std::vector<JsonObj> recorded;
+    Control::get().setRecordTap([&recorded](const JsonObj& line) {
+        if (line.has("op")) {
+            recorded.push_back(line);
+        }
+    });
+    const int fd = connectBridge(bridge.port());
+
+    JsonObj answer = ask(fd, R"({"id": 1, "op": "model_get", "model": "block", "key": "reg.0x0C"})");
+    EXPECT_TRUE(answer.flag("ok"));
+    EXPECT_EQ(answer.str("value"), "215");
+    answer = ask(fd, R"({"id": 2, "op": "reg_get", "endpoint": "regs", "offset": "0xc"})");
+    EXPECT_TRUE(answer.flag("ok"));
+    EXPECT_EQ(answer.unum("value"), 215u);
+    answer = ask(fd, R"({"id": 3, "op": "model_get", "model": "sensor", "key": "nothing"})");
+    EXPECT_FALSE(answer.flag("ok", true));
+    EXPECT_TRUE(recorded.empty()) << "reading is not an action";
+
+    // Two actions in one request, each executed and recorded as if it had come by itself
+    JsonObj batch;
+    batch.setNum("id", 4).set("op", "batch").set(
+        "actions",
+        R"({"op": "model_set", "model": "sensor", "key": "text", "value": "$TEMP,30.00\n", "via": "thermal"})" "\n"
+        R"({"op": "gpio_force", "endpoint": "pin", "level": true, "via": "thermal"})" "\n");
+    answer = ask(fd, batch.dump());
+    EXPECT_TRUE(answer.flag("ok")) << answer.str("error");
+    EXPECT_EQ(answer.num("applied"), 2);
+    std::string text;
+    std::string error;
+    ASSERT_TRUE(Control::get().modelGet("sensor", "text", text, error));
+    EXPECT_EQ(text, "$TEMP,30.00\n");
+    ASSERT_EQ(recorded.size(), 2u);
+    EXPECT_EQ(recorded[0].str("op"), "model_set");
+    EXPECT_EQ(recorded[0].str("via"), "thermal") << "the coupling's mark is kept in the recording";
+    EXPECT_FALSE(recorded[0].has("id"));
+    EXPECT_EQ(recorded[1].str("op"), "gpio_force");
+
+    // A batch stops at the first action that fails, and says how many were applied
+    batch.setNum("id", 5).set("actions",
+                              R"({"op": "model_set", "model": "sensor", "key": "period", "value": "3"})" "\n"
+                              R"({"op": "model_set", "model": "ghost", "key": "a", "value": "b"})" "\n"
+                              R"({"op": "model_set", "model": "sensor", "key": "period", "value": "4"})" "\n");
+    answer = ask(fd, batch.dump());
+    EXPECT_FALSE(answer.flag("ok", true));
+    EXPECT_EQ(answer.num("applied"), 1);
+    EXPECT_NE(answer.str("error").find("action 2 of the batch"), std::string::npos) << answer.str("error");
+    ASSERT_TRUE(Control::get().modelGet("sensor", "period", text, error));
+    EXPECT_EQ(text, "3");
+    // ... and refuses what would not stay between two ticks
+    batch.setNum("id", 6).set("actions", R"({"op": "step", "ticks": 2})");
+    answer = ask(fd, batch.dump());
+    EXPECT_FALSE(answer.flag("ok", true));
+    EXPECT_NE(answer.str("error").find("cannot be batched"), std::string::npos);
+    ::close(fd);
+    bridge.stop();
 }
 
 int main(int argc, char** argv) {

@@ -20,6 +20,11 @@ the same build, started on the same files and given the same inputs, reaches the
 
 A system in lockstep is snapshotted as a whole: every element's journal up to the instant
 the system was held at, restored together under the conductor.
+
+Plants (docs/dynamics.md) are not in a process to copy either. Their outputs are bridge
+actions, in the journal; a snapshot also keeps each plant's trace up to its instant, and a
+restore re-drives the plants along it (shadow mode), comparing every exchange, so that the
+restored run goes on coupled from where the snapshotted one was.
 """
 
 from __future__ import annotations
@@ -45,6 +50,8 @@ SANDBOX = "files"
 SNAPSHOT_META = "snapshot.json"
 #: Wall-clock seconds a restore may go without its tick advancing before it is given up
 STALL_LIMIT = 60.0
+#: The trace of a plant (docs/dynamics.md), in a log directory and in a snapshot
+TRACE = "dynamics-{}.jsonl"
 
 
 class SnapshotError(WstsError):
@@ -149,6 +156,42 @@ def read_journal_meta(log_dir: Path) -> dict:
     except (OSError, ValueError):
         raise SnapshotError(f"the run in {log_dir} keeps no journal: start it with fprime-wsts run --stepped "
                             "--journal (or time.journal in the manifest) to be able to snapshot it") from None
+
+
+# ----------------------------------------------------------------------
+# Plants' traces
+# ----------------------------------------------------------------------
+
+
+def copy_traces(log_dir: Path, target: Path, seconds: float) -> List[str]:
+    """Copy the trace of every plant of a run (dynamics-<name>.jsonl in its log directory) up
+    to `seconds` of simulated time: the exchanges before the instants the snapshot holds.
+    Returns the plants' names."""
+    names = []
+    for source in sorted(Path(log_dir).glob(TRACE.format("*"))):
+        name = source.name[len("dynamics-"):-len(".jsonl")]
+        kept = []
+        for line in source.read_text().splitlines():
+            try:
+                if json.loads(line)["t"] <= seconds + 1e-9:
+                    kept.append(line)
+            except (ValueError, KeyError, TypeError):
+                break  # a line being written as the run was paused: not one of the snapshot's
+        (target / source.name).write_text("".join(line + "\n" for line in kept))
+        names.append(name)
+    return names
+
+
+def load_traces(snapshot: "Snapshot") -> Dict[str, List[dict]]:
+    """The plants' traces a snapshot holds, by plant"""
+    found = {}
+    for name in snapshot.meta.get("plants", []):
+        path = snapshot.path / TRACE.format(name)
+        try:
+            found[name] = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        except (OSError, ValueError) as error:
+            raise SnapshotError(f"{snapshot.path}: the trace of plant '{name}' cannot be read: {error}") from None
+    return found
 
 
 # ----------------------------------------------------------------------
@@ -260,17 +303,25 @@ def take(target, path, resume: Optional[bool] = None, timeout: float = 30.0) -> 
     log_dir = target / "wsts-logs" if (target / "wsts-logs" / "wsts-run.json").is_file() else target
     if "elements" in run:
         return _take_system(target, log_dir, run, path, resume, timeout)
+    conducted = bool(run.get("conducted"))  # a deployment with plants, in lockstep as a system of one
     with WstsBridge(run["bridge"], request_timeout=timeout) as sim:
         before = sim.status()
-        if not before.get("stepped") or before.get("lockstep"):
+        if not before.get("stepped") or (before.get("lockstep") and not conducted):
             raise SnapshotError("a snapshot needs a run in stepped time (fprime-wsts run --stepped --journal); "
                                 "an element of a system in lockstep is snapshotted with its system")
         read_journal_meta(log_dir)  # before the run is touched
         sim.pause()
-        sim.wait_quiescent(timeout=timeout)
-        status = sim.status()
+        if conducted:
+            # Its conductor takes the instant it is in, sees the pause and holds
+            status = _wait_held({"deployment": sim}, timeout)["deployment"]
+        else:
+            sim.wait_quiescent(timeout=timeout)
+            status = sim.status()
         try:
             meta = _copy_element(log_dir, path, int(status["tick"]), status, "deployment")
+            if conducted:
+                meta.update(conducted=True, plants=copy_traces(log_dir, path, float(status.get("sim_seconds", 0.0))))
+                (path / SNAPSHOT_META).write_text(json.dumps(meta, indent=2) + "\n")
         except BaseException:
             shutil.rmtree(path, ignore_errors=True)
             raise
@@ -317,6 +368,9 @@ def _take_system(target: Path, log_dir: Path, run: dict, path: Path, resume: Opt
                 "sim_seconds": max(element["sim_seconds"] for element in elements.values()),
                 "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             }
+            plants = copy_traces(log_dir, path, meta["sim_seconds"])
+            if plants:
+                meta["plants"] = plants
             (path / SNAPSHOT_META).write_text(json.dumps(meta, indent=2) + "\n")
         except BaseException:
             shutil.rmtree(path, ignore_errors=True)
@@ -327,11 +381,14 @@ def _take_system(target: Path, log_dir: Path, run: dict, path: Path, resume: Opt
 
 
 def _wait_held(system, timeout: float) -> Dict[str, dict]:
+    """Wait until every element (a WstsSystem, or bridges by name) is paused, quiescent and stays
+    at its tick: its conductor holds"""
     deadline = time.monotonic() + timeout
     last: Optional[Dict[str, int]] = None
     since = time.monotonic()
     while time.monotonic() < deadline:
-        statuses = system.status()
+        statuses = {name: bridge.status() for name, bridge in system.items()} if isinstance(system, dict) \
+            else system.status()
         ticks = {name: int(status["tick"]) for name, status in statuses.items()}
         quiet = all(status.get("paused") and not status.get("activity") for status in statuses.values())
         if quiet and ticks == last and time.monotonic() - since >= 0.3:

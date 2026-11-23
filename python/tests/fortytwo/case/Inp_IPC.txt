@@ -1,0 +1,12 @@
+<<<<<<<<<<<<<<< A case for the tests of fprime_wsts.fortytwo >>>>>>>>>>>>>>>>
+1                                       ! Number of Sockets
+**********************************  IPC 0   *****************************
+TXRX                                    ! IPC Mode (OFF,TX,RX,TXRX,WRITEFILE,READFILE)
+"State00.42"                            ! File name for WRITE or READ
+SERVER                                  ! Socket Role (SERVER,CLIENT,GMSEC_CLIENT)
+localhost     10001                     ! Server Host Name, Port
+TRUE                                    ! Allow Blocking (i.e. wait on RX)
+TRUE                                    ! Echo to stdout
+2                                       ! Number of TX prefixes
+"SC[0].wn"                              ! Prefix 0
+"SC[0].qn"                              ! Prefix 1

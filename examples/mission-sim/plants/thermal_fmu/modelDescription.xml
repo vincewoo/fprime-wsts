@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The thermal plant of Payload's heated panel (thermal.c); see ../thermal.py -->
+<fmiModelDescription fmiVersion="2.0" modelName="Thermal" guid="{6f1ac3e2-5b1d-4f0e-9d5c-2a6e8b7d3c41}"
+                     description="Lumped thermal model of a heated panel" generationTool="fprime-wsts example"
+                     numberOfEventIndicators="0">
+  <CoSimulation modelIdentifier="thermal" canHandleVariableCommunicationStepSize="true"
+                canGetAndSetFMUstate="true" canSerializeFMUstate="true"/>
+  <DefaultExperiment startTime="0" stepSize="0.05"/>
+  <ModelVariables>
+    <ScalarVariable name="C" valueReference="0" causality="parameter" variability="fixed" description="Heat capacity (J/K)"><Real start="5.0"/></ScalarVariable>
+    <ScalarVariable name="P" valueReference="1" causality="parameter" variability="fixed" description="Heater power (W)"><Real start="10.0"/></ScalarVariable>
+    <ScalarVariable name="G" valueReference="2" causality="parameter" variability="fixed" description="Conductance to the surroundings (W/K)"><Real start="0.1"/></ScalarVariable>
+    <ScalarVariable name="T_env" valueReference="3" causality="parameter" variability="fixed" description="Surroundings (C)"><Real start="21.5"/></ScalarVariable>
+    <ScalarVariable name="T0" valueReference="4" causality="parameter" variability="fixed" description="Initial temperature (C)"><Real start="21.5"/></ScalarVariable>
+    <ScalarVariable name="substep" valueReference="5" causality="parameter" variability="fixed" description="RK4 sub-step (s)"><Real start="0.01"/></ScalarVariable>
+    <ScalarVariable name="heater" valueReference="6" causality="input" variability="continuous" description="Heater on (1) or off (0)"><Real start="0.0"/></ScalarVariable>
+    <ScalarVariable name="T" valueReference="7" causality="output" variability="continuous" initial="calculated" description="Panel temperature (C)"><Real/></ScalarVariable>
+  </ModelVariables>
+  <ModelStructure>
+    <Outputs><Unknown index="8"/></Outputs>
+  </ModelStructure>
+</fmiModelDescription>

@@ -18,6 +18,10 @@
 //   reg_set         endpoint offset value
 //   irq_raise       endpoint [number]
 //   model_set       model key value
+//
+// The bridge also answers model_get (model key), reg_get (endpoint offset) and gpio_get,
+// which read without acting, and batch (actions: one action per line), which applies
+// several actions in order between the same two ticks.
 //   record_start    path | record_stop
 //   scenario_load   path [mode: stimulus|responses] | scenario_start | scenario_stop
 //   log             text
@@ -57,6 +61,14 @@ class Model {
     }
     //! Called once per simulation tick
     virtual void onTick(std::uint64_t tick) { (void)tick; }
+    //! The current value of a named quantity, as text (the bridge's model_get: what a dynamics
+    //! coupling reads, docs/dynamics.md). Return false if the key is not known. Reading
+    //! changes nothing.
+    virtual bool get(const std::string& key, std::string& value) {
+        (void)key;
+        (void)value;
+        return false;
+    }
 };
 
 //! What arrives from another element of a system (the far end of a link). In lockstep it is
@@ -267,6 +279,8 @@ class Control : public BusObserver {
     // ---- Models ----
 
     void addModel(const std::string& name, Model* model);
+    //! A model's value (Model::get). False, with `error`, for an unknown model or key.
+    bool modelGet(const std::string& name, const std::string& key, std::string& value, std::string& error);
 
     // ---- Observation ----
 

@@ -126,7 +126,10 @@ class Conductor:
     """Steps the elements of a system together (lockstep). `system` is what `WstsSystem`
     takes: the generated system directory, its wsts-system.json, or that file's content."""
 
-    def __init__(self, system, connect_timeout: float = 10.0, request_timeout: float = 5.0):
+    def __init__(self, system, connect_timeout: float = 10.0, request_timeout: float = 5.0, dynamics=True):
+        """`dynamics`: the plants to step between instants (docs/dynamics.md). True takes those
+        of the system's description, False none, and a list gives specs (dynamics.parse_specs)
+        whose paths are relative to the generated directory."""
         from .bridge import WstsSystem
 
         # Connections of its own: a grant blocks its connection until the tick is finished
@@ -145,9 +148,57 @@ class Conductor:
             self.ends.append((name, link["b"]["element"], link["a"]["element"]))
         self.state: Dict[str, dict] = {}
         self.instants = 0  # instants taken by this conductor
+        self.couplings = []
+        specs = self.system.description.get("dynamics", []) if dynamics is True else (dynamics or [])
+        if specs:
+            from . import dynamics as plants
+
+            description = self.system.description
+            base = Path(description.get("directory") or ".")
+            trace = description.get("log_dir") or (str(base / "wsts-logs") if description.get("directory") else None)
+            names = list(self.bridges)
+            try:
+                self.couplings = plants.couplings(specs, self.bridges, base, Path(trace) if trace else None,
+                                                  default_element=names[0] if len(names) == 1 else None)
+            except plants.DynamicsError:
+                self.system.close()
+                raise
 
     def close(self) -> None:
-        self.system.close()
+        try:
+            for coupling in self.couplings:
+                coupling.stop()
+        finally:
+            self.system.close()
+
+    def shadow_plants(self, traces: Dict[str, List[dict]]) -> None:
+        """A restore (docs/dynamics.md, phase 3): re-drive each plant along its trace in the
+        snapshot while `advance_to` replays the journal, comparing instead of writing. Every
+        plant of this conductor must have one."""
+        from .dynamics import DynamicsError
+
+        for coupling in self.couplings:
+            if coupling.name not in traces:
+                raise DynamicsError(f"the snapshot holds no trace of plant '{coupling.name}': it was taken of a run "
+                                    "without it. Restore it without plants (dynamics=False), or take the snapshot "
+                                    "again with the plant")
+            coupling.shadow(traces[coupling.name])
+
+    def end_shadow(self) -> None:
+        """The restore is at the snapshot: each plant must have taken every exchange of its
+        trace again. From here the plants are coupled as usual, from where the restore left them."""
+        for coupling in self.couplings:
+            coupling.end_shadow()
+
+    def dynamics(self, name: Optional[str] = None) -> dict:
+        """What the plants were last given and gave (`time`, `inputs`, `outputs`), by name; or
+        one plant's"""
+        found = {coupling.name: coupling.state for coupling in self.couplings}
+        if name is None:
+            return found
+        if name not in found:
+            raise LockstepError(f"no plant '{name}' in this system ({', '.join(found) or 'none'})")
+        return found[name]
 
     def __enter__(self) -> "Conductor":
         return self
@@ -227,7 +278,30 @@ class Conductor:
         """Take the next instant: grant a tick to each element due at it, at once, and wait
         until all have finished. Returns its time."""
         at, due = self.next_instant()
+        self._couple(at)
         return self._grant(at, due)
+
+    def _couple(self, at: int) -> None:
+        """Between two instants: step each plant due at `at` (docs/dynamics.md). What it writes
+        may set flight software going (an edge on a pin runs its handler) and send on a link,
+        so the elements written to are read again before their next grant."""
+        if not self.couplings:
+            return
+        from .dynamics import DynamicsError
+
+        from .dynamics import PlantMismatch
+
+        touched = set()
+        for coupling in self.couplings:
+            if coupling.due(self.time_ns, at):
+                try:
+                    touched |= coupling.exchange(self.time_ns, at)
+                except PlantMismatch:
+                    raise  # a restore that differs: said as it is
+                except DynamicsError as error:
+                    raise LockstepError(f"at {at / 1e9:g} s of simulated time: {error}") from None
+        if touched:
+            self.refresh(sorted(touched))
 
     def advance_to(self, ticks: Dict[str, int], keep_going: Callable[[], bool] = lambda: True) -> None:
         """Take instants until every element has reached its tick in `ticks`, granting each only
@@ -247,6 +321,8 @@ class Conductor:
             upcoming = {name: (int(self.state[name]["tick"]) + 1) * int(self.state[name]["tick_period_ns"])
                         for name in behind}
             at = min(upcoming.values())
+            if any(coupling.shadowing for coupling in self.couplings):
+                self._couple(at)  # plants re-driven along the snapshot's traces (shadow_plants)
             self._grant(at, [name for name in behind if upcoming[name] == at])
 
     def _grant(self, at: int, due: List[str]) -> int:

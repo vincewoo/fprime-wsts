@@ -182,6 +182,13 @@ class RegisterDevice {
         (void)value;
         return false;
     }
+    //! Read a register without a flight read (the reg_get query): no read hook, nothing
+    //! cleared. False if unsupported or nothing is there.
+    virtual bool peek(std::uint64_t offset, std::uint64_t& value) {
+        (void)offset;
+        (void)value;
+        return false;
+    }
 };
 
 // ----------------------------------------------------------------------
@@ -362,6 +369,8 @@ class Bus {
     void registerInterrupt(const std::string& endpoint, std::uint32_t number, const char* src = "model");
     //! Poke a register of the block on an endpoint (the reg_set action)
     bool registerPoke(const std::string& endpoint, std::uint64_t offset, std::uint64_t value);
+    //! Read a register of the block on an endpoint without a flight read (RegisterDevice::peek)
+    bool registerPeek(const std::string& endpoint, std::uint64_t offset, std::uint64_t& value);
     //! Name of the fault target for the interrupts of a register endpoint
     static std::string interruptTarget(const std::string& endpoint) { return endpoint + ":irq"; }
 

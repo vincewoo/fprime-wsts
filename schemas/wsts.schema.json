@@ -669,6 +669,342 @@
         }
       ],
       "description": "The telemetry the generator writes for the deployment, by group. Published with wstsControl's: needs control"
+    },
+    "dynamics": {
+      "type": "array",
+      "description": "Plants: dynamics simulators stepped between instants in stepped time (docs/dynamics.md). Their outputs are bridge actions, journaled like a client's",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The plant's name: its trace is wsts-logs/dynamics-<name>.jsonl, and its actions carry \"via\": <name>"
+          },
+          "python": {
+            "type": "string",
+            "pattern": "\\.py$",
+            "description": "A Python file, relative to the manifest, that defines create(params): an object with step(t, dt, inputs) -> outputs"
+          },
+          "fmu": {
+            "type": "string",
+            "pattern": "\\.fmu$",
+            "description": "An FMI 2.0 or 3.0 co-simulation FMU, relative to the manifest"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "number",
+                "string",
+                "boolean"
+              ]
+            },
+            "description": "Given to create(params), or set on the FMU's parameters by name before initialisation"
+          },
+          "step": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "Seconds of simulated time per exchange; default: every instant"
+          },
+          "inputs": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "gpio": {
+                  "type": "string",
+                  "description": "A GPIO endpoint: the level flight software last wrote (1 or 0)"
+                },
+                "model": {
+                  "type": "string",
+                  "description": "A model of the manifest: its value 'key' (model_get)"
+                },
+                "key": {
+                  "type": "string",
+                  "description": "The model's key (text of a ScriptedByteStream, reg.<offset> of a RegisterFile, a register of a RegisterMapI2c, ...)"
+                },
+                "register": {
+                  "type": "string",
+                  "description": "A register endpoint: the register at 'offset', read without a flight read"
+                },
+                "offset": {
+                  "type": [
+                    "integer",
+                    "string"
+                  ],
+                  "description": "Register offset (decimal or \"0x...\")"
+                },
+                "scale": {
+                  "type": "number",
+                  "description": "value * scale + add"
+                },
+                "add": {
+                  "type": "number",
+                  "description": "value * scale + add"
+                }
+              }
+            },
+            "description": "The plant's inputs by name: where each is read, after an instant"
+          },
+          "outputs": {
+            "type": "object",
+            "additionalProperties": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "gpio": {
+                      "type": "string",
+                      "description": "A GPIO endpoint: driven as an input of flight software (an edge when the level changes)"
+                    },
+                    "model": {
+                      "type": "string",
+                      "description": "A model of the manifest: model_set of 'key'"
+                    },
+                    "key": {
+                      "type": "string",
+                      "description": "The model's key (text of a ScriptedByteStream, reg.<offset> of a RegisterFile, a register of a RegisterMapI2c, ...)"
+                    },
+                    "register": {
+                      "type": "string",
+                      "description": "A register endpoint: reg_set of the register at 'offset'"
+                    },
+                    "offset": {
+                      "type": [
+                        "integer",
+                        "string"
+                      ],
+                      "description": "Register offset (decimal or \"0x...\")"
+                    },
+                    "i2c": {
+                      "type": "string",
+                      "description": "An I2C endpoint: i2c_reg_set of register 'reg' of the register-addressed model at 'addr'"
+                    },
+                    "addr": {
+                      "type": [
+                        "integer",
+                        "string"
+                      ],
+                      "description": "I2C address"
+                    },
+                    "reg": {
+                      "type": [
+                        "integer",
+                        "string"
+                      ],
+                      "description": "Register of the I2C model"
+                    },
+                    "bytes": {
+                      "type": "string",
+                      "description": "A byte stream endpoint: the 'format'ted text injected when it changes"
+                    },
+                    "scale": {
+                      "type": "number",
+                      "description": "value * scale + add"
+                    },
+                    "add": {
+                      "type": "number",
+                      "description": "value * scale + add"
+                    },
+                    "round": {
+                      "type": "boolean",
+                      "description": "To the nearest whole number (implied for registers)"
+                    },
+                    "format": {
+                      "type": "string",
+                      "description": "Python format string of the value, e.g. \"$TEMP,{:.1f}\\n\""
+                    },
+                    "above": {
+                      "type": "number",
+                      "description": "A threshold: true while the value is above it"
+                    },
+                    "below": {
+                      "type": "number",
+                      "description": "A threshold: true while the value is below it"
+                    },
+                    "hysteresis": {
+                      "type": "number",
+                      "minimum": 0,
+                      "description": "How far back past the threshold the value must go to change again"
+                    }
+                  }
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "gpio": {
+                        "type": "string",
+                        "description": "A GPIO endpoint: driven as an input of flight software (an edge when the level changes)"
+                      },
+                      "model": {
+                        "type": "string",
+                        "description": "A model of the manifest: model_set of 'key'"
+                      },
+                      "key": {
+                        "type": "string",
+                        "description": "The model's key (text of a ScriptedByteStream, reg.<offset> of a RegisterFile, a register of a RegisterMapI2c, ...)"
+                      },
+                      "register": {
+                        "type": "string",
+                        "description": "A register endpoint: reg_set of the register at 'offset'"
+                      },
+                      "offset": {
+                        "type": [
+                          "integer",
+                          "string"
+                        ],
+                        "description": "Register offset (decimal or \"0x...\")"
+                      },
+                      "i2c": {
+                        "type": "string",
+                        "description": "An I2C endpoint: i2c_reg_set of register 'reg' of the register-addressed model at 'addr'"
+                      },
+                      "addr": {
+                        "type": [
+                          "integer",
+                          "string"
+                        ],
+                        "description": "I2C address"
+                      },
+                      "reg": {
+                        "type": [
+                          "integer",
+                          "string"
+                        ],
+                        "description": "Register of the I2C model"
+                      },
+                      "bytes": {
+                        "type": "string",
+                        "description": "A byte stream endpoint: the 'format'ted text injected when it changes"
+                      },
+                      "scale": {
+                        "type": "number",
+                        "description": "value * scale + add"
+                      },
+                      "add": {
+                        "type": "number",
+                        "description": "value * scale + add"
+                      },
+                      "round": {
+                        "type": "boolean",
+                        "description": "To the nearest whole number (implied for registers)"
+                      },
+                      "format": {
+                        "type": "string",
+                        "description": "Python format string of the value, e.g. \"$TEMP,{:.1f}\\n\""
+                      },
+                      "above": {
+                        "type": "number",
+                        "description": "A threshold: true while the value is above it"
+                      },
+                      "below": {
+                        "type": "number",
+                        "description": "A threshold: true while the value is below it"
+                      },
+                      "hysteresis": {
+                        "type": "number",
+                        "minimum": 0,
+                        "description": "How far back past the threshold the value must go to change again"
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            "description": "The plant's outputs by name: where each is written (one place, or a list), before the next instant, when it changes"
+          },
+          "socket": {
+            "description": "A plant served in a process of its own, over the plant socket protocol (fprime_wsts.plant_socket): its address, or the address and the command that starts the server",
+            "oneOf": [
+              {
+                "type": "string",
+                "pattern": "^(tcp:|unix:)"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "address"
+                ],
+                "properties": {
+                  "address": {
+                    "type": "string",
+                    "pattern": "^(tcp:|unix:)",
+                    "description": "tcp:<host>:<port>, tcp:<port> or unix:<path>; port 0: a free port, chosen at run time"
+                  },
+                  "command": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": [
+                        "string",
+                        "number"
+                      ]
+                    },
+                    "description": "The server's command line, run in the manifest's directory; {address} and {port} are replaced"
+                  }
+                }
+              }
+            ]
+          },
+          "fortytwo": {
+            "description": "NASA's 42, stepped over its TXRX socket (fprime_wsts.fortytwo): its case directory, or the case and 42's executable",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "case"
+                ],
+                "properties": {
+                  "case": {
+                    "type": "string",
+                    "description": "The case directory (Inp_Sim.txt, Inp_IPC.txt), relative to the manifest"
+                  },
+                  "executable": {
+                    "type": "string",
+                    "description": "42's executable; default: $FORTYTWO, else 42 on the PATH. A path starting with ./ or ../ is relative to the manifest"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "python"
+            ]
+          },
+          {
+            "required": [
+              "fmu"
+            ]
+          },
+          {
+            "required": [
+              "socket"
+            ]
+          },
+          {
+            "required": [
+              "fortytwo"
+            ]
+          }
+        ]
+      }
     }
   },
   "additionalProperties": false,

@@ -80,6 +80,12 @@ Several can run at once: `with wsts_restore(snap) as a, wsts_restore(snap) as b:
 branches of one state. `sim.log_dir` is the restored run's log directory, to snapshot it
 from. An agent passes `from_snapshot` to `run_start`.
 
+A run with [plants](dynamics.md) is snapshotted with their traces. The restore re-drives each
+plant along its trace while the journal replays, comparing every exchange, and the restored
+run goes on coupled from the snapshot: the test's `sim.step()` steps the plants from where
+they were. A single deployment with plants is handed over as a `WstsSystem` of one element,
+`deployment`, stepped with `sim.step(seconds=...)`.
+
 ## When a restore fails
 
 | Message | Why |
@@ -87,6 +93,8 @@ from. An agent passes `from_snapshot` to `run_start`.
 | `... was taken of another build` | The executable is not the one the snapshot was taken of (their SHA-256 differ): rebuild from the state it was taken at, or take a new snapshot |
 | `the restored run differs from the snapshotted one at tick T on E, bus record N` | Flight software was given something the journal does not hold. The message shows both records |
 | `a snapshot needs a run in stepped time`, `... keeps no journal` | Start the run with `--stepped --journal` |
+| `plant 'P': the restored run differs from the snapshotted one at exchange N` | The plant gave other values than it did when the run was snapshotted: another plant file, other parameters, a plant that reads the host's clock or random numbers it does not seed, or compiled code built differently. The message shows both lines of its trace |
+| `the snapshot holds no trace of plant 'P'` | The snapshot was taken of a run without that plant. Restore it without plants (`WstsSystem(..., dynamics=False)`), or snapshot it again with the plant |
 
 What a journal does not hold, and so what makes a restore differ:
 

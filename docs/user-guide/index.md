@@ -49,7 +49,7 @@ which manifest key settles it: `generate` names ambiguous instances and unmatche
     ---
 
     What answers behind the surrogates: [device models](device-models.md),
-    [register blocks and interrupts](registers.md),
+    [dynamics simulators](dynamics.md) in the loop, [register blocks and interrupts](registers.md),
     [simulators as F´ components](simulators.md), and
     [your own surrogates](surrogates.md).
 
