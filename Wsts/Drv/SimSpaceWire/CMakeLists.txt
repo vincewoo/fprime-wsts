@@ -1,0 +1,10 @@
+register_fprime_library(
+    AUTOCODER_INPUTS
+        "${CMAKE_CURRENT_LIST_DIR}/SimSpaceWire.fpp"
+    SOURCES
+        "${CMAKE_CURRENT_LIST_DIR}/SimSpaceWire.cpp"
+    HEADERS
+        "${CMAKE_CURRENT_LIST_DIR}/SimSpaceWire.hpp"
+    DEPENDS
+        Wsts_Core
+)

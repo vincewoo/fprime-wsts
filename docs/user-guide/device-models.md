@@ -27,6 +27,7 @@ In `Wsts/Core/Models.hpp`, ready to name in a manifest:
 | `Wsts::LoopbackByteStream` | `bytestream` | Echoes every byte flight software sends | |
 | `Wsts::LoopbackSpi` | `spi` | Shifts back what was shifted in | |
 | `Wsts::RegisterFile` | `register` | A block of 32-bit memory-mapped registers with masks, write-1-to-clear, read-clears and a periodic interrupt | See [Register blocks](registers.md) |
+| `Wsts::RmapTarget` | `packet` | An RMAP target on SpaceWire (ECSS-E-ST-50-52C): memory that flight software writes, reads and read-modify-writes with RMAP commands, and the replies | `key`, `base`, `size`, `mem.<address>` (bytes, or a signal); see [SpaceWire](spacewire.md) |
 
 ```yaml
 models:

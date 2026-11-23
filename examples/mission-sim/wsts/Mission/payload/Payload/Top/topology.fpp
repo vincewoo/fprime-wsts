@@ -32,6 +32,7 @@ module Payload {
     instance heater
     instance adc
     instance imager
+    instance sunSensor
     instance hub
     instance hubAdapter
     instance bufferManager
@@ -43,6 +44,7 @@ module Payload {
     instance switchPin
     instance spiBus
     instance fpgaRegs
+    instance spw
 
     # ----------------------------------------------------------------------
     # Pattern graph specifiers
@@ -66,6 +68,7 @@ module Payload {
       rateGroupDriver.CycleOut[Ports_RateGroups.rateGroup10Hz] -> rateGroup10Hz.CycleIn
       rateGroup10Hz.RateGroupMemberOut[0] -> imu.run
       rateGroup10Hz.RateGroupMemberOut[1] -> fpga.run
+      rateGroup10Hz.RateGroupMemberOut[2] -> sunSensor.run
 
       rateGroupDriver.CycleOut[Ports_RateGroups.rateGroup1Hz] -> rateGroup1Hz.CycleIn
       rateGroup1Hz.RateGroupMemberOut[0] -> instrument.run
@@ -125,6 +128,14 @@ module Payload {
       fpga.regRead       -> fpgaRegs.read32In
       fpga.regWrite      -> fpgaRegs.write32In
       fpgaRegs.interrupt -> fpga.interruptIn
+
+      # Sun sensor on the SpaceWire link: RMAP commands out, replies back
+      sunSensor.toBufferDriver         -> spw.bufferIn
+      spw.bufferInReturn               -> sunSensor.toBufferDriverReturn
+      spw.bufferOut                    -> sunSensor.fromBufferDriver
+      sunSensor.fromBufferDriverReturn -> spw.bufferOutReturn
+      spw.allocate                     -> bufferManager.bufferGetCallee
+      spw.deallocate                   -> bufferManager.bufferSendIn
     }
 
 

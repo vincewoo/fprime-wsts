@@ -19,7 +19,7 @@ def test_address_any_and_the_telemetry_switch():
     spec = model(**{"class": "Wsts::RegisterMapI2c", "kind": "i2c", "address": "any"})
     assert spec.address == I2C_ANY_ADDRESS and spec.telemetry
     assert not model(**{"class": "C", "kind": "spi", "telemetry": False}).telemetry
-    with pytest.raises(WstsError, match="address 'any' is for I2C models only"):
+    with pytest.raises(WstsError, match="address 'any' is for I2C and packet models only"):
         model(**{"class": "C", "kind": "spi", "address": "any"})
     with pytest.raises(WstsError, match="telemetry must be true or false"):
         model(**{"class": "C", "kind": "spi", "telemetry": "yes"})

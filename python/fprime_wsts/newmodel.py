@@ -28,7 +28,7 @@ import yaml
 
 from .fpp import WstsError
 
-KINDS = ("i2c", "spi", "bytestream", "gpio", "register")
+KINDS = ("i2c", "spi", "bytestream", "gpio", "register", "packet")
 MODULE = "Models"
 PY_DIR = "pymodels"  # not "models": beside Models/, the same directory where case does not count
 MARKER = "# Written by fprime-wsts new-model: it adds the files of each new model here."
@@ -537,6 +537,66 @@ void $Name::onTick(std::uint64_t tick) {
     this->raise(IRQ);
 }
 """),
+    "packet": ("an instrument on SpaceWire, reached over RMAP", """\
+//! An instrument on a SpaceWire network, on the toolkit's RMAP target (Wsts::RmapTarget):
+//! flight software reads and writes its memory with RMAP commands. Its memory holds an
+//! identity word and a measurement that follows a signal of simulated time.
+//!
+//! Parameters (manifest `params`, model_set, MODEL_SET): those of Wsts::RmapTarget (key, base,
+//! size, mem.<address>), and
+//!   value     the measurement, in engineering units: a number or a signal
+class $Name : public Wsts::RmapTarget {
+  public:
+    // TODO: the instrument's memory map, from its ICD (addresses, sizes, byte order)
+    static constexpr std::uint64_t ADDR_ID = 0x0000;     //!< identity, 4 bytes
+    static constexpr std::uint64_t ADDR_VALUE = 0x0010;  //!< the measurement, 4 bytes, in counts
+    static constexpr std::uint32_t ID = 0x00000000;
+    static constexpr double LSB_PER_UNIT = 1000.0;
+
+    $Name();
+
+    bool set(const std::string& key, const std::string& value) override;
+    void onTick(std::uint64_t tick) override;
+
+  private:
+    //! Store a 32-bit word, big-endian as SpaceWire memory is, at an address
+    void store(std::uint64_t address, std::uint32_t word);
+
+    std::mutex m_stateMutex;
+    Wsts::Signal m_value;
+};
+""", """\
+$Name::$Name() {
+    (void)parseSignal("0", m_value);
+    this->store(ADDR_ID, ID);
+    this->store(ADDR_VALUE, 0);
+}
+
+void $Name::store(std::uint64_t address, std::uint32_t word) {
+    char text[64];
+    std::snprintf(text, sizeof text, "0x%02x 0x%02x 0x%02x 0x%02x", (word >> 24) & 0xFFU, (word >> 16) & 0xFFU,
+                  (word >> 8) & 0xFFU, word & 0xFFU);
+    (void)Wsts::RmapTarget::set("mem." + std::to_string(address), text);
+}
+
+bool $Name::set(const std::string& key, const std::string& value) {
+    if (key == "value") {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        return parseSignal(value, m_value);
+    }
+    return Wsts::RmapTarget::set(key, value);
+}
+
+void $Name::onTick(std::uint64_t tick) {
+    Wsts::RmapTarget::onTick(tick);
+    double value = 0;
+    {
+        std::lock_guard<std::mutex> lock(m_stateMutex);
+        value = m_value.at(Wsts::Control::get().elapsedNs());
+    }
+    this->store(ADDR_VALUE, static_cast<std::uint32_t>(std::lround(value * LSB_PER_UNIT)));
+}
+"""),
 }
 
 # ----------------------------------------------------------------------
@@ -679,6 +739,45 @@ def serve(sim):
 
     sim.serve_register(ENDPOINT, read, write)
 '''),
+    "packet": ("an instrument on SpaceWire, reached over RMAP", '''\
+ADDRESS = $address
+KEY = 0x00  # TODO: the instrument's RMAP key, memory map and scale, from its ICD
+ADDR_VALUE = 0x0010
+LSB_PER_UNIT = 1000.0
+
+
+def crc(data: bytes) -> int:
+    """The RMAP CRC (ECSS-E-ST-50-52C): CRC-8, polynomial x^8 + x^2 + x + 1, bits reflected"""
+    value = 0
+    for byte in data:
+        value ^= byte
+        for _ in range(8):
+            value = (value >> 1) ^ 0xE0 if value & 1 else value >> 1
+    return value
+
+
+def serve(sim):
+    memory = bytearray(0x100)
+
+    def on_packet(packet: bytes):
+        # An RMAP read command with no reply address: target, protocol, instruction, key,
+        # initiator, transaction ID, extended address, address, length, header CRC.
+        # TODO: writes and reply addresses, if flight software uses them (Wsts::RmapTarget,
+        # in C++, does all of RMAP)
+        if len(packet) != 16 or packet[1] != 0x01 or packet[2] & 0xFC != 0x4C or crc(packet[:15]) != packet[15]:
+            return None
+        address = int.from_bytes(packet[8:12], "big")
+        length = int.from_bytes(packet[12:15], "big")
+        counts = max(0, round(VALUE.at(now()) * LSB_PER_UNIT)) & 0xFFFFFFFF
+        memory[ADDR_VALUE:ADDR_VALUE + 4] = counts.to_bytes(4, "big")
+        status = 0x03 if packet[3] != KEY else 0x0A if address + length > len(memory) else 0x00
+        data = bytes(memory[address:address + length]) if status == 0 else b""
+        header = bytes([packet[4], 0x01, packet[2] & 0x3F, status, packet[0], packet[5], packet[6], 0x00])
+        header += len(data).to_bytes(3, "big")
+        return header + bytes([crc(header)]) + data + bytes([crc(data)])
+
+    sim.serve_packet(ENDPOINT, ADDRESS, on_packet)
+'''),
 }
 
 CMAKE_TEMPLATE = """\
@@ -729,7 +828,7 @@ def check_name(name: str) -> None:
         raise WstsError(f"'{name}' is not a C++ class name: letters, digits and _, not starting with a digit")
 
 
-def _parse_address(address: Optional[str]) -> Optional[str]:
+def _parse_address(address: Optional[str], kind: str = "i2c") -> Optional[str]:
     if address is None:
         return None
     if address.strip().lower() == "any":
@@ -738,7 +837,11 @@ def _parse_address(address: Optional[str]) -> Optional[str]:
         value = int(address, 0)
     except ValueError:
         raise WstsError(f"--address '{address}' is not a number (0x48) or 'any'") from None
-    if not 0 <= value <= 0x7F:
+    if kind == "packet":
+        if not 0x20 <= value <= 0xFF:
+            raise WstsError(f"--address {address}: a SpaceWire logical address is 0x20..0xff (0..0x1f are path "
+                            "addresses)")
+    elif not 0 <= value <= 0x7F:
         raise WstsError(f"--address {address}: a 7-bit I2C address is 0x00..0x7f")
     return f"{value:#04x}"
 
@@ -749,7 +852,7 @@ def render_cpp(name: str, kind: str, namespace: str) -> tuple:
               "summary": summary}
     hpp = Template(HEADER_START + header + HEADER_END).substitute(values)
     cpp = Template(SOURCE_START + source + SOURCE_END).substitute(values)
-    if kind == "bytestream":
+    if kind in ("bytestream", "packet"):
         cpp = cpp.replace("#include <cmath>\n", "#include <cmath>\n#include <cstdio>\n")
     return hpp, cpp
 
@@ -757,7 +860,8 @@ def render_cpp(name: str, kind: str, namespace: str) -> tuple:
 def render_python(name: str, kind: str, endpoint: str, address: Optional[str]) -> str:
     summary, body = PY[kind]
     values = {"Name": name, "summary": summary, "endpoint": endpoint or "TODO",
-              "address": "0x00  # TODO: the device's address" if address in (None, "any") else address}
+              "address": address if address not in (None, "any")
+              else '"any"  # TODO: its logical address' if kind == "packet" else "0x00  # TODO: the device's address"}
     return Template(PY_START + body).substitute(values)
 
 
@@ -932,9 +1036,9 @@ def new_model(project: Path, name: str, kind: str, endpoint: Optional[str] = Non
         raise WstsError(f"--kind must be one of {', '.join(KINDS)}")
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_:]*", namespace):
         raise WstsError(f"'{namespace}' is not a C++ namespace")
-    address = _parse_address(address)
-    if address is not None and kind != "i2c":
-        raise WstsError("--address is for I2C models only")
+    if address is not None and kind not in ("i2c", "packet"):
+        raise WstsError("--address is for I2C and packet models only")
+    address = _parse_address(address, kind)
     project = project.resolve()
     if not project.is_dir():
         raise WstsError(f"{project} is not a directory: give the simulation project")
@@ -967,7 +1071,7 @@ def new_model(project: Path, name: str, kind: str, endpoint: Optional[str] = Non
         python_file = None
         entry = {"name": model_name(name), "class": f"{namespace}::{name}", "header": f"{MODULE}/{name}.hpp",
                  "endpoint": endpoint or "TODO", "kind": kind}
-        if kind == "i2c":
+        if kind in ("i2c", "packet"):
             entry["address"] = address or "any"
         if params:
             entry["params"] = params

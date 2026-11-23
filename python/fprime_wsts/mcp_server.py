@@ -780,14 +780,18 @@ class Session:
         return {"cleared": endpoint, "status": self._brief(run)}
 
     def inject(self, endpoint: str, text: Optional[str] = None, hex: Optional[str] = None,
-               target: Optional[str] = None, element: Optional[str] = None) -> dict:
+               target: Optional[str] = None, element: Optional[str] = None, packet: bool = False) -> dict:
         if (text is None) == (hex is None):
             raise WstsError("give either text or hex")
         data = text.encode("utf-8") if text is not None else bytes.fromhex(hex.replace(" ", ""))
         run = self.run(target)
         self._touch(run)
-        self._bridge(run, element).inject_bytes(endpoint, data)
-        return {"injected": len(data), "endpoint": endpoint}
+        bridge = self._bridge(run, element)
+        if packet:
+            bridge.inject_packet(endpoint, data)
+        else:
+            bridge.inject_bytes(endpoint, data)
+        return {"injected": len(data), "endpoint": endpoint, **({"packet": True} if packet else {})}
 
     def gpio(self, endpoint: str, level: Optional[bool] = None, target: Optional[str] = None,
              element: Optional[str] = None) -> dict:
@@ -1117,10 +1121,11 @@ def _tools(session: Session) -> List[Callable]:
         return s.fault_clear(endpoint, run, element)
 
     def inject(endpoint: str, text: Optional[str] = None, hex: Optional[str] = None,
-               run: Optional[str] = None, element: Optional[str] = None) -> dict:
+               run: Optional[str] = None, element: Optional[str] = None, packet: bool = False) -> dict:
         """Deliver bytes to flight software on a byte stream endpoint, as if the device had sent them:
-        text (UTF-8) or hex."""
-        return s.inject(endpoint, text, hex, run, element)
+        text (UTF-8) or hex. packet=true: on a packet (SpaceWire) endpoint, the bytes as one whole packet,
+        as if a node had sent it."""
+        return s.inject(endpoint, text, hex, run, element, packet)
 
     def gpio(endpoint: str, level: Optional[bool] = None, run: Optional[str] = None,
              element: Optional[str] = None) -> dict:

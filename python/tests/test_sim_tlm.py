@@ -52,8 +52,8 @@ def test_generated_deployment_publishes_its_simulation_telemetry(tmp_path):
     assert "Wsts::Control::get().addTelemetrySource([] { ::Payload::wstsTlm.wstsPublish(); });" in setup
     report = result.report["sim_telemetry"]
     # Generated alone, not in the system, its hub driver stays a real socket: no endpoint
-    assert report["endpoints"] == ["fpgaRegs", "heaterPin", "i2cBus", "sensorUart", "spiBus", "switchPin"]
-    assert report["links"] == [] and report["timing"] and report["channels"] == 6 * 8 + 4
+    assert report["endpoints"] == ["fpgaRegs", "heaterPin", "i2cBus", "sensorUart", "spiBus", "spw", "switchPin"]
+    assert report["links"] == [] and report["timing"] and report["channels"] == 7 * 8 + 4
     assert report["base_id"] == result.report["control"]["control_base_id"] + sim_tlm.BASE_OFFSET
     added = result.report["dictionary"]["added"]["channels"]
     assert "Payload.wstsTlm.i2cBus_Unanswered" in added and "Payload.wstsTlm.LateTicks" in added

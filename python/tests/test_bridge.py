@@ -99,6 +99,23 @@ def test_serving_an_i2c_device(sim, bridge):
     assert sim.replies[1]["status"] == 5, "no handler for that address"
 
 
+def test_serving_a_packet_node_and_injecting_packets(sim, bridge):
+    bridge.serve_packet("spw", 0x44, lambda packet: bytes([0x67, packet[1] + 1]))
+    assert sim.requests[-1] == {"id": sim.requests[-1]["id"], "op": "attach", "endpoint": "spw", "kind": "packet",
+                                "addr": 0x44}
+    bridge.serve_packet("spw", "any", lambda packet: None)
+    assert sim.requests[-1]["addr"] == "any"
+    sim.push({"ev": "pkt_req", "rid": 3, "endpoint": "spw", "addr": 0x44, "data": "4410", "rlen": 0})
+    sim.push({"ev": "pkt_req", "rid": 4, "endpoint": "spw", "addr": 0x50, "data": "5001", "rlen": 0})
+    deadline = time.monotonic() + 2
+    while len(sim.replies) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert sim.replies[0] == {"op": "reply", "rid": 3, "status": 0, "data": "6711"}
+    assert sim.replies[1] == {"op": "reply", "rid": 4, "status": 0, "data": ""}, "the node at any: no reply"
+    bridge.inject_packet("spw", bytes([0x67, 0x01]))
+    assert sim.requests[-1]["op"] == "inject_packet" and sim.requests[-1]["data"] == "6701"
+
+
 def test_serving_a_register_block(sim, bridge):
     registers = {0x10: 0x1234, 0xFFFFFFFF00000000: 7}
     writes = []

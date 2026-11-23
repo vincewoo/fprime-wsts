@@ -58,6 +58,9 @@ module Payload {
   @ The payload camera, through its vendor's SDK
   instance imager: Components.Imager base id 0x20019000
 
+  @ The sun sensor on the SpaceWire network, read over RMAP
+  instance sunSensor: Components.SunSensor base id 0x2001A000
+
   # ----------------------------------------------------------------------
   # The hub to the Cdh computer
   # ----------------------------------------------------------------------
@@ -91,5 +94,8 @@ module Payload {
 
   @ Registers of the FPGA's housekeeping block, and its interrupt
   instance fpgaRegs: SensorLib.RegisterInterface base id 0x20037000
+
+  @ SpaceWire link to the payload's instruments (the sun sensor at logical address 0xFE)
+  instance spw: Components.SpwDriver base id 0x20038000
 
 }

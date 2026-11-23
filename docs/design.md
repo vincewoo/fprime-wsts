@@ -40,9 +40,12 @@ There are three places a deployment can be cut, and they trade effort against fi
 
 The seam is chosen per instance. The default is S1 from the surrogate catalog.
 
-The bus behind the surrogates carries five kinds of traffic: byte streams, I2C, SPI, GPIO
-and memory-mapped registers. The first four are the interfaces of F´'s own drivers. The
-fifth is for flight computers whose devices are FPGA blocks or SoC peripherals: there the
+The bus behind the surrogates carries six kinds of traffic: byte streams, I2C, SPI, GPIO,
+memory-mapped registers and packets. The first four are the interfaces of F´'s own drivers.
+The sixth is a SpaceWire network: F´ has no SpaceWire driver, and one written for F´ v4 fits
+its passive buffer driver interface (`Drv.PassiveBufferDriver`), one packet a buffer, which
+`Wsts.SimSpaceWire` serves; packets are routed by their address bytes to the node at their
+logical address ([SpaceWire](user-guide/spacewire.md)). The fifth is for flight computers whose devices are FPGA blocks or SoC peripherals: there the
 "driver" of F´'s sense is a project component that reads and writes 32-bit registers
 through one **register interface component**, which also delivers the hardware's
 interrupts. Cutting at that component (S1r) keeps the device driver itself in the

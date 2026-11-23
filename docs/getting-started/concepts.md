@@ -71,8 +71,9 @@ model, so the simulated dictionary keeps that component's commands, events and t
 
 The **bus** is an in-process backplane that every surrogate calls from its port handlers.
 Each substituted instance is bound to a named **endpoint**, by default the instance's
-name: `i2cBus`, `sensorUart`, `heaterPin`. The bus carries five kinds of traffic: byte
-streams, I2C, SPI, GPIO and memory-mapped registers.
+name: `i2cBus`, `sensorUart`, `heaterPin`. The bus carries six kinds of traffic: byte
+streams, I2C, SPI, GPIO, memory-mapped registers and packets (a
+[SpaceWire](../user-guide/spacewire.md) network).
 
 Every transaction passes through the **fault table** and is reported to the **recorder**
 and the bridge. Because faults and recording sit on the bus, they work the same whatever

@@ -17,7 +17,7 @@ import queue
 import socket
 import threading
 import time
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 
 class BridgeError(Exception):
@@ -188,6 +188,7 @@ class WstsBridge:
         self._i2c: Dict[Tuple[str, int], Callable[[bytes, int], Tuple[int, bytes]]] = {}
         self._spi: Dict[str, Callable[[bytes, int], Tuple[int, bytes]]] = {}
         self._registers: Dict[str, Tuple[Callable, Optional[Callable]]] = {}
+        self._packets: Dict[Tuple[str, Union[int, str]], Callable[[bytes], Optional[bytes]]] = {}
         # Handlers of what flight software sends on byte stream and GPIO endpoints. They run
         # on a thread of their own, so that they may call the bridge (inject a reply).
         self._watchers: Dict[Tuple[str, str], Callable] = {}
@@ -230,6 +231,8 @@ class WstsBridge:
                     self._serve(kind, message)
                 elif kind == "reg_req":
                     self._serve_register(message)
+                elif kind == "pkt_req":
+                    self._serve_packet(message)
                 elif kind is not None:
                     watcher = self._watchers.get((message.get("rec"), message.get("endpoint"))) \
                         if message.get("src") == "flight" else None
@@ -294,6 +297,18 @@ class WstsBridge:
             except Exception:  # a failing model must not hang flight software
                 status, data = 5, b""
         self._send({"op": "reply", "rid": message["rid"], "status": int(status), "data": bytes(data).hex()})
+
+    def _serve_packet(self, message: dict) -> None:
+        """Answer a packet for a node this client is modelling: its reply packet, or nothing"""
+        endpoint = message["endpoint"]
+        handler = self._packets.get((endpoint, int(message.get("addr", 0)))) or self._packets.get((endpoint, "any"))
+        answer = b""
+        if handler is not None:
+            try:
+                answer = handler(bytes.fromhex(message.get("data", ""))) or b""
+            except Exception:  # a failing model must not hang flight software
+                answer = b""
+        self._send({"op": "reply", "rid": message["rid"], "status": 0, "data": bytes(answer).hex()})
 
     def _serve_register(self, message: dict) -> None:
         """Answer a register access for a block this client is modelling"""
@@ -456,6 +471,11 @@ class WstsBridge:
     def inject_text(self, endpoint: str, text: str) -> None:
         self.inject_bytes(endpoint, text.encode("utf-8"))
 
+    def inject_packet(self, endpoint: str, packet: bytes) -> None:
+        """Deliver one packet to flight software on a packet (SpaceWire) endpoint, as if a
+        node had sent it"""
+        self.request("inject_packet", endpoint=endpoint, data=bytes(packet).hex())
+
     def gpio_force(self, endpoint: str, level: bool) -> None:
         """Drive a GPIO input pin"""
         self.request("gpio_force", endpoint=endpoint, level=bool(level))
@@ -587,6 +607,22 @@ class WstsBridge:
             if answer:
                 self.inject_bytes(endpoint, bytes(answer))
         self._watch("bs_tx", endpoint, on_record)
+
+    def serve_packet(self, endpoint: str, addr: Union[int, str], handler: Callable[[bytes], Optional[bytes]]) -> None:
+        """Become the node at a logical address (32 to 255, or "any" for the addresses that have
+        no node) of a packet (SpaceWire) endpoint. `handler(packet)` is called with each packet
+        routed there, from its logical address on, and returns the reply packet (bytes,
+        addressed as the node would address it) or None. The reply reaches flight software
+        during the send, as a model's would. Send at other times with `inject_packet`. The
+        handler runs on this client's reader thread: do not call the bridge from inside one."""
+        key = "any" if str(addr).lower() == "any" else int(addr)
+        self._packets[(endpoint, key)] = handler
+        self.request("attach", endpoint=endpoint, kind="packet", addr=key)
+
+    def packets_sent(self, endpoint: str) -> List[bytes]:
+        """Packets flight software has sent on a packet endpoint since subscribe(), whole"""
+        return [bytes.fromhex(m.get("data", "")) for m in self.events()
+                if m.get("rec") == "pkt_tx" and m.get("endpoint") == endpoint]
 
     def serve_gpio(self, endpoint: str, handler: Callable[[bool], None]) -> None:
         """Be told each level flight software writes to a GPIO output pin: `handler(level)`.

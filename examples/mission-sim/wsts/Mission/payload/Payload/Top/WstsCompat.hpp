@@ -10,6 +10,7 @@
 #include <Surrogates/SimLinuxGpio/SimLinuxGpio.hpp>
 #include <Wsts/Drv/SimByteStream/SimByteStream.hpp>
 #include <Wsts/Drv/SimI2c/SimI2c.hpp>
+#include <Wsts/Drv/SimSpaceWire/SimSpaceWire.hpp>
 #include <Wsts/Drv/SimSpi/SimSpi.hpp>
 #include <Wsts/Svc/SimTick/SimTick.hpp>
 #include <Wsts/Svc/SimTime/SimTime.hpp>
@@ -23,6 +24,7 @@ namespace Drv { using PosixUartDriver = ::Wsts::SimByteStream; }
 namespace Drv { using LinuxGpioDriver = ::Sim::SimLinuxGpio; }
 namespace Drv { using LinuxSpiDriver = ::Wsts::SimSpi; }
 namespace SensorLib { using RegisterInterface = ::WstsAdapted::SensorLib_RegisterInterface; }
+namespace Components { using SpwDriver = ::Wsts::SimSpaceWire; }
 
 namespace Drv {
 enum SpiFrequency {

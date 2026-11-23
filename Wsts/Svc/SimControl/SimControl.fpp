@@ -114,6 +114,12 @@ module Wsts {
       data: string size 200 @< Hex digits, e.g. 24475047
     ) opcode 0x20
 
+    @ Deliver a packet, given in hex, to flight software as if received from the network
+    async command INJECT_PACKET(
+      endpoint: string size 40
+      data: string size 200 @< Hex digits of the whole packet, e.g. 2001A5
+    ) opcode 0x27
+
     @ Deliver a text string to flight software as if received from the device
     async command INJECT_TEXT(
       endpoint: string size 40

@@ -124,6 +124,22 @@ class SimTelemetry final : public SimTelemetryComponentBase {
             m_last[5][1] = t.bytesToFlight;
         }
         {
+            const auto found = traffic.find("spw");
+            const Wsts::EndpointTraffic t = (found == traffic.end()) ? Wsts::EndpointTraffic() : found->second;
+            this->tlmWrite_spw_FromFlight(t.toDevice);
+            this->tlmWrite_spw_ToFlight(t.toFlight);
+            this->tlmWrite_spw_BytesOut(t.bytesToDevice);
+            this->tlmWrite_spw_BytesIn(t.bytesToFlight);
+            this->tlmWrite_spw_Errors(t.errors);
+            this->tlmWrite_spw_Unanswered(t.unanswered);
+            if (seconds > 0.0) {
+                this->tlmWrite_spw_RateOut(rate(t.bytesToDevice, m_last[6][0], seconds));
+                this->tlmWrite_spw_RateIn(rate(t.bytesToFlight, m_last[6][1], seconds));
+            }
+            m_last[6][0] = t.bytesToDevice;
+            m_last[6][1] = t.bytesToFlight;
+        }
+        {
             const auto found = traffic.find("switchPin");
             const Wsts::EndpointTraffic t = (found == traffic.end()) ? Wsts::EndpointTraffic() : found->second;
             this->tlmWrite_switchPin_FromFlight(t.toDevice);
@@ -133,11 +149,11 @@ class SimTelemetry final : public SimTelemetryComponentBase {
             this->tlmWrite_switchPin_Errors(t.errors);
             this->tlmWrite_switchPin_Unanswered(t.unanswered);
             if (seconds > 0.0) {
-                this->tlmWrite_switchPin_RateOut(rate(t.bytesToDevice, m_last[6][0], seconds));
-                this->tlmWrite_switchPin_RateIn(rate(t.bytesToFlight, m_last[6][1], seconds));
+                this->tlmWrite_switchPin_RateOut(rate(t.bytesToDevice, m_last[7][0], seconds));
+                this->tlmWrite_switchPin_RateIn(rate(t.bytesToFlight, m_last[7][1], seconds));
             }
-            m_last[6][0] = t.bytesToDevice;
-            m_last[6][1] = t.bytesToFlight;
+            m_last[7][0] = t.bytesToDevice;
+            m_last[7][1] = t.bytesToFlight;
         }
         const Wsts::SimStatus status = Wsts::Control::get().status();
         this->tlmWrite_SimSeconds(status.simSeconds);
@@ -172,7 +188,7 @@ class SimTelemetry final : public SimTelemetryComponentBase {
     bool m_published = false;
     std::uint64_t m_lastNs = 0;
     std::chrono::steady_clock::time_point m_lastWall;
-    std::array<std::array<std::uint64_t, 2>, 7> m_last{};
+    std::array<std::array<std::uint64_t, 2>, 8> m_last{};
 };
 
 }  // namespace WstsAdapted

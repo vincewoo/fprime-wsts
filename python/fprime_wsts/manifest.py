@@ -482,18 +482,28 @@ def parse_connection(text: str, where: str) -> ConnectionSpec:
         source=source.replace("$", ""), source_index=int(source_index) if source_index is not None else None,
         target=target.replace("$", ""), target_index=int(target_index) if target_index is not None else None,
     )
-MODEL_KINDS = {"bytestream", "i2c", "spi", "gpio", "register", "none"}
+MODEL_KINDS = {"bytestream", "i2c", "spi", "gpio", "register", "packet", "none"}
 #: `address: any` of an I2C model (Wsts::I2C_ANY_ADDRESS)
 I2C_ANY_ADDRESS = 0xFFFFFFFF
+#: `address: any` of a packet model (Wsts::PACKET_ANY_ADDRESS)
+PACKET_ANY_ADDRESS = 0xFFFFFFFF
+#: SpaceWire logical addresses: lower bytes are path addresses
+PACKET_LOGICAL = range(32, 256)
 
 
 def _model_address(entry: dict, where: str) -> int:
     value = entry.get("address", 0)
+    kind = str(entry.get("kind", "")).lower()
     if isinstance(value, str) and value.strip().lower() == "any":
-        if str(entry.get("kind", "")).lower() != "i2c":
-            raise WstsError(f"{where}: model '{entry['name']}': address 'any' is for I2C models only")
+        if kind not in ("i2c", "packet"):
+            raise WstsError(f"{where}: model '{entry['name']}': address 'any' is for I2C and packet models only")
         return I2C_ANY_ADDRESS
-    return _int(value, f"{where}: model '{entry['name']}' address")
+    address = _int(value, f"{where}: model '{entry['name']}' address")
+    if kind == "packet" and address not in PACKET_LOGICAL:
+        raise WstsError(f"{where}: model '{entry['name']}': a packet model's address is its SpaceWire logical address, "
+                        f"32 to 255 (0x20 to 0xff), or 'any'; {value} is not one"
+                        + (" (0 to 31 are path addresses)" if 0 <= address < 32 else ""))
+    return address
 
 
 def check_model_params(cls: str, name: str, params: Dict[str, str], where: str) -> None:
@@ -508,14 +518,18 @@ def check_model_params(cls: str, name: str, params: Dict[str, str], where: str) 
         elif cls == "Wsts::RegisterFile":
             if not key.startswith("reg.") or is_plain_number(value):
                 continue
+        elif cls == "Wsts::RmapTarget":
+            # Bytes ("0x12 0x34"), or a signal stored there
+            if not key.startswith("mem.") or all(is_plain_number(word) for word in value.split()):
+                continue
         else:
             return
         try:
             parsed = signal(value)
         except SignalError as error:
             raise WstsError(f"{where}: model '{name}' parameter '{key}': {error}") from None
-        if parsed.format is not None and cls == "Wsts::RegisterMapI2c" and parsed.format.bytes > 1 \
-                and not parsed.format.explicit_order:
+        if parsed.format is not None and cls in ("Wsts::RegisterMapI2c", "Wsts::RmapTarget") \
+                and parsed.format.bytes > 1 and not parsed.format.explicit_order:
             raise WstsError(f"{where}: model '{name}' parameter '{key}': a format wider than a byte needs its byte "
                             "order: be or le after it (u16be, s24le, ...)")
         if parsed.format is not None and cls == "Wsts::RegisterFile" and parsed.format.explicit_order:

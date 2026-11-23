@@ -34,7 +34,7 @@ def test_register_is_a_model_kind():
     manifest = parse_manifest({"deployment": "Payload", "models": [FPGA_MODEL]})
     assert manifest.models[0].kind == "register"
     assert manifest.models[0].params == {"reg.0x00": "0xF00D0001", "irq.period": "20"}
-    with pytest.raises(WstsError, match="kind must be one of bytestream, gpio, i2c, none, register, spi"):
+    with pytest.raises(WstsError, match="kind must be one of bytestream, gpio, i2c, none, packet, register, spi"):
         parse_manifest({"deployment": "Payload", "models": [{**FPGA_MODEL, "kind": "mmio"}]})
 
 
@@ -297,8 +297,8 @@ def test_a_connected_port_that_is_not_a_register_access(tmp_path):
         "    U32 read32In_handler(", "    void resetIn_handler(FwIndexType, U32) override {}\n    U32 read32In_handler("))
     topology = flight / "Payload/Top/topology.fpp"
     topology.write_text(topology.read_text().replace(
-        "      rateGroup10Hz.RateGroupMemberOut[1] -> fpga.run\n",
-        "      rateGroup10Hz.RateGroupMemberOut[1] -> fpga.run\n      rateGroup10Hz.RateGroupMemberOut[2] -> fpgaRegs.resetIn\n"))
+        "      rateGroup10Hz.RateGroupMemberOut[2] -> sunSensor.run\n",
+        "      rateGroup10Hz.RateGroupMemberOut[2] -> sunSensor.run\n      rateGroup10Hz.RateGroupMemberOut[3] -> fpgaRegs.resetIn\n"))
 
     with pytest.raises(WstsError) as error:
         generate(flight, payload(keep=["hubDriver"]), tmp_path / "refused")
@@ -314,7 +314,7 @@ def test_a_connected_port_that_is_not_a_register_access(tmp_path):
     assert "resetIn" not in (tmp_path / "out/WstsAdapted/SensorLib_RegisterInterface/SensorLib_RegisterInterface.fpp").read_text()
     patched = (tmp_path / "out/Payload/Top/topology.fpp").read_text()
     assert ("# removed by fprime-wsts (WstsAdapted.SensorLib_RegisterInterface has no counterpart of resetIn): "
-            "rateGroup10Hz.RateGroupMemberOut[2] -> fpgaRegs.resetIn") in patched
+            "rateGroup10Hz.RateGroupMemberOut[3] -> fpgaRegs.resetIn") in patched
 
 
 @needs_fpp
@@ -335,7 +335,8 @@ def test_the_examples_payload_element_uses_it():
     """The checked-in manifest: the register interface is named, the block is the toolkit's
     register file with one interrupt"""
     manifest = element_manifest("payload")
-    assert [(s.instance, s.surrogate) for s in manifest.substitutions] == [("fpgaRegs", "Wsts.SimRegister")]
+    assert [(s.instance, s.surrogate) for s in manifest.substitutions] == [
+        ("fpgaRegs", "Wsts.SimRegister"), ("spw", "Wsts.SimSpaceWire")]
     model = next(m for m in manifest.models if m.kind == "register")
     assert (model.cls, model.endpoint, model.params["irq.period"]) == ("Wsts::RegisterFile", "fpgaRegs", "20")
     report = json.loads((REPO / "examples/mission-sim/wsts/Mission/payload/wsts-report.json").read_text())
@@ -352,7 +353,8 @@ def test_a_mirror_keeps_the_flight_dictionary(tmp_path):
     from mission import element_data
     from mission import SIM
     changed = element_data("payload")
-    changed["substitute"] = [{"instance": "fpgaRegs", "with": "Sim.SimRegisterInterface"}]
+    changed["substitute"] = [{"instance": "fpgaRegs", "with": "Sim.SimRegisterInterface"}] + [
+        entry for entry in changed["substitute"] if entry["instance"] != "fpgaRegs"]
     changed["project"] = str(MISSION)
     result = generate(MISSION, parse_manifest(changed, SIM / "payload.yaml"), tmp_path / "out")
     block = result.report["register_blocks"][0]

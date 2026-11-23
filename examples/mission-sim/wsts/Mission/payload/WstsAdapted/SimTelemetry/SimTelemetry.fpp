@@ -155,6 +155,30 @@ module WstsAdapted {
     @ spiBus: Bytes received or read back per simulated second
     telemetry spiBus_RateIn: F32
 
+    @ spw: Transactions flight software made: sends, reads, writes, transfers, pin writes
+    telemetry spw_FromFlight: U64
+
+    @ spw: What reached flight software unasked: received bytes, input levels, interrupts
+    telemetry spw_ToFlight: U64
+
+    @ spw: Bytes sent, written or shifted out
+    telemetry spw_BytesOut: U64
+
+    @ spw: Bytes received or read back
+    telemetry spw_BytesIn: U64
+
+    @ spw: Transactions that returned an error status
+    telemetry spw_Errors: U64
+
+    @ spw: Transactions nothing answered: no device, none at the address or offset
+    telemetry spw_Unanswered: U64
+
+    @ spw: Bytes sent, written or shifted out per simulated second
+    telemetry spw_RateOut: F32
+
+    @ spw: Bytes received or read back per simulated second
+    telemetry spw_RateIn: F32
+
     @ switchPin: Transactions flight software made: sends, reads, writes, transfers, pin writes
     telemetry switchPin_FromFlight: U64
 

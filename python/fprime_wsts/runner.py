@@ -1308,6 +1308,8 @@ def _assert_summary(assertion: dict) -> dict:
 
 #: How long a stepped run of a set duration waits for the tick source to say how long a tick is
 TICK_SOURCE_WAIT = 20.0
+#: Seconds a stepped run under a running scenario must stay paused, unchanged, before it has ended
+HELD_PAUSE = 0.2
 
 
 def run_cli(args) -> int:
@@ -1396,6 +1398,7 @@ def _run_cli(args) -> int:
                                 "into ticks: run without --duration and stop it through the bridge, or in real time")
             ticks = max(1, -(-int(args.duration * 1e9) // period) - now["tick"])
             watch.request("step", ticks=ticks)
+        paused_at = None  # (tick, scenario step) a held run was first seen paused at, and when
         while simulation.sim.poll() is None:
             if watch is not None:
                 # Stepped time: the duration is simulated seconds, and a tick that cannot
@@ -1408,7 +1411,19 @@ def _run_cli(args) -> int:
                     stuck = now["stuck"]
                     break
                 if simulation.hold and now["paused"] and not now.get("stepping"):
-                    break  # the step is taken; its work is finished when wait_quiescent returns
+                    # The step is taken; its work is finished when wait_quiescent returns. A
+                    # scenario that pauses and steps the run itself (a replay of a run a client
+                    # drove) passes through this between two of its own actions: while one runs,
+                    # the run has ended only if it stays so, at the same tick and step
+                    if now.get("scenario_state") != "running":
+                        break
+                    held = (now.get("tick"), now.get("scenario_step"))
+                    if paused_at is not None and paused_at[0] == held and time.monotonic() - paused_at[1] >= HELD_PAUSE:
+                        break
+                    if paused_at is None or paused_at[0] != held:
+                        paused_at = (held, time.monotonic())
+                else:
+                    paused_at = None
                 time.sleep(0.02)
                 continue
             if deadline and time.monotonic() >= deadline:

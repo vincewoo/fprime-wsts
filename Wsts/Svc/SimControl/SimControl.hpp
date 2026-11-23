@@ -50,6 +50,10 @@ class SimControl final : public SimControlComponentBase {
                                  U32 cmdSeq,
                                  const Fw::CmdStringArg& endpoint,
                                  const Fw::CmdStringArg& data) override;
+    void INJECT_PACKET_cmdHandler(FwOpcodeType opCode,
+                                  U32 cmdSeq,
+                                  const Fw::CmdStringArg& endpoint,
+                                  const Fw::CmdStringArg& data) override;
     void INJECT_TEXT_cmdHandler(FwOpcodeType opCode,
                                 U32 cmdSeq,
                                 const Fw::CmdStringArg& endpoint,

@@ -150,6 +150,7 @@ add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/Components/Imager")
 add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/Components/ImuManager")
 add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/Components/Instrument")
 add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/Components/PowerMonitor")
+add_fprime_subdirectory("${WSTS_FLIGHT_PROJECT}/Components/SunSensor")
 
 # Configuration overrides of the simulation: registered after the flight project's, so that
 # where both replace a file the simulation's is the one built
@@ -181,7 +182,7 @@ endif()
 
 # Headers of replaced flight drivers resolve to stand-ins (wsts-include/). A driver module that is
 # still part of this build compiles against its own header.
-foreach (WSTS_MODULE IN ITEMS Drv_LinuxGpioDriver Drv_LinuxI2cDriver Drv_LinuxSpiDriver Drv_PosixUartDriver Drv_TcpClient SensorLib_RegisterInterface Svc_LinuxTimer Svc_PosixTime)
+foreach (WSTS_MODULE IN ITEMS Components_SpwDriver Drv_LinuxGpioDriver Drv_LinuxI2cDriver Drv_LinuxSpiDriver Drv_PosixUartDriver Drv_TcpClient SensorLib_RegisterInterface Svc_LinuxTimer Svc_PosixTime)
     if (TARGET ${WSTS_MODULE})
         get_target_property(WSTS_MODULE_TYPE ${WSTS_MODULE} TYPE)
         if (NOT WSTS_MODULE_TYPE STREQUAL "INTERFACE_LIBRARY")

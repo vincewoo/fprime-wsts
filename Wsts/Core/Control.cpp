@@ -861,7 +861,10 @@ void Control::onRecord(const Record& record) {
             first = m_unanswered.emplace(record.endpoint, at).second;
         }
         if (first) {
-            const char* kind = (record.type == "i2c") ? "i2c" : (record.type == "spi") ? "spi" : "register";
+            const char* kind = (record.type == "i2c")      ? "i2c"
+                               : (record.type == "spi")    ? "spi"
+                               : (record.type == "pkt_tx") ? "packet"
+                                                           : "register";
             this->post(SimEvent::UNANSWERED, record.endpoint, kind, static_cast<std::uint32_t>(at),
                        static_cast<std::uint32_t>(at >> 32));
         }
@@ -1010,6 +1013,9 @@ bool Control::dispatch(const JsonObj& action, std::string& error) {
     }
     if (op == "inject_bytes") {
         return this->injectBytes(action, error);
+    }
+    if (op == "inject_packet") {
+        return this->injectPacket(action, error);
     }
     if (op == "gpio_force") {
         const std::string endpoint = action.str("endpoint");
@@ -1161,6 +1167,26 @@ bool Control::injectBytes(const JsonObj& action, std::string& error) {
     }
     Bus::get().byteStreamInject(endpoint, data, "inject");
     this->post(SimEvent::INJECTED, endpoint, "bytes", static_cast<std::uint32_t>(data.size()));
+    return true;
+}
+
+bool Control::injectPacket(const JsonObj& action, std::string& error) {
+    const std::string endpoint = action.str("endpoint");
+    if (!Bus::get().known(endpoint)) {
+        error = "unknown endpoint '" + endpoint + "'";
+        return false;
+    }
+    Bytes packet;
+    if (!fromHex(action.str("data"), packet)) {
+        error = "'data' is not valid hex";
+        return false;
+    }
+    if (packet.empty()) {
+        error = "nothing to inject: a packet has at least one byte";
+        return false;
+    }
+    Bus::get().packetInject(endpoint, packet, "inject");
+    this->post(SimEvent::INJECTED, endpoint, "packet", static_cast<std::uint32_t>(packet.size()));
     return true;
 }
 
@@ -1387,6 +1413,10 @@ void Control::scenarioRun() {
             bus.gpioSetInput(step.str("endpoint"), step.flag("level"), "replay");
         } else if (rec == "reg_irq") {
             bus.registerInterrupt(step.str("endpoint"), static_cast<std::uint32_t>(step.unum("number")), "replay");
+        } else if (rec == "pkt_rx") {
+            Bytes data;
+            (void)fromHex(step.str("data"), data);
+            bus.packetInject(step.str("endpoint"), data, "replay");
         }
     };
     // What was collected between ticks for this one

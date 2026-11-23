@@ -250,6 +250,15 @@ void SimControl::INJECT_BYTES_cmdHandler(FwOpcodeType opCode,
     this->run(opCode, cmdSeq, action);
 }
 
+void SimControl::INJECT_PACKET_cmdHandler(FwOpcodeType opCode,
+                                          U32 cmdSeq,
+                                          const Fw::CmdStringArg& endpoint,
+                                          const Fw::CmdStringArg& data) {
+    JsonObj action;
+    action.set("op", "inject_packet").set("endpoint", endpoint.toChar()).set("data", data.toChar());
+    this->run(opCode, cmdSeq, action);
+}
+
 void SimControl::INJECT_TEXT_cmdHandler(FwOpcodeType opCode,
                                         U32 cmdSeq,
                                         const Fw::CmdStringArg& endpoint,
