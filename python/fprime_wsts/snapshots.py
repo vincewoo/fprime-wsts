@@ -283,10 +283,12 @@ def _take_system(target: Path, log_dir: Path, run: dict, path: Path, resume: Opt
                  timeout: float) -> Snapshot:
     from .bridge import WstsSystem
 
-    description = json.loads((target / "wsts-system.json").read_text()) if (target / "wsts-system.json").is_file() \
-        else None
-    if description is None:
-        raise SnapshotError(f"{target} is not the generated directory of a system (no wsts-system.json)")
+    # The generated directory of the system: given, or named by the run (from its log directory)
+    generated = Path(run.get("directory", target))
+    try:
+        description = json.loads((generated / "wsts-system.json").read_text())
+    except (OSError, ValueError):
+        raise SnapshotError(f"{generated} is not the generated directory of a system (no wsts-system.json)") from None
     for element in description["elements"]:
         element["bridge"] = run["elements"][element["name"]]
     with WstsSystem(description) as system:
@@ -310,7 +312,7 @@ def _take_system(target: Path, log_dir: Path, run: dict, path: Path, resume: Opt
                 "format": FORMAT,
                 "kind": "system",
                 "system": description["system"],
-                "directory": str(target),
+                "directory": str(generated),
                 "elements": {name: element["tick"] for name, element in elements.items()},
                 "sim_seconds": max(element["sim_seconds"] for element in elements.values()),
                 "created": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

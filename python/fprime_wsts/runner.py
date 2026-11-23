@@ -19,7 +19,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from .fpp import WstsError
 
@@ -610,7 +610,7 @@ class Simulation:
 
     def addresses(self) -> dict:
         """Where this run can be reached: its bridge, and its GDS when it has one"""
-        found: dict = {"bridge": self.bridge}
+        found: dict = {"bridge": self.bridge, "directory": str(self.directory)}
         if self.gds:
             found.update(gds_port=self.gds_port, gds_gui=self.gds_gui_url, zmq_transport=self.zmq_transport,
                          dictionary=str(self.dictionary) if self.dictionary else None)
@@ -882,10 +882,17 @@ class SystemSimulation:
                  auto_ports: bool = False, zmq_transport: Optional[List[str]] = None,
                  scenarios: Optional[Dict[str, str]] = None, scenario_mode: str = "stimulus",
                  records: Optional[Dict[str, str]] = None, stepped: Optional[bool] = None,
-                 record_merged: Optional[str] = None, scenario_merged: Optional[str] = None):
+                 record_merged: Optional[str] = None, scenario_merged: Optional[str] = None,
+                 journal: Optional[bool] = None, restore=None):
         from .system import load_description
 
         self.directory = Path(directory).resolve()
+        # Snapshots (docs/snapshots.md): every element keeps a journal, and a system snapshot
+        # restores every element at the instant it was taken, in lockstep
+        self.journal = journal
+        self.restore = restore
+        if restore is not None:
+            stepped = True
         self.description = load_description(self.directory)
         self.name = self.description["system"]
         self.ground = self.description["ground"]
@@ -1002,11 +1009,14 @@ class SystemSimulation:
                     scenario=self.scenarios.get(name), scenario_mode=self.scenario_mode,
                     record=self.records.get(name),
                     dictionary=self.dictionary if is_ground else None,
-                    env={**self.env.get(None, {}), **self.env.get(name, {}), "WSTS_LINK_DIR": self._link_dir,
+                    env={**self._restored_env(name), **self.env.get(None, {}), **self.env.get(name, {}),
+                         "WSTS_LINK_DIR": self._link_dir,
                          **({"WSTS_LOCKSTEP": "1"} if self.stepped else {})},
                     auto_ports=self.auto_ports,  # the GDS's ports; the bridge is chosen already
                     zmq_transport=self.zmq_transport if is_ground else None,
                     stepped=self.stepped,
+                    journal=self.journal,
+                    restore=self.restore.elements[name] if self.restore is not None else None,
                 )
                 simulation.owns_run_file = False
                 self.elements[name] = simulation
@@ -1022,9 +1032,41 @@ class SystemSimulation:
             raise
         return self
 
+    def _restored_env(self, name: str) -> Dict[str, str]:
+        """What the element's environment was when it was snapshotted, but what the system sets"""
+        if self.restore is None:
+            return {}
+        env = self.restore.elements[name].meta.get("env", {})
+        return {key: value for key, value in env.items() if key not in ("WSTS_LINK_DIR", "WSTS_LOCKSTEP")}
+
+    def complete_restore(self, conductor, keep_going: Callable[[], bool] = lambda: True) -> None:
+        """Bring a restored system back to the instant it was snapshotted at: every element
+        replays its journal while the conductor grants each the ticks it lacks; then each is
+        checked, record by record"""
+        from . import snapshots
+
+        targets = {name: element.tick for name, element in self.restore.elements.items()}
+        conductor.advance_to(targets, keep_going)
+        # The journals end with the pauses of the snapshot: applied before each element's next tick
+        deadline = time.monotonic() + 30
+        while keep_going():
+            statuses = conductor.refresh()
+            if all(snapshots.replay_done(statuses[name], self.restore.elements[name]) for name in targets):
+                break
+            if time.monotonic() >= deadline:
+                states = ", ".join(f"{name}: tick {s.get('tick')}, paused {s.get('paused')}, scenario "
+                                   f"{s.get('scenario_state')}" for name, s in statuses.items())
+                raise WstsError(f"the restored system did not come to rest at its snapshot ({states})")
+            time.sleep(0.02)
+        for name, simulation in self.elements.items():
+            with simulation.connect() as bridge:
+                bridge.wait_quiescent(timeout=30)
+            snapshots.check_replay(simulation, self.restore.elements[name], name)
+
     def addresses(self) -> dict:
         """Where this run can be reached: each element's bridge, and the GDS on the ground element"""
-        found: dict = {"elements": {name: simulation.bridge for name, simulation in self.elements.items()}}
+        found: dict = {"elements": {name: simulation.bridge for name, simulation in self.elements.items()},
+                       "directory": str(self.directory)}
         ground = self.elements.get(self.ground)
         if self.gds and ground:
             found.update(gds_port=ground.gds_port, gds_gui=ground.gds_gui_url, zmq_transport=ground.zmq_transport,
@@ -1184,8 +1226,14 @@ def _run_system_cli(args) -> int:
                               gds_gui_addr=args.gds_gui_addr,
                               log_dir=Path(args.log_dir) if args.log_dir else None, env=getattr(args, "env", None),
                               auto_ports=getattr(args, "auto_ports", False), stepped=stepped,
-                              record_merged=record_merged, scenario_merged=scenario_merged)
+                              record_merged=record_merged, scenario_merged=scenario_merged,
+                              journal=getattr(args, "journal", None), restore=getattr(args, "restore", None))
     lockstep = bool(system.stepped)
+    if system.journal and not lockstep:
+        raise WstsError("a system keeps a journal in lockstep only: run it with --stepped")
+    if system.restore is not None and (record_merged or scenario_merged or args.scenario or args.record):
+        raise WstsError("--scenario and --record (merged or not) do not go with --from: each restored element "
+                        "plays its journal, and records one of its own")
     # In lockstep a scenario without an element is the system's: actions at simulated times
     system_scenario = None
     plain = [value for value in (args.scenario or []) if "=" not in value]
@@ -1234,9 +1282,27 @@ def _run_system_cli(args) -> int:
             try:
                 conductor.wait_ready(TICK_SOURCE_WAIT, alive=lambda: not system.exited())
                 began = time.monotonic()
+                from_ns = 0
+                if system.restore is not None:
+                    try:
+                        system.complete_restore(conductor, keep_going=lambda: not system.exited())
+                    except BaseException:
+                        conductor.close()
+                        system.stop()
+                        raise
+                    from_ns = conductor.time_ns
+                    if not args.json:
+                        ticks = ", ".join(f"{n} at tick {t}" for n, t in system.restore.meta["elements"].items())
+                        print(f"restored from {system.restore.path}: {ticks}, every bus record the same as when it "
+                              "was taken; paused there" + ("" if args.duration else
+                                                           " (resume it through the bridges or the GDS)"))
+                    if args.duration:
+                        for bridge in conductor.bridges.values():
+                            bridge.resume()
                 # Simulated seconds; without a duration, until interrupted. A pause of any
-                # element (the GDS, a client) holds the whole system.
-                conductor.run(until_ns=int(round(args.duration * 1e9)) if args.duration else None,
+                # element (the GDS, a client) holds the whole system. After a restore, the
+                # duration counts from the snapshot.
+                conductor.run(until_ns=from_ns + int(round(args.duration * 1e9)) if args.duration else None,
                               scenario=scenario, hold_while_paused=True, keep_going=lambda: not system.exited())
                 conducted = time.monotonic() - began
             except Stuck as error:
@@ -1275,6 +1341,8 @@ def _run_system_cli(args) -> int:
                   **({"stuck": stuck} if stuck else {}), **({"error": lockstep_error} if lockstep_error else {})}
     summary = {
         "system": system.name,
+        **({"restored": {"snapshot": str(system.restore.path), "elements": system.restore.meta["elements"]}}
+           if system.restore is not None else {}),
         "exited_early": crashed,
         "interrupted": interrupted,
         "seconds": wall,
