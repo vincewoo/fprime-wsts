@@ -100,6 +100,7 @@ client starts the server in (`--cwd` to choose another).
 | Tools | What they do |
 |---|---|
 | `build`, `run_start`, `run_stop`, `runs_list` | Build a generated deployment or system; start it on free ports with a headless GDS (`fprime-wsts run --auto-ports`), stop it in order and return its summary (exit codes, final ticks, an F´ assert); list the runs the server knows |
+| `snapshot` (and `run_start` with `journal`, `from_snapshot`) | Snapshot a run that keeps a journal, and start runs from the snapshot: each replays it, is checked, and is held at its tick ([Snapshots](snapshots.md)) |
 | `status`, `pause`, `resume`, `set_rate`, `step`, `wait_quiescent` | Where a run is (with `bus=true`, the traffic of each endpoint and what nothing answered), and its time |
 | `fault_set`, `fault_clear`, `inject`, `gpio`, `register_set`, `raise_irq`, `model_set`, `scenario_run`, `action` | [Actions](../reference.md#actions) through the bridge; `action` sends any of them with its fields |
 | `bus_records` | What flight software sent and received on each endpoint, since the first call |

@@ -34,6 +34,7 @@ generated deployment (for a system, the merged one is written to
 | `wsts` | test | A `WstsBridge`, subscribed. After each test, faults are cleared and the simulation resumed |
 | `wsts_simulation` | session | The running simulation, or `None` when attaching to one started elsewhere |
 | `wsts_system` | test | A `WstsSystem` for a system; `wsts_system["payload"]` is one element's bridge |
+| `wsts_restore` | test | `with wsts_restore(snapshot) as sim:` starts a run restored from a [snapshot](snapshots.md), on free ports with logs of its own, held at the snapshot's tick, and stops it after the block: a `WstsBridge`, or a `WstsSystem` for a system's snapshot. Several at once branch one snapshot |
 | `fprime_test_api` | session | fprime-gds's test API: `send_and_assert_command`, `assert_event`, `assert_telemetry`, … |
 
 ## A closed-loop test
