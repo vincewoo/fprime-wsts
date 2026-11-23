@@ -261,7 +261,8 @@ def test_the_server_offers_every_tool_with_a_schema(session):
 
     tools = {tool.name: tool for tool in asyncio.run(create_server(session).list_tools())}
     assert {"run_start", "run_stop", "runs_list", "build", "status", "fault_set", "send_command", "wait_event",
-            "read_telemetry", "dictionary", "tail_log", "last_assert"} <= set(tools)
+            "read_telemetry", "dictionary", "tail_log", "last_assert", "snapshot"} <= set(tools)
+    assert {"journal", "from_snapshot"} <= set(tools["run_start"].inputSchema["properties"])
     schema = tools["fault_set"].inputSchema
     assert schema["required"] == ["endpoint", "kind"] and "run" in schema["properties"]
     assert all(tool.description for tool in tools.values())

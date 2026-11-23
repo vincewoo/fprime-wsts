@@ -135,3 +135,55 @@ def wsts_system(wsts_system_simulation):
         system.resume()
     finally:
         system.close()
+
+
+@pytest.fixture
+def wsts_restore(tmp_path_factory):
+    """Start runs from snapshots (docs/snapshots.md):
+
+        with wsts_restore("after-boot") as sim:   # a snapshot's path, or a snapshots.Snapshot
+            sim.fault_set("i2cBus", "error", arg=3)
+            sim.step(200)
+
+    Each run is restored before the block starts (its journal replayed and checked: a run that
+    differs raises snapshots.RestoreMismatch), held paused at the snapshot's tick, on free ports
+    and with logs of its own, and stopped when the block ends. `sim` is a WstsBridge, or a
+    WstsSystem for a snapshot of a system, with `log_dir`, the run's log directory, from which
+    it can be snapshotted again. Several can run at once: branches of one snapshot."""
+    from contextlib import contextmanager
+
+    from . import snapshots
+
+    @contextmanager
+    def restore(snapshot, env=None):
+        snap = snapshot if isinstance(snapshot, snapshots.Snapshot) else snapshots.load(snapshot)
+        log_dir = tmp_path_factory.mktemp("restored")
+        if snap.is_system:
+            from .lockstep import Conductor
+
+            system = SystemSimulation(snap.directory, log_dir=log_dir, env=env, auto_ports=True, restore=snap)
+            system.start()
+            try:
+                with Conductor(system.description) as conductor:
+                    conductor.wait_ready(20.0, alive=lambda: not system.exited())
+                    system.complete_restore(conductor, keep_going=lambda: not system.exited())
+                client = WstsSystem(system.description)
+                client.log_dir = system.log_dir  # where to snapshot it from again
+                try:
+                    yield client
+                finally:
+                    client.close()
+            finally:
+                system.stop()
+            return
+        simulation = Simulation(snap.directory, log_dir=log_dir, env={**snap.meta.get("env", {}), **(env or {})},
+                                auto_ports=True, restore=snap)
+        simulation.start()
+        try:
+            with WstsBridge(simulation.bridge) as client:
+                client.log_dir = simulation.log_dir  # where to snapshot it from again
+                yield client
+        finally:
+            simulation.stop()
+
+    return restore
