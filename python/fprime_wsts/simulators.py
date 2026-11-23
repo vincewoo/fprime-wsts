@@ -427,7 +427,8 @@ def plan_health(sim: SimulatorPlan, model: fpp.Model, topology: fpp.Topology) ->
 def endpoint_kind(ports: Set[str]) -> str:
     """What kind of bus endpoint a bound surrogate serves, from the port names its interface
     gives it. Mirrors the interfaces of the flight drivers: Drv.ByteStreamDriver (send/recv),
-    Drv.I2c (write/read/writeRead), Drv.Spi (SpiWriteRead), Drv.Gpio (gpioWrite/gpioRead).
+    Drv.I2c (write/read/writeRead), Drv.Spi (SpiWriteRead), Drv.Gpio (gpioWrite/gpioRead),
+    Drv.PassiveBufferDriver (bufferIn/bufferOut: a SpaceWire driver, one packet a buffer).
     A register endpoint (a register interface component replaced by Wsts.SimRegister) is
     'other': its ports are the flight component's own, and devices there take a register
     model instead"""
@@ -440,6 +441,8 @@ def endpoint_kind(ports: Set[str]) -> str:
         return "spi"
     if "gpioWrite" in ports:
         return "gpio"
+    if {"bufferIn", "bufferOut"} <= ports:
+        return "packet"
     return "other"
 
 

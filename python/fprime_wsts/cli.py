@@ -539,7 +539,7 @@ def main(argv=None) -> int:
                     "parameter takes a number or a signal, e.g. 'sine(offset=25, amplitude=5, period=60)'.")
     new_model.add_argument("name", help="C++ class name of the model, e.g. Thermometer (the manifest name is "
                                         "thermometer, the Python file thermometer.py)")
-    new_model.add_argument("--kind", required=True, choices=["i2c", "spi", "bytestream", "gpio", "register"],
+    new_model.add_argument("--kind", required=True, choices=["i2c", "spi", "bytestream", "gpio", "register", "packet"],
                            help="the device interface it answers on")
     new_model.add_argument("--endpoint", help="bus endpoint it answers on (default: a TODO to fill in)")
     new_model.add_argument("--address", help="I2C address, e.g. 0x48, or 'any' for every address no other device "

@@ -118,12 +118,18 @@ HARNESS = r"""
 #include <Models/DevStream.hpp>
 #include <Models/DevPin.hpp>
 #include <Models/DevBlock.hpp>
+#include <Models/DevNode.hpp>
 
 #define CHECK(c) do { if (!(c)) { std::printf("FAILED line %d: %s\n", __LINE__, #c); std::exit(1); } } while (0)
 
 struct Sink : Wsts::ByteSink {
     Wsts::Bytes got;
     void send(const Wsts::Bytes& data) override { got.insert(got.end(), data.begin(), data.end()); }
+};
+
+struct PacketSink : Wsts::PacketSink {
+    Wsts::Bytes got;
+    void send(const Wsts::Bytes& packet) override { got = packet; }
 };
 
 int main() {
@@ -174,6 +180,17 @@ int main() {
     CHECK(block.peek(Sim::DevBlock::REG_DATA) == 1500);
     CHECK(block.peek(Sim::DevBlock::REG_STATUS) == Sim::DevBlock::DONE);
     CHECK(block.write(Sim::DevBlock::REG_STATUS, 4, Sim::DevBlock::DONE) == 0 && block.peek(Sim::DevBlock::REG_STATUS) == 0);
+    // An RMAP read of the measurement: 4 bytes at ADDR_VALUE, no reply address
+    Sim::DevNode node;
+    CHECK(node.set("value", "12.5"));
+    node.onTick(1);
+    Wsts::Bytes command{0xFE, 0x01, 0x4C, 0x00, 0x67, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+                        static_cast<std::uint8_t>(Sim::DevNode::ADDR_VALUE), 0x00, 0x00, 0x04};
+    command.push_back(Wsts::rmapCrc(command));
+    PacketSink packets;
+    node.onPacket(command, packets);
+    CHECK(packets.got.size() == 17u && packets.got[3] == 0);
+    CHECK((Wsts::Bytes(packets.got.begin() + 12, packets.got.begin() + 16)) == (Wsts::Bytes{0x00, 0x00, 0x30, 0xD4}));  // 12500
     std::printf("models ok\n");
     return 0;
 }
@@ -182,7 +199,8 @@ int main() {
 
 @pytest.mark.skipif(shutil.which("g++") is None, reason="needs g++")
 def test_every_cpp_model_builds_and_answers(tmp_path):
-    names = {"i2c": "DevI2c", "spi": "DevSpi", "bytestream": "DevStream", "gpio": "DevPin", "register": "DevBlock"}
+    names = {"i2c": "DevI2c", "spi": "DevSpi", "bytestream": "DevStream", "gpio": "DevPin", "register": "DevBlock",
+             "packet": "DevNode"}
     assert set(names) == set(KINDS)
     for kind, name in names.items():
         new_model(tmp_path, name, kind, f"{kind}Endpoint", edit=False)

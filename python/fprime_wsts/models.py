@@ -6,7 +6,7 @@ A model file is listed under `run.models` in the manifest and defines
         sim.serve_i2c("thermoBus", 0x48, lambda write, length: (0, bytes([42] * length)))
 
 `sim` is a `WstsBridge` connected to the deployment. `serve` registers handlers
-(`serve_i2c`, `serve_spi`, `serve_register`, `serve_bytestream`, `serve_gpio`) and returns;
+(`serve_i2c`, `serve_spi`, `serve_register`, `serve_bytestream`, `serve_gpio`, `serve_packet`) and returns;
 the handlers then answer for as long as the deployment runs. The launcher starts the
 deployment paused, runs this module, and resumes once every file's `serve` has returned,
 so a model is on its endpoint before flight software's first tick.

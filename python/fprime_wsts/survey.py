@@ -57,6 +57,7 @@ SURROGATE_KIND = {
     "Wsts.SimSpi": "spi",
     "Wsts.SimGpio": "gpio",
     "Wsts.SimRegister": "register",
+    "Wsts.SimSpaceWire": "packet",
     "Wsts.SimTick": None,
 }
 SOCKET_DRIVERS = {"Drv.TcpClient", "Drv.TcpServer", "Drv.Udp"}

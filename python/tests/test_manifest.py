@@ -30,6 +30,25 @@ def test_full_manifest():
     assert manifest.main.generate and manifest.extra_depends == ["Proj_Lib"]
 
 
+def test_a_packet_model_stands_at_a_logical_address():
+    def model(address, cls="Wsts::RmapTarget", params=None):
+        return parse_manifest({"deployment": "D", "models": [
+            {"name": "node", "class": cls, "endpoint": "spw", "kind": "packet", "address": address,
+             "params": params or {}}]}).models[0]
+
+    assert model("0xFE").address == 0xFE and model("0xFE").kind == "packet"
+    assert model("any").address == 0xFFFFFFFF
+    with pytest.raises(WstsError, match="0 to 31 are path addresses"):
+        model(5)
+    with pytest.raises(WstsError, match="32 to 255"):
+        model(0x100)
+    # The memory of the RMAP target: bytes, or a signal with its byte order
+    assert model(0x40, params={"mem.0x10": "0x12 0x34"}).params["mem.0x10"] == "0x12 0x34"
+    assert model(0x40, params={"mem.0x10": "sine(offset=1, amplitude=1, period=5) as u16be"})
+    with pytest.raises(WstsError, match="needs its byte order"):
+        model(0x40, params={"mem.0x10": "1000 as u16"})
+
+
 @pytest.mark.parametrize("control", ["none", False, {"enabled": False}])
 def test_control_can_be_disabled(control):
     assert not parse_manifest({"deployment": "D", "control": control}).control_enabled
@@ -40,6 +59,8 @@ def test_control_can_be_disabled(control):
     ({"deployment": "D", "modles": []}, "unknown key"),
     ({"deployment": "D", "substitute": [{"instance": "x"}]}, "needs 'with'"),
     ({"deployment": "D", "models": [{"name": "m", "class": "C", "endpoint": "e", "kind": "can"}]}, "kind must be"),
+    ({"deployment": "D", "models": [{"name": "m", "class": "C", "endpoint": "e", "kind": "spi", "address": "any"}]},
+     "for I2C and packet models only"),
     ({"deployment": "D", "models": [{"name": "m"}]}, "missing 'class'"),
     ({"deployment": "D", "main": {"generate": True}}, "main.start"),
     ({"deployment": "D", "tick_hz": "fast"}, "not a number"),

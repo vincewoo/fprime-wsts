@@ -682,6 +682,27 @@ def make_plan(model: fpp.Model, manifest: Manifest, catalog: List[Surrogate], to
         plan.links.append(PlannedLink(end, None, endpoint, "gpio"))
     # ---- Register blocks ----
     bound = {sub.endpoint: sub for sub in plan.substitutions if sub.bind}
+    # ---- Packet nodes ----
+    packet_nodes: Dict[Tuple[str, int], str] = {}
+    for spec in manifest.models:
+        if spec.kind != "packet":
+            continue
+        sub = bound[spec.endpoint]
+        if sims.endpoint_kind(sub.surrogate.ports) != "packet":
+            packet_endpoints = sorted(e for e, s in bound.items() if sims.endpoint_kind(s.surrogate.ports) == "packet")
+            raise WstsError(
+                f"model '{spec.name}' is a packet node (kind: packet) on endpoint '{spec.endpoint}', which "
+                f"{sub.instance.name} is bound to as {sub.surrogate.name}: that is not a surrogate for a packet "
+                "driver (it has no bufferIn and bufferOut ports). Substitute the SpaceWire driver with "
+                "Wsts.SimSpaceWire and attach the model to that instance's endpoint. Packet endpoints: "
+                + (", ".join(packet_endpoints) or "none") + "."
+            )
+        key = (spec.endpoint, spec.address)
+        if key in packet_nodes:
+            where = "'any'" if spec.address == I2C_ANY_ADDRESS else f"{spec.address:#04x}"
+            raise WstsError(f"models '{packet_nodes[key]}' and '{spec.name}' are both the node at logical address "
+                            f"{where} of endpoint '{spec.endpoint}': give one of them another address")
+        packet_nodes[key] = spec.name
     register_models: Dict[str, str] = {}
     for spec in manifest.models:
         if spec.kind != "register":
@@ -1654,6 +1675,7 @@ ATTACH = {
     "spi": "Wsts::Bus::get().attachSpi({endpoint}, &{var});",
     "gpio": "Wsts::Bus::get().attachGpio({endpoint}, &{var});",
     "register": "Wsts::Bus::get().attachRegister({endpoint}, &{var});",
+    "packet": "Wsts::Bus::get().attachPacket({endpoint}, {address}, &{var});",
 }
 
 
@@ -1722,7 +1744,8 @@ def render_setup(plan: Plan, manifest: Manifest, topology_header: str) -> str:
                 f"    configure({name}, Wsts::configureModel(&{var}, {_cpp_string(key)}, {_cpp_string(value)}), {_cpp_string(key)});"
             )
         if spec.kind in ATTACH:
-            address = "Wsts::I2C_ANY_ADDRESS" if spec.address == I2C_ANY_ADDRESS else f"{spec.address:#x}"
+            any_address = "Wsts::PACKET_ANY_ADDRESS" if spec.kind == "packet" else "Wsts::I2C_ANY_ADDRESS"
+            address = any_address if spec.address == I2C_ANY_ADDRESS else f"{spec.address:#x}"
             lines.append("    " + ATTACH[spec.kind].format(endpoint=_cpp_string(spec.endpoint), address=address, var=var))
         lines.append(f"    Wsts::registerModel({name}, &{var});")
     if plan.links:

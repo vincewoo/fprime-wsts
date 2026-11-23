@@ -149,6 +149,7 @@
               "spi",
               "gpio",
               "register",
+              "packet",
               "none"
             ]
           },
@@ -157,11 +158,11 @@
               "integer",
               "string"
             ],
-            "description": "I2C address (i2c only), or 'any': the device for every address no other device on the endpoint has"
+            "description": "I2C address (i2c), or SpaceWire logical address, 32 to 255 (packet); or 'any': the device for every address no other device on the endpoint has"
           },
           "params": {
             "type": "object",
-            "description": "Each becomes model.set(key, value) at start-up. The registers of Wsts::RegisterMapI2c and Wsts::RegisterFile also take a signal of simulated time, e.g. \"sine(offset=1400, amplitude=50, period=20) as u16be\""
+            "description": "Each becomes model.set(key, value) at start-up. The registers of Wsts::RegisterMapI2c and Wsts::RegisterFile, and the memory of Wsts::RmapTarget (mem.<address>), also take a signal of simulated time, e.g. \"sine(offset=1400, amplitude=50, period=20) as u16be\""
           },
           "telemetry": {
             "type": "boolean",
