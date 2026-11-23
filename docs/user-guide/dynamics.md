@@ -168,6 +168,7 @@ outputs of every exchange, for plotting.
   seen as the level at the end of the instant before the step. Give the plant a duty cycle
   or an impulse instead.
 - **Stepped time only.** In real time the plants are not stepped.
-- **Snapshots** replay what a plant gave flight software (it is in the journal), but a
-  restored run starts its plants again from their initial state. Re-driving them during the
-  restore is the next phase of [dynamics.md](../dynamics.md).
+- **Snapshots** keep each plant's trace. A restore re-drives the plants along it while the
+  journal replays, checks every exchange against it, and the restored run goes on coupled
+  from where the snapshotted one was ([Snapshots](snapshots.md)). A plant that gives other
+  values than it did (another file, other parameters, a host clock) fails the restore.

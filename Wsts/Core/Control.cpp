@@ -436,6 +436,19 @@ bool Control::awaitTick(std::uint64_t periodUs, Clock::time_point& next, const s
             next = Clock::now();
             return false;
         }
+        // A scenario started while this waited (a restore's journal, started from outside as
+        // the run settled) has actions due before this tick: they go first. The grant stays,
+        // and the next call applies them and then takes it.
+        lock.unlock();
+        if (this->scenarioDue()) {
+            next = Clock::now();
+            return false;
+        }
+        lock.lock();
+        if (quit.load() || !m_lockstep.load() || !(m_granted > 0 && !m_actionOpen && m_actionsWaiting == 0)) {
+            next = Clock::now();
+            return false;
+        }
         m_granted--;
         m_tickOpen = true;
     } else if (m_paused.load()) {

@@ -1,13 +1,13 @@
 # Dynamics Simulators (design draft)
 
-**Status: phases 0 to 2 are built.** Adapters that couple a simulation to an external
+**Status: phases 0 to 3 are built.** Adapters that couple a simulation to an external
 dynamics simulator, part of item 4 of the [roadmap](design.md#roadmap). The simulator is
 stepped on the simulation's own time. Sensors read the simulator's state, and what flight
 software commands the actuators feeds back into it. The choices under
 [What to decide](#what-to-decide) were settled as recommended.
 [Phase 0: what it showed](#phase-0-what-it-showed) has the results of the spike;
-[Phases 1 and 2: what is built](#phases-1-and-2-what-is-built) says what the toolkit does
-now. How to use it is in the user guide ([Dynamics Simulators](user-guide/dynamics.md)).
+[Phases 1 and 2: what is built](#phases-1-and-2-what-is-built) and
+[Phase 3: what is built](#phase-3-what-is-built) say what the toolkit does now. How to use it is in the user guide ([Dynamics Simulators](user-guide/dynamics.md)).
 
 ## The problem
 
@@ -257,11 +257,39 @@ Where it parts from the design above:
 - **What a plant reads is not recorded.** `model_get`, `reg_get` and `gpio_get` are queries.
   A restore gives flight software the same inputs, so the plant reads the same values again
   when it is re-driven (phase 3).
-- **A restored run starts its plants afresh.** A restore replays what the plants wrote (it is
-  in the journal), with no plant running, and then a conductor goes on with the plants from
-  their initial state, not from the snapshot's. Re-driving them during the restore is phase 3.
 - **An FMU's library runs in the conductor's process**, as decided. The `socket` kind, which
   would isolate it, is phase 4.
+
+## Phase 3: what is built
+
+A coupled run is snapshotted and restored like any other, and the restored run goes on
+coupled from where the snapshotted one was. The plants are re-driven, as the design proposed.
+
+| | |
+|---|---|
+| A snapshot | Keeps each plant's trace (`dynamics-<name>.jsonl`) up to the snapshot's time, and names the plants in `snapshot.json` (`plants`). A single deployment with plants (conducted in lockstep: its run file says `conducted`) can now be snapshotted: it is paused and held as a system is |
+| A restore | Before the journal replays, the conductor is given the traces (`Conductor.shadow_plants`). While `advance_to` grants the ticks the journal replays to, it takes each exchange again before the instant it came before: the plant reads its inputs from the replaying run and is stepped, the trace line it would write is compared with the snapshot's, bit for bit, and nothing is written (the journal applies what the plant wrote). Its output conversions follow, so a threshold's state comes back with it. At the snapshot, every exchange of the trace must have been taken (`end_shadow`); then the same conductor couples on. The restored run's trace is whole, from the start, so a snapshot of it is a snapshot like any other |
+| A plant that differs | `PlantMismatch`: the plant, the exchange, and both lines. It ends the restore as a bus record that differs does |
+| Where | `fprime-wsts run --from` (a system, and a single deployment with plants, restored under its conductor: `runner.restore_deployment`); the `wsts_restore` fixture, which now restores with the client's own conductor so that the test goes on with the re-driven plants (a deployment with plants is handed over as a `WstsSystem` of one element, `deployment`); the MCP server's `run_start` with `from_snapshot`, which runs `fprime-wsts run --from` |
+| Tests | `python/tests/test_dynamics.py`: a plant re-driven along its own trace, writing nothing, and then writing what the original wrote at the same ticks; a trace one bit off; a restore short of its snapshot; no trace; traces cut at the snapshot's time. `tests/e2e/test_dynamics.py`: the example system with the hot-start plant snapshotted at 10 s and restored, run on to 30 s, equal to the run that never stopped in the bus records of both elements, the trace and the plant's state (the switch opens again after the restore); a plant that cools faster failing its restore at its first exchange; Payload alone, conducted with the plant, snapshotted at 8 s and restored |
+
+**Found while building it: a race in lockstep restores.** A restore starts its journal from
+outside, once the run has settled, while the tick thread may already be waiting for the
+conductor's grant. `Control::awaitTick` applied a scenario's due actions only before that
+wait, so a grant that came within it took the tick with the actions still unapplied, and the
+restore failed its check one tick late. System restores rarely met it (more happens between
+start-up and the first grant); a single deployment met it every time. After the grant,
+`awaitTick` now looks again, and when actions have come due it returns without taking the
+tick, so that the next call applies them and then takes the grant.
+`InLockstepAScenarioStartedWhileTheTickWaitsIsAppliedBeforeTheGrantedTick` holds it.
+
+What it does **not** do:
+
+- **Saved plant state** (an FMU's `fmi2SerializeFMUstate`, which `fprime_wsts.fmi` can do) is
+  not used by restores: re-driving needs nothing of the plant and checks itself. It would only
+  save the plant's computation, which is small beside the replay.
+- **Ground commands** are still not journaled. A coupled run commanded from the ground cannot
+  be restored past the command; the restore's check says where.
 
 ## Phases
 
@@ -270,13 +298,12 @@ Where it parts from the design above:
 | 0. Spike | A Python plant coupled to the example in lockstep; an FMU through `ctypes` with its state saved and restored | Small | Done ([above](#phase-0-what-it-showed)) |
 | 1. Coupling (built) | `fprime_wsts.dynamics`: the `Plant` interface, `python` plants, the input and output mappings, coupling in the `Conductor` before each instant (`run --stepped`, `WstsSystem.step`, pytest, MCP all step it), `dynamics` in both manifests and their schemas, the trace file. A single deployment conducted as a system of one. The bridge's `model_get`, `reg_get` and `batch`. The example's thermal plant on Payload's heater, switch, sensor and FPGA register | Medium | The heater loop closed through flight code in an end-to-end test, and two runs the same byte for byte |
 | 2. FMI (built) | The `fmu` kind: FMI 2.0 and 3.0 co-simulation through `ctypes`, parameters, a check of the model description against the manifest. The example's plant as an FMU built from C source with the example | Small to medium | A modelling tool's export runs in the loop |
-| 3. Replay and snapshots | The plant's actions marked (`via`). In a restore, plants re-driven in shadow mode and compared with the journal. Saved state for plants that have it. The plant's trace in the snapshot | Medium | A coupled run snapshotted and restored, and coupling resumed where it was |
+| 3. Replay and snapshots (built) | The plant's actions marked (`via`). In a restore, plants re-driven in shadow mode and compared with the journal. Saved state for plants that have it. The plant's trace in the snapshot | Medium | A coupled run snapshotted and restored, and coupling resumed where it was |
 | 4. Other simulators | The `socket` kind and its protocol. A `42` kind after a spike against 42's IPC. A Basilisk plant as a documented example | Medium | An attitude loop against 42 or Basilisk |
 | 5. Tools and docs | The MCP server's view of plants (state, trace), a user guide page, the fidelity page | Small | |
 
-Phases 1 and 2 together make a usable first version. Phase 3 can follow by itself: a coupled
-run is journaled from phase 1 on, and a restore replays the plant's outputs. Only the plant's
-own state is lost on restore, and the restore says so.
+Phases 1 and 2 together made the first version; phase 3 followed by itself, without a change
+to what a run journals.
 
 ## Risks
 

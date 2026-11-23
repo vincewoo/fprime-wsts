@@ -224,3 +224,62 @@ def test_a_plant_that_differs_from_the_snapshot_fails_its_restore(request, tmp_p
     finally:
         restored.stop()
     assert raised.value.expected["out"]["T"] > raised.value.found["out"]["T"], "it cooled faster"
+
+
+def test_a_deployment_with_a_plant_is_conducted_snapshotted_and_restored(request, tmp_path):
+    """A single deployment with plants runs in lockstep as a system of one (as `fprime-wsts run
+    --stepped` runs it), can be snapshotted, and is restored under its conductor with its plant
+    re-driven: Payload by itself, with the hot-start plant, against a run that never stopped"""
+    from fprime_wsts import snapshots
+    from fprime_wsts.bridge import WstsSystem
+    from fprime_wsts.runner import Simulation, deployment_description, restore_deployment
+
+    [spec] = parse_specs([{**{k: v for k, v in hot_start("python", PLANTS / "thermal.py").items()
+                              if k not in ("kind", "path", "inputs", "outputs")},
+                           "python": str(PLANTS / "thermal.py"),
+                           "inputs": {"heater": {"gpio": "heaterPin"}},
+                           "outputs": {"T": [{"model": "fpga", "key": "reg.0x0C", "scale": 10, "round": True},
+                                             {"gpio": "switchPin", "above": 45, "hysteresis": 5}]}}], "test")
+    payload_dir = Path(request.config.getoption("--wsts-system")) / "payload"
+
+    def conducted(log_dir, restore=None, journal=None):
+        simulation = Simulation(payload_dir, auto_ports=True, stepped=True, journal=journal, restore=restore,
+                                log_dir=log_dir, record=None if journal or restore else str(log_dir / "rec.jsonl"))
+        simulation.extra_env["WSTS_LOCKSTEP"] = "1"
+        simulation.conducted = True
+        simulation.start()
+        return simulation, WstsSystem(deployment_description(simulation, [spec]))
+
+    def finish(simulation, client):
+        client.close()
+        simulation.stop()
+
+    whole, client = conducted(tmp_path / "whole")
+    try:
+        client.conductor().wait_ready(20.0)
+        client.step(seconds=25.0)
+        expected = client.dynamics("thermal")
+    finally:
+        finish(whole, client)
+
+    first, client = conducted(tmp_path / "first", journal=True)
+    try:
+        client.conductor().wait_ready(20.0)
+        client.step(seconds=8.0)
+        snap = snapshots.take(first.log_dir, tmp_path / "at-8s")
+    finally:
+        finish(first, client)
+    assert snap.meta["conducted"] and snap.meta["plants"] == ["thermal"]
+
+    restored, client = conducted(tmp_path / "restored", restore=snap)
+    try:
+        conductor = client.conductor()
+        conductor.wait_ready(20.0)
+        restore_deployment(restored, conductor)
+        client.step(seconds=17.0)
+        state = client.dynamics("thermal")
+    finally:
+        finish(restored, client)
+    assert state == expected
+    assert snapshots.bus_records(tmp_path / "restored" / "journal.jsonl") == \
+        snapshots.bus_records(tmp_path / "whole" / "rec.jsonl")

@@ -171,8 +171,13 @@ version, unset `JAVA_HOME` so the bundled JRE is used.
   plant and its FMU (`plants/thermal_fmu`, `-ffp-contract=off`) compute the same bits, and
   `tests/e2e/test_dynamics.py` holds that their runs record the same bytes. A plant runs only
   in stepped time: a single deployment with plants is conducted as a system of one
-  (`runner.conduct_deployment`). A restore replays what plants wrote, and does not yet re-drive
-  them. The example's plant sits at 21.5 C until the heater is on: e2e tests that use the
+  (`runner.conduct_deployment`). A snapshot keeps each plant's trace; a restore re-drives the
+  plants along it during `advance_to` (`Conductor.shadow_plants`, `end_shadow`: each exchange
+  compared to the bit, nothing written, `PlantMismatch` at the first that differs) and the same
+  conductor couples on: a restore that hands a run to a new conductor loses the plants' state.
+  In lockstep `Control::awaitTick` looks for due scenario actions again after a grant, before
+  taking the tick: a journal started while the tick thread waits must not be a tick late. The
+  example's plant sits at 21.5 C until the heater is on: e2e tests that use the
   sensor, the FPGA temperature or the switch in lockstep see it.
 - VxWorks API shim (`Wsts/VxWorks`, `shims: [vxworks]`): `OK`, `ERROR`, `NO_WAIT` are
   enumerators, not macros, as `fprime-vxworks` makes them (F´ headers use the names). Its

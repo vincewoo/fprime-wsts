@@ -137,6 +137,9 @@ fix:
   element in lockstep takes a granted tick paused or not. It waits until every element has
   replayed its pause, then checks each. For that, an element's scenario now applies its
   actions between ticks in lockstep too, as in plain stepped time.
+- **Plants** ([dynamics.md](dynamics.md#phase-3-what-is-built)): a snapshot of a coupled run
+  keeps each plant's trace, and a restore re-drives the plants along it while the journal
+  replays, comparing every exchange, so that the restored run goes on coupled.
 - **Where it parts from the design:** the GDS of a restored run starts with it, and sees the
   replay's downlink, rather than starting at the end; and **ground commands are not
   journaled**. A command from the GDS reaches flight software over the deployment's own

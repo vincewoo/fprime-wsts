@@ -2600,6 +2600,37 @@ TEST_F(CoreTest, InLockstepAScenarioAppliesItsActionsBetweenTicksToo) {
     std::remove(path.c_str());
 }
 
+TEST_F(CoreTest, InLockstepAScenarioStartedWhileTheTickWaitsIsAppliedBeforeTheGrantedTick) {
+    // A restore starts its journal from outside while the tick thread already waits for the
+    // conductor; a grant that comes at once must not take the tick before the actions due
+    // ahead of it (they were recorded at that tick)
+    Control& control = Control::get();
+    std::vector<std::uint64_t> received_at;
+    Bus::get().bindByteStream("probe", [&received_at](const Bytes&) { received_at.push_back(Control::get().tick()); });
+    const std::string path = tempFile("lockstep-late-scenario.jsonl");
+    {
+        std::ofstream file(path);
+        file << R"({"tick": 1, "op": "inject_bytes", "endpoint": "probe", "text": "x"})" << "\n";
+    }
+    ASSERT_TRUE(run(R"({"op": "set_stepped", "stepped": true, "lockstep": true})"));
+    Ticker ticker(10);
+    ASSERT_TRUE(control.grant(1));
+    ASSERT_TRUE(control.awaitGranted(std::chrono::milliseconds(2000)));
+    for (int i = 0; i < 20; i++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(i % 7));  // anywhere in the tick thread's wait
+        const std::uint64_t before = control.tick();
+        ASSERT_TRUE(run(R"({"op": "scenario_load", "path": ")" + path + R"("})"));
+        ASSERT_TRUE(run(R"({"op": "scenario_start"})"));
+        ASSERT_TRUE(control.grant(1));
+        ASSERT_TRUE(control.awaitGranted(std::chrono::milliseconds(2000)));
+        ASSERT_EQ(received_at.size(), static_cast<std::size_t>(i + 1));
+        EXPECT_EQ(received_at.back(), before) << "applied between tick " << before << " and the next, round " << i;
+        EXPECT_EQ(control.tick(), before + 1);
+    }
+    ASSERT_TRUE(run(R"({"op": "set_stepped", "stepped": false})"));
+    std::remove(path.c_str());
+}
+
 namespace {
 //! Two ends of a link in this one process, on the endpoints linkA and linkB
 struct LinkedPair {
