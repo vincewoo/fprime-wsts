@@ -507,6 +507,163 @@ TEST_F(CoreTest, PacketsAreRecordedAndTheirAnswersReplayed) {
     std::remove(path.c_str());
 }
 
+// ----------------------------------------------------------------------
+// The RMAP target (ECSS-E-ST-50-52C)
+// ----------------------------------------------------------------------
+
+namespace {
+//! An RMAP command as an initiator writes it: target, protocol 1, instruction, key, reply
+//! address, initiator, transaction ID, extended address, address, length, header CRC, and for
+//! a write or read-modify-write the data and its CRC
+Bytes rmapCommand(std::uint8_t target, std::uint8_t code, std::uint8_t key, const Bytes& replyAddress,
+                  std::uint8_t initiator, std::uint16_t transaction, std::uint32_t address, std::uint32_t length,
+                  const Bytes& data = Bytes(), bool withData = false) {
+    const auto replyWords = static_cast<std::uint8_t>((replyAddress.size() + 3) / 4);
+    Bytes out{target, 0x01, static_cast<std::uint8_t>(0x40 | (code << 2) | replyWords), key};
+    for (std::size_t i = replyAddress.size(); i < replyWords * 4U; i++) {
+        out.push_back(0x00);  // padding first
+    }
+    out.insert(out.end(), replyAddress.begin(), replyAddress.end());
+    out.push_back(initiator);
+    out.push_back(static_cast<std::uint8_t>(transaction >> 8));
+    out.push_back(static_cast<std::uint8_t>(transaction));
+    out.push_back(0x00);
+    for (int shift = 24; shift >= 0; shift -= 8) {
+        out.push_back(static_cast<std::uint8_t>(address >> shift));
+    }
+    for (int shift = 16; shift >= 0; shift -= 8) {
+        out.push_back(static_cast<std::uint8_t>(length >> shift));
+    }
+    out.push_back(Wsts::rmapCrc(out));
+    if (withData) {
+        out.insert(out.end(), data.begin(), data.end());
+        out.push_back(Wsts::rmapCrc(data));
+    }
+    return out;
+}
+
+constexpr std::uint8_t WRITE_VERIFY_ACK_INC = 0xF;  // 1111
+constexpr std::uint8_t WRITE_ACK_INC = 0xB;         // 1011
+constexpr std::uint8_t WRITE_INC = 0x9;             // 1001: no reply
+constexpr std::uint8_t READ_INC = 0x3;              // 0011
+constexpr std::uint8_t RMW = 0x7;                   // 0111
+
+struct RmapBench {
+    RmapBench() : flight("spw") {
+        Bus::get().attachPacket("spw", 0xFE, &target);
+    }
+    //! The reply to one command, or empty
+    Bytes send(const Bytes& command) {
+        flight.received.clear();
+        (void)Bus::get().packetSend("spw", command);
+        return flight.received.empty() ? Bytes() : flight.received.front();
+    }
+    PacketFlight flight;
+    Wsts::RmapTarget target;
+};
+}  // namespace
+
+TEST_F(CoreTest, TheRmapCrcIsTheStandardsOne) {
+    // The table of ECSS-E-ST-50-52C starts 00 91 E3 72
+    EXPECT_EQ(Wsts::rmapCrc(bytes({0x01})), 0x91);
+    EXPECT_EQ(Wsts::rmapCrc(bytes({0x02})), 0xE3);
+    EXPECT_EQ(Wsts::rmapCrc(bytes({0x03})), 0x72);
+    // Packets of fprime-community's CommLib decode tests: a write reply and a write command header
+    EXPECT_EQ(Wsts::rmapCrc(bytes({0x54, 0x01, 0x28, 0x00, 0x76, 0x00, 0x05})), 0xC4);
+    EXPECT_EQ(Wsts::rmapCrc(bytes({0x54, 0x01, 0x70, 0x00, 0x76, 0x00, 0x05, 0x00, 0, 0, 0, 1, 0, 0, 1})), 0xF0);
+}
+
+TEST_F(CoreTest, AnRmapTargetIsWrittenAndReadBack) {
+    RmapBench bench;
+    ASSERT_TRUE(bench.target.set("key", "0x20"));
+    ASSERT_TRUE(bench.target.set("base", "0x1000"));
+    // A verified, acknowledged write; the reply comes back by the path the command gave
+    const Bytes write = rmapCommand(0xFE, WRITE_VERIFY_ACK_INC, 0x20, bytes({0x03}), 0x67, 0x1234, 0x1010, 4,
+                                    bytes({0xDE, 0xAD, 0xBE, 0xEF}), true);
+    const Bytes ack = bench.send(write);
+    // Path 03 (the reply address, its padding dropped), initiator 67, protocol 1, instruction
+    // as a reply (00 1111 01), status 0, target FE, transaction 1234, header CRC
+    Bytes expected = bytes({0x03, 0x67, 0x01, 0x3D, 0x00, 0xFE, 0x12, 0x34});
+    expected.push_back(Wsts::rmapCrc(expected.data() + 1, expected.size() - 1));
+    EXPECT_EQ(ack, expected);
+    EXPECT_EQ(bench.target.peek(0x1010, 4), bytes({0xDE, 0xAD, 0xBE, 0xEF}));
+
+    // A read of the same: reserved byte, length, header CRC, data, data CRC
+    const Bytes data = bench.send(rmapCommand(0xFE, READ_INC, 0x20, Bytes(), 0x67, 0x0002, 0x100E, 6));
+    ASSERT_EQ(data.size(), 12u + 6u + 1u);
+    EXPECT_EQ(data[0], 0x67) << "no reply address: straight to the initiator's logical address";
+    EXPECT_EQ(data[2], 0x0C) << "the command's instruction as a reply: 00, command 0011, no reply address words";
+    EXPECT_EQ(data[3], 0x00);
+    EXPECT_EQ(bytes({data[8], data[9], data[10]}), bytes({0, 0, 6}));
+    EXPECT_EQ(data[11], Wsts::rmapCrc(data.data(), 11));
+    EXPECT_EQ(Bytes(data.begin() + 12, data.begin() + 18), bytes({0x00, 0x00, 0xDE, 0xAD, 0xBE, 0xEF}));
+    EXPECT_EQ(data[18], Wsts::rmapCrc(data.data() + 12, 6));
+    EXPECT_EQ(bench.target.commands(), 2u);
+
+    // A write that asks for no reply gets none
+    EXPECT_TRUE(bench.send(rmapCommand(0xFE, WRITE_INC, 0x20, Bytes(), 0x67, 3, 0x1000, 1, bytes({0x55}), true)).empty());
+    EXPECT_EQ(bench.target.peek(0x1000, 1), bytes({0x55}));
+}
+
+TEST_F(CoreTest, AnRmapTargetReportsWhatTheStandardSays) {
+    RmapBench bench;
+    ASSERT_TRUE(bench.target.set("size", "0x100"));
+    ASSERT_TRUE(bench.target.set("mem.0x10", "0x11 0x22 0x33 0x44"));
+    const auto status = [&bench](const Bytes& command) {
+        const Bytes reply = bench.send(command);
+        return reply.size() > 3 ? static_cast<int>(reply[3]) : -1;
+    };
+    EXPECT_EQ(status(rmapCommand(0xFE, READ_INC, 0x07, Bytes(), 0x67, 1, 0x10, 4)), 3) << "wrong key";
+    EXPECT_EQ(status(rmapCommand(0xFE, READ_INC, 0x00, Bytes(), 0x67, 1, 0xFE, 4)), 10) << "past the end";
+    EXPECT_EQ(status(rmapCommand(0xFE, 0x6, 0x00, Bytes(), 0x67, 1, 0x10, 4)), 2) << "command code 0110 is not used";
+    EXPECT_EQ(status(rmapCommand(0xFE, 0x5, 0x00, Bytes(), 0x67, 1, 0x10, 4)), -1) << "0101 is not used either, and asks for no reply";
+    // A header CRC that is wrong: discarded, no reply
+    Bytes corrupt = rmapCommand(0xFE, READ_INC, 0x00, Bytes(), 0x67, 1, 0x10, 4);
+    corrupt.back() ^= 0x01;
+    EXPECT_EQ(status(corrupt), -1);
+    EXPECT_EQ(bench.target.discarded(), 1u);
+    EXPECT_EQ(status(bytes({0xFE, 0x02, 0x00})), -1) << "another protocol";
+
+    // A data CRC that is wrong: a verified write writes nothing, an unverified one writes
+    Bytes verified = rmapCommand(0xFE, WRITE_VERIFY_ACK_INC, 0, Bytes(), 0x67, 2, 0x10, 2, bytes({0xAA, 0xBB}), true);
+    verified.back() ^= 0xFF;
+    EXPECT_EQ(status(verified), 4);
+    EXPECT_EQ(bench.target.peek(0x10, 2), bytes({0x11, 0x22}));
+    Bytes unverified = rmapCommand(0xFE, WRITE_ACK_INC, 0, Bytes(), 0x67, 3, 0x10, 2, bytes({0xAA, 0xBB}), true);
+    unverified.back() ^= 0xFF;
+    EXPECT_EQ(status(unverified), 4);
+    EXPECT_EQ(bench.target.peek(0x10, 2), bytes({0xAA, 0xBB}));
+    Bytes early = rmapCommand(0xFE, WRITE_ACK_INC, 0, Bytes(), 0x67, 4, 0x10, 4, bytes({1, 2, 3, 4}), true);
+    early.resize(early.size() - 2);
+    EXPECT_EQ(status(early), 5) << "the packet ended before its data";
+    Bytes extra = rmapCommand(0xFE, WRITE_ACK_INC, 0, Bytes(), 0x67, 5, 0x10, 1, bytes({1}), true);
+    extra.push_back(0x00);
+    EXPECT_EQ(status(extra), 6);
+
+    // Read-modify-write: the old value comes back, the masked bits change
+    const Bytes rmw = bench.send(rmapCommand(0xFE, RMW, 0, Bytes(), 0x67, 6, 0x12, 4, bytes({0xFF, 0x00, 0x0F, 0xF0}), true));
+    ASSERT_GE(rmw.size(), 15u);
+    EXPECT_EQ(rmw[3], 0);
+    EXPECT_EQ(Bytes(rmw.begin() + 12, rmw.begin() + 14), bytes({0x33, 0x44}));
+    EXPECT_EQ(bench.target.peek(0x12, 2), bytes({0x3F, 0x04}));
+    EXPECT_EQ(status(rmapCommand(0xFE, RMW, 0, Bytes(), 0x67, 7, 0x12, 3, bytes({1, 2, 3}), true)), 11);
+}
+
+TEST_F(CoreTest, AnRmapTargetsMemoryCanFollowASignal) {
+    RmapBench bench;
+    EXPECT_FALSE(bench.target.set("mem.0x20", "1000 as u16")) << "two bytes need their order";
+    EXPECT_FALSE(bench.target.set("mem.0x5000", "0x01")) << "outside memory";
+    ASSERT_TRUE(bench.target.set("mem.0x20", "1000 as u16be"));
+    EXPECT_EQ(bench.target.peek(0x20, 2), bytes({0x03, 0xE8}));
+    bench.target.onTick(1);
+    EXPECT_EQ(bench.target.peek(0x20, 2), bytes({0x03, 0xE8}));
+    // Flight software's write ends it
+    (void)bench.send(rmapCommand(0xFE, WRITE_ACK_INC, 0, Bytes(), 0x67, 1, 0x21, 1, bytes({0x00}), true));
+    ASSERT_TRUE(bench.target.set("mem.0x22", "7 as u8"));  // another one, elsewhere
+    bench.target.onTick(2);
+    EXPECT_EQ(bench.target.peek(0x20, 3), bytes({0x03, 0x00, 0x07}));
+}
+
 TEST_F(CoreTest, GpioStuckFault) {
     ASSERT_TRUE(run(R"({"op": "fault_set", "endpoint": "pin", "kind": "stuck", "arg": 1})"));
     bool level = false;
