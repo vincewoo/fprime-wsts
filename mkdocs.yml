@@ -119,6 +119,7 @@ nav:
       - Simulating Hardware:
           - Device Models: user-guide/device-models.md
           - Register Blocks and Interrupts: user-guide/registers.md
+          - SpaceWire: user-guide/spacewire.md
           - Simulators as F´ Components: user-guide/simulators.md
           - Writing Surrogates: user-guide/surrogates.md
       - Operating a Simulation:

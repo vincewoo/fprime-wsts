@@ -17,7 +17,7 @@
 | `fprime-wsts check-host <DIR or manifest> [--project DIR] [--json]` | List what the host must provide for the simulated build (system headers, libraries, packages, SDK files, sanitizer runtime) and whether it does, with the host and flight compilers. Compiles nothing of the project. Exit status 1 when something is missing; a check that cannot be made is a warning. Given a generated directory it also writes `wsts-host.md` and `wsts-host.json` there |
 | `fprime-wsts report [DIR] [--json]` | Print a generated deployment's fidelity report, and the host check of this machine if `generate` or `check-host` left one |
 | `fprime-wsts scaffold <Component> --output DIR [--project DIR] [--name NAME]` | Start a mirror surrogate for a flight component |
-| `fprime-wsts new-model <Name> --kind i2c\|spi\|bytestream\|gpio\|register [--endpoint E] [--address A\|any] [--python] [--project DIR] [--manifest FILE] [--namespace NS] [--json]` | Start a [device model](user-guide/device-models.md#start-one-with-new-model) that builds and answers from the first run, with TODOs where the device's behaviour goes. C++: `Models/<Name>.hpp` and `.cpp` in the simulation project (default: the current directory), added to `Models/CMakeLists.txt` (made, or added to when `new-model` made it), and `library.cmake` when there is none. `--python`: `pymodels/<name>.py`, which defines `serve(sim)`. The model is named in the manifest (`--manifest`, else the project's one deployment manifest) under `models` with `cmake.depends: [Models]`, or under `run.models`, edited as text so its comments stay; what cannot be placed is printed to add by hand. Its name there is the class name with a lowercase first letter. An I2C model is at `address: any` unless `--address` says. Never overwrites a file |
+| `fprime-wsts new-model <Name> --kind i2c\|spi\|bytestream\|gpio\|register\|packet [--endpoint E] [--address A\|any] [--python] [--project DIR] [--manifest FILE] [--namespace NS] [--json]` | Start a [device model](user-guide/device-models.md#start-one-with-new-model) that builds and answers from the first run, with TODOs where the device's behaviour goes. C++: `Models/<Name>.hpp` and `.cpp` in the simulation project (default: the current directory), added to `Models/CMakeLists.txt` (made, or added to when `new-model` made it), and `library.cmake` when there is none. `--python`: `pymodels/<name>.py`, which defines `serve(sim)`. The model is named in the manifest (`--manifest`, else the project's one deployment manifest) under `models` with `cmake.depends: [Models]`, or under `run.models`, edited as text so its comments stay; what cannot be placed is printed to add by hand. Its name there is the class name with a lowercase first letter. An I2C or packet model is at `address: any` unless `--address` says (for a packet model a SpaceWire logical address, 0x20 to 0xff). Never overwrites a file |
 
 Errors the user can fix are printed as `fprime-wsts: error: …` with exit code 2.
 
@@ -108,8 +108,9 @@ models:                          # in-process C++ device models
     class: Wsts::RegisterMapI2c
     header: Wsts/Core/Models.hpp  # default
     endpoint: i2cBus
-    kind: i2c                    # bytestream | i2c | spi | gpio | register | none
-    address: 0x68                # i2c only; `any`: every address no other device on the endpoint has
+    kind: i2c                    # bytestream | i2c | spi | gpio | register | packet | none
+    address: 0x68                # i2c: the device address; packet: the SpaceWire logical address
+                                 # (32-255); `any`: every address no other device on the endpoint has
     params: {"0x75": "0x68"}     # each becomes model.set(key, value) at start-up
     telemetry: true              # default: a channel per register of a stock register model (below)
   - name: fpga                   # a block of memory-mapped registers (see "Register blocks")
@@ -710,6 +711,7 @@ Built-in surrogates (`catalog/wsts-catalog.yaml`):
 | `Wsts.SimSpi` | `Drv.Spi` | `Drv.LinuxSpiDriver` | |
 | `Wsts.SimGpio` | `Drv.Gpio` (one pin per instance) | `Drv.LinuxGpioDriver` | |
 | `Wsts.SimRegister` | 32-bit and 64-bit register reads and writes, an interrupt output ([Register blocks](#register-blocks)) | nothing by itself: the manifest names a project's register interface component | `irq=serial\|direct\|off` |
+| `Wsts.SimSpaceWire` | `Drv.PassiveBufferDriver` (one packet a buffer) + `allocate`, `deallocate`, `run` ([SpaceWire](user-guide/spacewire.md)) | nothing by itself: F´ has no SpaceWire driver, so the manifest names the project's | |
 | `Wsts.SimTick` | `Drv.Tick` | `Svc.LinuxTimer`, `VxWorksSvc.VxWatchDogTimer` | `mode=block\|thread`, `tick_hz=<n>` |
 | `Wsts.SimTime` | `Svc.Time` (the time port; no bus endpoint) | `Svc.PosixTime`, `Svc.ChronoTime`, `Svc.OsTime` | |
 
@@ -731,6 +733,7 @@ Used identically by the bridge, scenario files and (through its commands) `Wsts.
 | `fault_set` | `endpoint`, `kind`, `dir`=`both`, `arg`=0, `count`=0, `ticks`=0 | Arm a fault; `count`/`ticks` of 0 mean unbounded |
 | `fault_clear` | `endpoint`=`*` | Remove faults |
 | `inject_bytes` | `endpoint`, `data` (hex) or `text` | Bytes to flight software as if from the device |
+| `inject_packet` | `endpoint`, `data` (hex) | One packet to flight software on a packet (SpaceWire) endpoint, as if a node had sent it |
 | `gpio_force` | `endpoint`, `level` | Drive a GPIO input |
 | `i2c_reg_set` | `endpoint`, `addr`, `reg`, `value` | Set a register of a register-addressed I2C model |
 | `reg_set` | `endpoint`, `offset`, `value` | Set a register of the register block on an endpoint, without a flight write (no write mask, no hook). 64-bit values may be given as `"0x…"` strings |
@@ -748,14 +751,14 @@ to the log directory, or `--files-dir`).
 
 `dir` is `both`, `to_device` (flight software → device) or `to_flight`.
 
-| `kind` | Byte stream | I2C / SPI | GPIO | Register | `arg` |
-|---|---|---|---|---|---|
-| `drop` | Data discarded | Transaction fails (write or read error) | Write ignored; input change ignored | A write is lost; a read fails (all ones) | |
-| `corrupt` | Every byte XOR `arg` | Written or read bytes XOR `arg` | | The value written or read XOR `arg` | 8-bit mask; for a register all 32 bits |
-| `delay` | Held for `arg` ms | Held for `arg` ms | Held for `arg` ms | Held for `arg` ms | milliseconds |
-| `duplicate` | Delivered twice | | | | |
-| `error` | Send returns an error status | Transaction returns status `arg` | Call returns status `arg` | The model is not reached; a read is all ones | driver status value (0 means 1) |
-| `stuck` | Data discarded | Read bytes all `arg` | Reads return `arg`; writes ignored | Reads return `arg`; writes ignored | value |
+| `kind` | Byte stream | I2C / SPI | GPIO | Register | Packet (SpaceWire) | `arg` |
+|---|---|---|---|---|---|---|
+| `drop` | Data discarded | Transaction fails (write or read error) | Write ignored; input change ignored | A write is lost; a read fails (all ones) | The packet is lost | |
+| `corrupt` | Every byte XOR `arg` | Written or read bytes XOR `arg` | | The value written or read XOR `arg` | Every byte XOR `arg`, its address bytes too: it may go astray, and its CRCs fail | 8-bit mask; for a register all 32 bits |
+| `delay` | Held for `arg` ms | Held for `arg` ms | Held for `arg` ms | Held for `arg` ms | Held for `arg` ms | milliseconds |
+| `duplicate` | Delivered twice | | | | Delivered twice | |
+| `error` | Send returns an error status | Transaction returns status `arg` | Call returns status `arg` | The model is not reached; a read is all ones | The send fails (the buffer driver interface has no status: the surrogate returns the buffer, and the packet is not sent) | driver status value (0 means 1) |
+| `stuck` | Data discarded | Read bytes all `arg` | Reads return `arg`; writes ignored | Reads return `arg`; writes ignored | The packet is lost | value |
 
 For I2C, status values are those of `Drv.I2cStatus` (1 address, 2 write, 3 read, 5 other).
 
@@ -788,9 +791,12 @@ One JSON object per line. Blank lines and lines starting with `#` are ignored.
   between steps replays from its recording to the same bytes (`tests/e2e/test_stepped.py`).
   Recordings made before this rule replay their actions from outside one tick earlier.
 - Recording lines have `rec` (`bs_tx`, `bs_rx`, `i2c`, `spi`, `gpio_out`, `gpio_in`,
-  `reg_rd`, `reg_wr`, `reg_irq`),
+  `reg_rd`, `reg_wr`, `reg_irq`, `pkt_tx`, `pkt_rx`),
   `tick`, `endpoint`, `src` (`flight`, `model`, `link`, `inject`, `replay`) and the data. They are
-  ignored in `stimulus` mode and replayed in `responses` mode. Recorded I2C and SPI
+  ignored in `stimulus` mode and replayed in `responses` mode. A packet flight software sent
+  (`pkt_tx`) has its whole `data`, its `status`, and the logical address it was routed to
+  (`addr`; none for a packet without one); a packet to flight software (`pkt_rx`) has its
+  `data`, and in `responses` mode is delivered again at its tick, the nodes bypassed. Recorded I2C and SPI
   responses are served in the order flight software asks for them, separately for each
   endpoint and, on I2C, each device address: devices that share a bus keep their own
   responses even when the replay interleaves their transactions differently.
@@ -832,6 +838,7 @@ Newline-delimited JSON. A client sends `{"id": n, "op": …}` and receives
 | `bus_stats` | The traffic of each endpoint since start-up (endpoints nothing has used yet with zeros), flat: `bus.<endpoint>.<counter>` with `transactions`, `to_device` (what flight software did: sends, reads, writes, transfers, pin writes), `to_flight` (what reached it unasked: received bytes, input levels, interrupts), `bytes_to_device`, `bytes_to_flight`, `errors`, `unanswered`, `fault_hits` (an endpoint's interrupts included) and `last_tick`; and `bus.<endpoint>.at.<address>.<counter>` (`transactions`, `errors`, `unanswered`) for each I2C address and register offset, the address in hex (`0x68`). `unanswered` counts what nothing answered: no device on the endpoint, none at the I2C address, nothing at the register offset (`NO_DEVICE`, from the bus or a `RegisterFile` that has not defined the offset). Byte streams and GPIO pins have no answer to miss (a client may serve them by subscribing) and are never `unanswered`. `WstsBridge.bus_stats()` nests them: `{endpoint: {counter: n, …, "addresses": {"0x68": {…}}}}` |
 | `tick_times` | Stepped time: how long the ticks took in host time, each from its start until its work was finished (the cycles of the simulation's own clocks in it included, the pace of `set_rate` and what was done between two ticks not), flat: `ticks` (ticks timed), `mean_us`, `max_us`, `over_period` (ticks that took longer than the tick period: on the target they could have overrun, which stepped time hides) and `slowest.<i>.tick`, `slowest.<i>.us` for the five slowest, slowest first. Ticks taken in real time, and one that did not finish (`stuck`), are not timed. A hint, never a failure: the host is not the target, and nothing of it reaches flight software, so two runs still record the same bytes. `WstsBridge.tick_times()` nests it: `{"ticks", "mean_ms", "max_ms", "over_period", "slowest": [{"tick", "ms"}, …]}` |
 | `attach` (`endpoint`, `kind`: `i2c`\|`spi`, `addr`) | Become the device model (at `addr`; for SPI, the endpoint's one device). When the client disconnects, its devices leave the bus and other devices on the endpoint stay. The sim then sends `{"ev": "i2c_req", "rid", "endpoint", "addr", "write", "rlen"}` and waits up to 2 s for `{"op": "reply", "rid", "status", "data"}` |
+| `attach` (`endpoint`, `kind`: `packet`, `addr`: 32–255 or `"any"`) | Become the node at a logical address of a packet (SpaceWire) endpoint, in place of a model there, which answers again when the client disconnects. The sim sends `{"ev": "pkt_req", "rid", "endpoint", "addr", "data", "rlen": 0}` with each packet routed there, from its logical address on, and waits for `{"op": "reply", "rid", "status": 0, "data"}`: the reply packet, or empty for none. Packets at other times go through `inject_packet` |
 | `attach` (`endpoint`, `kind`: `register`) | Become the register block. The sim sends `{"ev": "reg_req", "rid", "endpoint", "access": "read", "offset": "0x…", "width", "rlen"}` or `{…, "access": "write", "offset", "width", "value": "0x…", "rlen": 0}` and waits up to 2 s for `{"op": "reply", "rid", "status", "data"}`, where `data` is the value read as little-endian hex (`width` bytes; empty for a write). Raise the block's interrupts with `irq_raise`. When the client disconnects, the block that was on the endpoint before answers again |
 
 Byte stream and GPIO models need no `attach`: subscribe, watch `bs_tx` / `gpio_out`

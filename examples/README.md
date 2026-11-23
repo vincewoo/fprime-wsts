@@ -26,8 +26,8 @@ definition that both entry points check.
 **`Payload`** is a Linux single-board computer with no ground link: its commands, events
 and telemetry all travel through the hub. It has an IMU and a power monitor on one I2C
 bus, the library's serial temperature sensor on a UART, a heater pin and an
-over-temperature switch, an FPGA housekeeping block behind memory-mapped registers, and an
-instrument. Its timer ticks at 20 Hz, Cdh's at 10 Hz.
+over-temperature switch, an FPGA housekeeping block behind memory-mapped registers, a sun
+sensor on a SpaceWire link, and an instrument. Its timer ticks at 20 Hz, Cdh's at 10 Hz.
 
 ## Build and run
 
@@ -79,6 +79,7 @@ runs the end-to-end tests against it.
 | Register telemetry, and a signal of simulated time set while it runs | `wstsModelTlm.fpga_0x0000` … `fpga_0x0014`, one channel per register the manifest gives `fpga` | `test_payload.py::test_model_registers_are_telemetry` |
 | Register faults, `REG_SET` and `IRQ_RAISE`, recording and replay, a register block in Python | on `fpgaRegs` and `fpgaRegs:irq` | `test_payload.py` (the register tests) |
 | A mirror of the register interface | `mission-sim/Surrogates/SimRegisterInterface`, on `Wsts::RegisterSurrogate`: built, and used when `payload.yaml` names it | Python tests (`test_registers.py`); the build |
+| A SpaceWire link, and an RMAP target | `spw` (`Components.SpwDriver`, a v4 driver on `Drv.PassiveBufferDriver`, named in `payload.yaml`) becomes `Wsts.SimSpaceWire`; `Components.SunSensor` reads the sun angle over RMAP from `Wsts::RmapTarget` at logical address 0xFE | `test_spacewire.py` (reads and the commands on the wire, an acknowledged write, a dropped reply, a wrong key, a node in Python) |
 | Two devices on one bus | IMU at 0x68 and power monitor at 0x40 on `i2cBus` | `test_payload.py::test_two_devices_answer_on_one_i2c_bus` |
 | Device simulators written as F´ components | `SensorSim.SerialSensorSim` behind Cdh's UART through `Wsts.BusByteStreamDevice` (`simulators`, `devices`), with its own command, parameter, events and telemetry; `PowerSim` behind Payload's I2C bus through `Wsts.BusI2cDevice` (`addr=0x40`), commanded from the GDS | `test_cdh.py`, `test_payload.py::test_component_device_takes_commands_from_the_gds` |
 | A cycle source with a rate of its own | `SensorSim.simClock` at 125 Hz stepping `SensorSim.gyroSim` (`clocks`) | `test_cdh.py::test_fast_simulator_runs_at_its_own_rate` and the clock tests |

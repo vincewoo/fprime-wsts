@@ -90,7 +90,7 @@ models:
   - name: imu                      # used by model_set / MODEL_SET
     class: Wsts::RegisterMapI2c    # a stock model, or your own class
     endpoint: i2cBus
-    kind: i2c                      # bytestream | i2c | spi | gpio | register | none
+    kind: i2c                      # bytestream | i2c | spi | gpio | register | packet | none
     address: 0x68                  # i2c only
     params: {"0x75": "0x68"}       # each becomes model.set(key, value) at start-up
   - name: gps
