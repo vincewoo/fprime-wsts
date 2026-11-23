@@ -25,6 +25,11 @@ catalogs:
 substitute:
   - instance: fpgaRegs
     with: Wsts.SimRegister
+  # The SpaceWire driver is the project's own, written to F Prime's buffer driver interface
+  # (Drv.PassiveBufferDriver): Wsts.SimSpaceWire puts its packets on a packet endpoint, where
+  # the sun sensor's model below answers at its logical address
+  - instance: spw
+    with: Wsts.SimSpaceWire
 
 models:
   # IMU at I2C address 0x68: a model of this project (Models/), set in g
@@ -61,6 +66,20 @@ models:
       "irq.period": "20"
       "irq.status": "0x04"
       "irq.bits": "0x1"          # frame ready
+
+  # The sun sensor on the SpaceWire network: the toolkit's RMAP target at the sensor's
+  # logical address, with its key. Its memory holds the integration time (100 ms) and the sun
+  # angle in millidegrees, which swings between 15 and 45 degrees over a minute.
+  - name: sunSensor
+    class: Wsts::RmapTarget
+    endpoint: spw
+    kind: packet
+    address: 0xFE
+    params:
+      key: "0x20"
+      size: "0x100"
+      "mem.0x04": "0x00 0x64"
+      "mem.0x10": "sine(offset=30000, amplitude=15000, period=60) as s32be"
 
   # Serial temperature sensor reporting once a second (20 ticks at 20 Hz)
   - name: tempSensor

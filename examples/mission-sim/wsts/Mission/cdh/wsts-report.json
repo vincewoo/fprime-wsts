@@ -443,6 +443,7 @@
         "Cdh.wstsControl.GPIO_FORCE",
         "Cdh.wstsControl.I2C_REG_SET",
         "Cdh.wstsControl.INJECT_BYTES",
+        "Cdh.wstsControl.INJECT_PACKET",
         "Cdh.wstsControl.INJECT_TEXT",
         "Cdh.wstsControl.IRQ_RAISE",
         "Cdh.wstsControl.MODEL_SET",
@@ -843,7 +844,7 @@
       "constant": "CmdDispatcherComponentCommandPorts"
     },
     "command_table": {
-      "used": 45,
+      "used": 46,
       "size": 80,
       "source": "../../../config/CommandDispatcherImplCfg.hpp"
     },

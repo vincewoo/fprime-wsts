@@ -311,6 +311,22 @@
         "channels": [],
         "params": []
       }
+    },
+    {
+      "instance": "Payload.spw",
+      "flight_component": "Components.SpwDriver",
+      "surrogate": "Wsts.SimSpaceWire",
+      "seam": "S1 topology",
+      "chosen_by": "manifest",
+      "endpoint": "spw",
+      "options": "",
+      "base_id": 537100288,
+      "dictionary_items_removed": {
+        "commands": [],
+        "events": [],
+        "channels": [],
+        "params": []
+      }
     }
   ],
   "kept_hardware_instances": [],
@@ -369,6 +385,13 @@
       ]
     },
     {
+      "name": "sunSensor",
+      "class": "Wsts::RmapTarget",
+      "endpoint": "spw",
+      "kind": "packet",
+      "address": 254
+    },
+    {
       "name": "tempSensor",
       "class": "Wsts::ScriptedByteStream",
       "endpoint": "sensorUart",
@@ -391,13 +414,14 @@
       "i2cBus",
       "sensorUart",
       "spiBus",
+      "spw",
       "switchPin"
     ],
     "links": [
       "hub"
     ],
     "timing": true,
-    "channels": 63
+    "channels": 71
   },
   "bridge": "tcp:50101",
   "dictionary": {
@@ -439,6 +463,7 @@
         "Payload.wstsControl.GPIO_FORCE",
         "Payload.wstsControl.I2C_REG_SET",
         "Payload.wstsControl.INJECT_BYTES",
+        "Payload.wstsControl.INJECT_PACKET",
         "Payload.wstsControl.INJECT_TEXT",
         "Payload.wstsControl.IRQ_RAISE",
         "Payload.wstsControl.MODEL_SET",
@@ -529,6 +554,12 @@
         "Payload.wstsTlm.spiBus_BytesIn",
         "Payload.wstsTlm.spiBus_Errors",
         "Payload.wstsTlm.spiBus_Unanswered",
+        "Payload.wstsTlm.spw_FromFlight",
+        "Payload.wstsTlm.spw_ToFlight",
+        "Payload.wstsTlm.spw_BytesOut",
+        "Payload.wstsTlm.spw_BytesIn",
+        "Payload.wstsTlm.spw_Errors",
+        "Payload.wstsTlm.spw_Unanswered",
         "Payload.wstsTlm.switchPin_FromFlight",
         "Payload.wstsTlm.switchPin_ToFlight",
         "Payload.wstsTlm.switchPin_BytesOut",
@@ -547,6 +578,8 @@
         "Payload.wstsTlm.sensorUart_RateIn",
         "Payload.wstsTlm.spiBus_RateOut",
         "Payload.wstsTlm.spiBus_RateIn",
+        "Payload.wstsTlm.spw_RateOut",
+        "Payload.wstsTlm.spw_RateIn",
         "Payload.wstsTlm.switchPin_RateOut",
         "Payload.wstsTlm.switchPin_RateIn",
         "Payload.wstsTlm.SimSeconds",
@@ -590,7 +623,8 @@
     "Components/Imager",
     "Components/ImuManager",
     "Components/Instrument",
-    "Components/PowerMonitor"
+    "Components/PowerMonitor",
+    "Components/SunSensor"
   ],
   "reused_sources": {
     "topology": [
@@ -678,6 +712,14 @@
         "headers": [
           "SensorLib/RegisterInterface/RegisterInterface.hpp",
           "SensorLib/RegisterInterface/RegisterInterfaceComponentAc.hpp"
+        ]
+      },
+      {
+        "component": "Components.SpwDriver",
+        "surrogate": "Wsts.SimSpaceWire",
+        "headers": [
+          "Components/SpwDriver/SpwDriver.hpp",
+          "Components/SpwDriver/SpwDriverComponentAc.hpp"
         ]
       }
     ]
@@ -806,6 +848,12 @@
         ]
       },
       {
+        "module": "Components/SunSensor",
+        "instances": [
+          "Payload.sunSensor (Components.SunSensor)"
+        ]
+      },
+      {
         "module": "lib/sensor-lib/SensorLib",
         "instances": []
       },
@@ -911,12 +959,12 @@
   "simulation_project": "../../..",
   "capacity": {
     "command_ports": {
-      "used": 9,
+      "used": 10,
       "size": 30,
       "constant": "CmdDispatcherComponentCommandPorts"
     },
     "command_table": {
-      "used": 31,
+      "used": 33,
       "size": 80,
       "source": "../../../config/CommandDispatcherImplCfg.hpp"
     },

@@ -262,9 +262,31 @@ void Bus::detachGpio(const std::string& endpoint, GpioDevice* device) {
     }
 }
 
-void Bus::attachPacket(const std::string& endpoint, std::uint32_t addr, PacketDevice* device) {
+PacketDevice* Bus::attachPacket(const std::string& endpoint, std::uint32_t addr, PacketDevice* device) {
     std::lock_guard<std::mutex> lock(m_mutex);
-    this->endpointLocked(endpoint).packet[addr] = device;
+    std::map<std::uint32_t, PacketDevice*>& nodes = this->endpointLocked(endpoint).packet;
+    const auto it = nodes.find(addr);
+    PacketDevice* previous = (it != nodes.end()) ? it->second : nullptr;
+    nodes[addr] = device;
+    return previous;
+}
+
+void Bus::replacePacket(const std::string& endpoint, std::uint32_t addr, PacketDevice* device,
+                        PacketDevice* replacement) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const auto it = m_endpoints.find(endpoint);
+    if (it == m_endpoints.end()) {
+        return;
+    }
+    const auto node = it->second.packet.find(addr);
+    if (node == it->second.packet.end() || node->second != device) {
+        return;
+    }
+    if (replacement != nullptr) {
+        node->second = replacement;
+    } else {
+        it->second.packet.erase(node);
+    }
 }
 
 void Bus::detachPacket(const std::string& endpoint, std::uint32_t addr, PacketDevice* device) {

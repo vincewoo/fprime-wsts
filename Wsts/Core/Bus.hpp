@@ -325,10 +325,15 @@ class Bus {
     void detachSpi(const std::string& endpoint, SpiDevice* device);
     //! Remove `device` from an endpoint if it is still the GPIO device there
     void detachGpio(const std::string& endpoint, GpioDevice* device);
-    //! A node at logical address `addr` (32 to 255), or at PACKET_ANY_ADDRESS
-    void attachPacket(const std::string& endpoint, std::uint32_t addr, PacketDevice* device);
+    //! A node at logical address `addr` (32 to 255), or at PACKET_ANY_ADDRESS. Returns the
+    //! node that was at that address before, or nullptr.
+    PacketDevice* attachPacket(const std::string& endpoint, std::uint32_t addr, PacketDevice* device);
     //! Remove `device` from an endpoint if it is still the node at `addr` there
     void detachPacket(const std::string& endpoint, std::uint32_t addr, PacketDevice* device);
+    //! Put `replacement` (which may be nullptr) at `addr` if `device` is still the node there:
+    //! how a node that stood in for another one gives the address back
+    void replacePacket(const std::string& endpoint, std::uint32_t addr, PacketDevice* device,
+                       PacketDevice* replacement);
     //! Whether a surrogate is bound to the flight side of a packet endpoint
     bool packetBound(const std::string& endpoint);
     //! Whether a surrogate is bound to the flight side of a byte stream endpoint

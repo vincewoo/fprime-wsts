@@ -14,6 +14,7 @@ namespace {
 Sim::ImuModel model_imu;
 Wsts::LoopbackSpi model_adc;
 Wsts::RegisterFile model_fpga;
+Wsts::RmapTarget model_sunSensor;
 Wsts::ScriptedByteStream model_tempSensor;
 Wsts::LinkByteStream link_hub;
 
@@ -38,6 +39,7 @@ void setup() {
     ::Payload::switchPin.wstsBind("switchPin", "");
     ::Payload::spiBus.wstsBind("spiBus", "");
     ::Payload::fpgaRegs.wstsBind("fpgaRegs", "");
+    ::Payload::spw.wstsBind("spw", "");
 
     // Simulator components: each adapter is the device on its endpoint
     ::PayloadSim::powerDevice.wstsServe("i2cBus", "addr=0x40");
@@ -64,6 +66,13 @@ void setup() {
     configure("fpga", Wsts::configureModel(&model_fpga, "irq.bits", "0x1"), "irq.bits");
     Wsts::Bus::get().attachRegister("fpgaRegs", &model_fpga);
     Wsts::registerModel("fpga", &model_fpga);
+    (void)Wsts::configureModel(&model_sunSensor, "endpoint", "spw");
+    configure("sunSensor", Wsts::configureModel(&model_sunSensor, "key", "0x20"), "key");
+    configure("sunSensor", Wsts::configureModel(&model_sunSensor, "size", "0x100"), "size");
+    configure("sunSensor", Wsts::configureModel(&model_sunSensor, "mem.0x04", "0x00 0x64"), "mem.0x04");
+    configure("sunSensor", Wsts::configureModel(&model_sunSensor, "mem.0x10", "sine(offset=30000, amplitude=15000, period=60) as s32be"), "mem.0x10");
+    Wsts::Bus::get().attachPacket("spw", 0xfe, &model_sunSensor);
+    Wsts::registerModel("sunSensor", &model_sunSensor);
     (void)Wsts::configureModel(&model_tempSensor, "endpoint", "sensorUart");
     configure("tempSensor", Wsts::configureModel(&model_tempSensor, "text", "$TEMP,21.5\n"), "text");
     configure("tempSensor", Wsts::configureModel(&model_tempSensor, "period", "20"), "period");

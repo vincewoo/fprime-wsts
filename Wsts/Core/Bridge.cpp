@@ -226,8 +226,9 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
         for (const std::unique_ptr<RemoteSpi>& remote : m_spi) {
             Bus::get().detachSpi(remote->endpoint(), remote.get());
         }
-        for (const AttachedPacket& attached : m_packet) {
-            Bus::get().detachPacket(attached.endpoint, attached.addr, attached.remote.get());
+        // A node this client stood in for (a model at the same address) answers again
+        for (auto it = m_packet.rbegin(); it != m_packet.rend(); ++it) {
+            Bus::get().replacePacket(it->endpoint, it->addr, it->remote.get(), it->previous);
         }
         // A register endpoint has one block: the one this client stood in for answers again
         for (auto it = m_register.rbegin(); it != m_register.rend(); ++it) {
@@ -413,8 +414,9 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
                 }
                 addr = static_cast<std::uint32_t>(given);
             }
-            m_packet.push_back(AttachedPacket{endpoint, addr, std::unique_ptr<RemotePacket>(new RemotePacket(*this, endpoint))});
-            Bus::get().attachPacket(endpoint, addr, m_packet.back().remote.get());
+            std::unique_ptr<RemotePacket> remote(new RemotePacket(*this, endpoint));
+            PacketDevice* previous = Bus::get().attachPacket(endpoint, addr, remote.get());
+            m_packet.push_back(AttachedPacket{endpoint, addr, std::move(remote), previous});
         } else {
             error = "attach supports kind i2c, spi, register or packet; byte stream and GPIO models use subscribe "
                     "plus inject_bytes / gpio_force";
@@ -450,6 +452,7 @@ class Bridge::Client : public std::enable_shared_from_this<Bridge::Client> {
         std::string endpoint;
         std::uint32_t addr;
         std::unique_ptr<RemotePacket> remote;
+        PacketDevice* previous;  //!< the node that was at the address before
     };
     std::vector<AttachedPacket> m_packet;
 };

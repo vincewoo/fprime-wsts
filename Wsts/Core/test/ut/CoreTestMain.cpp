@@ -442,6 +442,16 @@ TEST_F(CoreTest, APacketNothingReceivesIsUnansweredAndAnyAddressTakesTheRest) {
     Bus::get().detachPacket("spw", 0x60, &named);
     (void)Bus::get().packetSend("spw", bytes({0x60, 0x05}));
     EXPECT_EQ(fallback.packets.size(), 2u) << "the rest of the addresses";
+
+    // A node that stands in for another gives the address back
+    TestPacketNode standIn;
+    EXPECT_EQ(Bus::get().attachPacket("spw", 0x60, &named), nullptr);
+    EXPECT_EQ(Bus::get().attachPacket("spw", 0x60, &standIn), &named);
+    (void)Bus::get().packetSend("spw", bytes({0x60, 0x06}));
+    EXPECT_EQ(standIn.packets.size(), 1u);
+    Bus::get().replacePacket("spw", 0x60, &standIn, &named);
+    (void)Bus::get().packetSend("spw", bytes({0x60, 0x07}));
+    EXPECT_EQ(named.packets.back(), bytes({0x60, 0x07}));
 }
 
 TEST_F(CoreTest, PacketFaultsAndInjection) {

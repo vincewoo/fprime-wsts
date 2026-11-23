@@ -23,17 +23,20 @@ class SimSpaceWire final : public SimSpaceWireComponentBase {
 
     //! Stand-ins for the set-up calls of a SpaceWire driver (its link, its logical address,
     //! its DMA channels): the arguments are accepted and ignored, so that topology code
-    //! written against the flight driver compiles unchanged
+    //! written against the flight driver compiles unchanged. They are taken by value, as a
+    //! driver's set-up arguments are: a reference would need a definition of a `static
+    //! constexpr` member that flight code passes, which C++ before 17 asks for and flight
+    //! code calling its real driver does not need.
     template <typename... Args>
-    bool open(Args&&...) {
+    bool open(Args...) {
         return true;
     }
     template <typename... Args>
-    bool configure(Args&&...) {
+    bool configure(Args...) {
         return true;
     }
     template <typename... Args>
-    void start(Args&&...) {}
+    void start(Args...) {}
     void stop() {}
 
   private:

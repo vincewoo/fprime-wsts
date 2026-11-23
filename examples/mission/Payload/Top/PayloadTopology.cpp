@@ -64,6 +64,10 @@ void configureDevices() {
     }
     // Registers of the FPGA's housekeeping block
     fpgaRegs.configure("/dev/uio0");
+    // SpaceWire link 0, with the payload computer's logical address
+    if (!spw.configure(0, Components::SunSensor::PAYLOAD_ADDRESS)) {
+        Fw::Logger::log("[ERROR] Failed to bring up the SpaceWire link\n");
+    }
 }
 
 }  // namespace
