@@ -261,6 +261,19 @@ The merge needs every dictionary to come from the same project and framework ver
 (`projectVersion` and `frameworkVersion` in their metadata); `build` warns and `run --gds`
 stops when they differ.
 
+A project that already merges its dictionaries with options of its own gives the same ones
+under `merge`, so that the names in the GDS are the ones it uses elsewhere:
+
+```yaml
+merge: [--permissive, --prefer-primary, --namespace-all]
+```
+
+The options are those of `fprime-merge-dictionary`: `--permissive` (version differences are
+warnings, here as well as in `build` and `run`), `--prefer-primary` (on a conflict of IDs
+or definitions keep the ground element's entry), `--namespace-all` (every name is prefixed
+with its deployment's: `Payload.Payload.instrument.TAKE_SAMPLE`) and `--no-namespace`.
+Items the GDS decodes under a dropped ID are decoded as the ground element's.
+
 ### Elements the GDS does not decode
 
 An element whose events, telemetry and commands never reach the ground under their own IDs

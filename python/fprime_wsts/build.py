@@ -220,12 +220,12 @@ def build(directory: Path, jobs: Optional[int] = None, fresh: bool = False, only
         from .runner import dictionary_mismatch, in_gds_dictionary
         from .system import SYSTEM_FILE
 
-        merged = {element["name"] for element in json.loads((directory / SYSTEM_FILE).read_text())["elements"]
-                  if in_gds_dictionary(element)}
+        description = json.loads((directory / SYSTEM_FILE).read_text())
+        merged = {element["name"] for element in description["elements"] if in_gds_dictionary(element)}
         dictionaries = {name: found for name, element_directory in elements if name in merged
                         for found in sorted(element_directory.glob("build-artifacts/*/*/dict/*Dictionary.json"))[:1]}
         mismatch = dictionary_mismatch(dictionaries, directory)
-        if mismatch:
+        if mismatch and "--permissive" not in description.get("merge", []):
             result["warnings"] = [mismatch]
     return result
 

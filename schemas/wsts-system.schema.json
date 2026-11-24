@@ -16,6 +16,18 @@
       "type": "string",
       "description": "Default: wsts/<system>, relative to this file"
     },
+    "merge": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "--permissive",
+          "--prefer-primary",
+          "--namespace-all",
+          "--no-namespace"
+        ]
+      },
+      "description": "Options for fprime-merge-dictionary, which `run --gds` merges the elements' dictionaries with. --permissive also turns the check for different project and framework versions into a warning. --namespace-all prefixes every name with its deployment's"
+    },
     "elements": {
       "type": "object",
       "additionalProperties": {
