@@ -732,6 +732,7 @@ For a flight system of several computers. See [systems.md](systems.md).
 system: Mission                  # required: a name for the system
 ground: cdh                      # element the GDS connects to; default: the first
 output: wsts/Mission             # default: wsts/<system>, relative to this file
+merge: [--permissive, --prefer-primary, --namespace-all]   # options of fprime-merge-dictionary for `run --gds`
 elements:                        # required: element name -> deployment manifest
   cdh:
     manifest: cdh.yaml           # relative to this file

@@ -961,15 +961,18 @@ class SystemSimulation:
             if dictionary is None:
                 raise WstsError(f"no dictionary found for element '{element['name']}': has it been built?")
             dictionaries[element["name"]] = dictionary
+        options = list(self.description.get("merge", []))
         mismatch = dictionary_mismatch(dictionaries, self.directory)
         if mismatch:
-            raise WstsError(mismatch)
+            if "--permissive" not in options:
+                raise WstsError(mismatch)
+            print(f"fprime-wsts: warning: {mismatch.splitlines()[0]}", file=sys.stderr)
         merged = dictionaries.pop(self.ground)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         for index, (name, dictionary) in enumerate(dictionaries.items()):
             last = index == len(dictionaries) - 1
             target = self.log_dir / (f"{self.name}Dictionary.json" if last else f"{self.name}Dictionary.{index}.json")
-            command = [executable, "--name", self.name, "--output", str(target), str(merged), str(dictionary)]
+            command = [executable, "--name", self.name, "--output", str(target), *options, str(merged), str(dictionary)]
             done = subprocess.run(command, capture_output=True, text=True)
             if done.returncode != 0:
                 raise WstsError(f"could not merge the dictionary of element '{name}' into the system's:\n"

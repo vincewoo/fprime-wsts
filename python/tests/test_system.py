@@ -511,3 +511,13 @@ def test_system_client_addresses_faults_by_link_or_element(system):
         client.fault_set("hub", "drop", direction="to_flight")
     with pytest.raises(BridgeError, match="neither a link"):
         client.fault_set("nowhere", "drop")
+
+
+def test_merge_options_are_kept_once_and_checked():
+    system = parse_system(changed(merge=["--permissive", "--namespace-all", "--permissive"]))
+    assert system.merge == ["--permissive", "--namespace-all"]
+    assert parse_system(TWO).merge == []
+    with pytest.raises(WstsError, match="list of options of fprime-merge-dictionary"):
+        parse_system(changed(merge=["--prefix"]))
+    with pytest.raises(WstsError, match="both --namespace-all and --no-namespace"):
+        parse_system(changed(merge=["--namespace-all", "--no-namespace"]))

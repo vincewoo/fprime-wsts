@@ -575,3 +575,37 @@ def test_it_does_nothing_outside_the_main_thread():
     thread.start()
     thread.join()
     assert result == ["ran"]
+
+
+def test_merge_options_of_the_system_reach_the_merge_and_soften_the_version_check(tmp_path, monkeypatch):
+    from fprime_wsts import runner
+
+    system = tmp_path / "S"
+    for name, version in (("cdh", "abc"), ("payload", "abc-dirty")):
+        binary = system / name / "build-artifacts" / "Linux" / name / "bin" / name
+        binary.parent.mkdir(parents=True)
+        binary.write_text("")
+        binary.chmod(0o755)
+        (system / name / "wsts-report.json").write_text(json.dumps({"time": {"mode": "realtime"}}))
+        dictionary = binary.parent.parent / "dict" / f"{name}Dictionary.json"
+        dictionary.parent.mkdir()
+        dictionary.write_text(json.dumps({"metadata": {"projectVersion": version, "frameworkVersion": "v4.4.2"}}))
+    description = {"system": "S", "ground": "cdh", "links": [],
+                   "elements": [{"name": "cdh", "directory": "cdh", "bridge": "none"},
+                                {"name": "payload", "directory": "payload", "bridge": "none"}]}
+    merged = []
+    monkeypatch.setattr(runner.shutil, "which", lambda name: "/bin/fprime-merge-dictionary")
+    monkeypatch.setattr(runner.subprocess, "run", lambda command, **kwargs: merged.append(command)
+                        or subprocess.CompletedProcess(command, 0))
+
+    (system / "wsts-system.json").write_text(json.dumps(description))
+    with pytest.raises(WstsError, match="different states of the checkout"):
+        runner.SystemSimulation(system).merge_dictionaries()
+    assert merged == []
+
+    options = ["--permissive", "--prefer-primary", "--namespace-all"]
+    (system / "wsts-system.json").write_text(json.dumps({**description, "merge": options}))
+    runner.SystemSimulation(system).merge_dictionaries()
+    (command,) = merged
+    assert command[command.index("--output") + 2:command.index("--output") + 5] == options
+    assert [Path(path).name for path in command[-2:]] == ["cdhDictionary.json", "payloadDictionary.json"]

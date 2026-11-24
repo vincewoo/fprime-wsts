@@ -39,7 +39,9 @@ from .generate import ID_BLOCK, Result, generate, symlink_notice
 from .manifest import LinkEnd, Manifest, id_window, load_manifest, read_yaml, unknown_keys
 
 SYSTEM_FILE = "wsts-system.json"
-SYSTEM_KEYS = {"system", "ground", "elements", "links", "output", "dynamics"}
+SYSTEM_KEYS = {"system", "ground", "elements", "links", "output", "dynamics", "merge"}
+# The options of fprime-merge-dictionary that `merge` passes on (--prefix takes a value and is not offered)
+MERGE_OPTIONS = ("--permissive", "--prefer-primary", "--namespace-all", "--no-namespace")
 ELEMENT_KEYS = {"manifest", "bridge", "ids", "gds"}
 LINK_KEYS = {"name", "kind", "a", "b"}
 LINK_KINDS = {"bytestream", "gpio", "datagram"}
@@ -79,6 +81,8 @@ class SystemManifest:
     output: Optional[str] = None
     # Plants stepped between instants (docs/dynamics.md), checked; paths relative to the manifest
     dynamics: List[dict] = field(default_factory=list)
+    # Options for fprime-merge-dictionary, which `run --gds` merges the elements' dictionaries with
+    merge: List[str] = field(default_factory=list)
 
     @property
     def root(self) -> Path:
@@ -133,6 +137,13 @@ def parse_system(data: dict, path: Optional[Path] = None) -> SystemManifest:
     if not ELEMENT_NAME.fullmatch(system.name):
         raise WstsError(f"{where}: system name '{system.name}' must be an identifier")
     system.output = data.get("output")
+    merge = data.get("merge") or []
+    if not isinstance(merge, list) or any(option not in MERGE_OPTIONS for option in merge):
+        raise WstsError(f"{where}: 'merge' is a list of options of fprime-merge-dictionary, from "
+                        f"{', '.join(MERGE_OPTIONS)}")
+    if "--namespace-all" in merge and "--no-namespace" in merge:
+        raise WstsError(f"{where}: 'merge' cannot have both --namespace-all and --no-namespace")
+    system.merge = list(dict.fromkeys(merge))
 
     for name, entry in elements.items():
         name = str(name)
@@ -291,6 +302,8 @@ def generate_system(system: SystemManifest, output: Optional[Path] = None, check
         "generator": "fprime-wsts",
         "system": system.name,
         "ground": system.ground,
+        # Written only when given, so descriptions of systems without it stay as they were
+        **({"merge": system.merge} if system.merge else {}),
         "elements": [
             {
                 "name": element.name,
